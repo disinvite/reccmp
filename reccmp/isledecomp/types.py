@@ -1,9 +1,8 @@
 """Types shared by other modules"""
+from enum import IntEnum
 
-from enum import Enum
 
-
-class SymbolType(Enum):
+class SymbolType(IntEnum):
     """Broadly tells us what kind of comparison is required for this symbol."""
 
     FUNCTION = 1

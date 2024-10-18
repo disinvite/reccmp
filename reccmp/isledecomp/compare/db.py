@@ -1,58 +1,20 @@
-"""Wrapper for database (here an in-memory sqlite database) that collects the
-addresses/symbols that we want to compare between the original and recompiled binaries."""
+"""Wrapper for reccmp core database to provide isle-specific features."""
 
-import sqlite3
 import logging
-from typing import Any, List, Optional
+from dataclasses import dataclass
+from typing import Any, Iterator, List, Optional
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
-
-_SETUP_SQL = """
-    DROP TABLE IF EXISTS `symbols`;
-    DROP TABLE IF EXISTS `match_options`;
-
-    CREATE TABLE `symbols` (
-        compare_type int,
-        orig_addr int,
-        recomp_addr int,
-        name text,
-        decorated_name text,
-        size int
-    );
-
-    CREATE TABLE `match_options` (
-        addr int not null,
-        name text not null,
-        value text,
-        primary key (addr, name)
-    ) without rowid;
-
-    CREATE VIEW IF NOT EXISTS `match_info`
-    (compare_type, orig_addr, recomp_addr, name, size) AS
-        SELECT compare_type, orig_addr, recomp_addr, name, size
-        FROM `symbols`
-        ORDER BY orig_addr NULLS LAST;
-
-    CREATE INDEX `symbols_or` ON `symbols` (orig_addr);
-    CREATE INDEX `symbols_re` ON `symbols` (recomp_addr);
-    CREATE INDEX `symbols_na` ON `symbols` (name);
-"""
+from reccmp.isledecomp.db import ReccmpThing, ReccmpDb
 
 
+@dataclass
 class MatchInfo:
-    def __init__(
-        self,
-        ctype: Optional[int],
-        orig: Optional[int],
-        recomp: Optional[int],
-        name: Optional[str],
-        size: Optional[int],
-    ) -> None:
-        self.compare_type = SymbolType(ctype) if ctype is not None else None
-        self.orig_addr = orig
-        self.recomp_addr = recomp
-        self.name = name
-        self.size = size
+    compare_type: Optional[SymbolType] = None
+    orig_addr: Optional[int] = None
+    recomp_addr: Optional[int] = None
+    name: Optional[str] = None
+    size: Optional[int] = None
 
     def match_name(self) -> Optional[str]:
         """Combination of the name and compare type.
@@ -72,18 +34,25 @@ class MatchInfo:
         return f"{self.name}+{ofs} (OFFSET)"
 
 
-def matchinfo_factory(_, row):
-    return MatchInfo(*row)
-
-
 logger = logging.getLogger(__name__)
+
+
+def reccmp_to_matchinfo(obj: ReccmpThing) -> MatchInfo:
+    """Patch for existing code that depends on MatchInfo dataobj"""
+    ctype = obj.get("type")
+    return MatchInfo(
+        compare_type=SymbolType(ctype) if ctype is not None else None,
+        orig_addr=obj.source,
+        recomp_addr=obj.target,
+        name=obj.get("name"),
+        size=obj.get("size"),
+    )
 
 
 class CompareDb:
     # pylint: disable=too-many-public-methods
     def __init__(self):
-        self._db = sqlite3.connect(":memory:")
-        self._db.executescript(_SETUP_SQL)
+        self._core = ReccmpDb()
 
     def set_orig_symbol(
         self,
@@ -93,14 +62,10 @@ class CompareDb:
         size: Optional[int],
     ):
         # Ignore collisions here.
-        if self._orig_used(addr):
+        if self._core.at_source(addr).exists():
             return
 
-        compare_value = compare_type.value if compare_type is not None else None
-        self._db.execute(
-            "INSERT INTO `symbols` (orig_addr, compare_type, name, size) VALUES (?,?,?,?)",
-            (addr, compare_value, name, size),
-        )
+        self._core.at_source(addr).set(type=compare_type, name=name, size=size)
 
     def set_recomp_symbol(
         self,
@@ -112,138 +77,63 @@ class CompareDb:
     ):
         # Ignore collisions here. The same recomp address can have
         # multiple names (e.g. _strlwr and __strlwr)
-        if self._recomp_used(addr):
+        if self._core.at_target(addr).exists():
             return
 
-        compare_value = compare_type.value if compare_type is not None else None
-        self._db.execute(
-            "INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size) VALUES (?,?,?,?,?)",
-            (addr, compare_value, name, decorated_name, size),
+        self._core.at_target(addr).set(
+            symbol=decorated_name, type=compare_type, name=name, size=size
         )
 
-    def get_unmatched_strings(self) -> List[str]:
+    def get_unmatched_strings(self) -> Iterator[str]:
         """Return any strings not already identified by STRING markers."""
+        for x in self._core.search(type=SymbolType.STRING, matched=False):
+            if x.get("name") is not None:
+                yield x.get("name")
 
-        cur = self._db.execute(
-            "SELECT name FROM `symbols` WHERE compare_type = ? AND orig_addr IS NULL",
-            (SymbolType.STRING.value,),
-        )
+    def get_all(self) -> Iterator[MatchInfo]:
+        for obj in self._core.all():
+            yield reccmp_to_matchinfo(obj)
 
-        return [string for (string,) in cur.fetchall()]
-
-    def get_all(self) -> List[MatchInfo]:
-        cur = self._db.execute("SELECT * FROM `match_info`")
-        cur.row_factory = matchinfo_factory
-
-        return cur.fetchall()
-
-    def get_matches(self) -> Optional[MatchInfo]:
-        cur = self._db.execute(
-            """SELECT * FROM `match_info`
-            WHERE orig_addr IS NOT NULL
-            AND recomp_addr IS NOT NULL
-            """,
-        )
-        cur.row_factory = matchinfo_factory
-
-        return cur.fetchall()
+    def get_matches(self) -> Iterator[MatchInfo]:
+        for obj in self._core.all(matched=True):
+            yield reccmp_to_matchinfo(obj)
 
     def get_one_match(self, addr: int) -> Optional[MatchInfo]:
-        cur = self._db.execute(
-            """SELECT * FROM `match_info`
-            WHERE orig_addr = ?
-            AND recomp_addr IS NOT NULL
-            """,
-            (addr,),
-        )
-        cur.row_factory = matchinfo_factory
-        return cur.fetchone()
+        obj = self._core.get_source(addr)
+        if obj is None:
+            return None
 
-    def _get_closest_orig(self, addr: int) -> Optional[int]:
-        value = self._db.execute(
-            """SELECT max(orig_addr) FROM `symbols`
-            WHERE ? >= orig_addr
-            LIMIT 1
-            """,
-            (addr,),
-        ).fetchone()
-        return value[0] if value is not None else None
+        return reccmp_to_matchinfo(obj)
 
-    def _get_closest_recomp(self, addr: int) -> Optional[int]:
-        value = self._db.execute(
-            """SELECT max(recomp_addr) FROM `symbols`
-            WHERE ? >= recomp_addr
-            LIMIT 1
-            """,
-            (addr,),
-        ).fetchone()
-        return value[0] if value is not None else None
+    def get_by_orig(self, source: int, exact: bool = True) -> Optional[MatchInfo]:
+        obj = self._core.get_closest_source(source)
+        if obj is None or exact and obj.source != source:
+            return None
 
-    def get_by_orig(self, addr: int, exact: bool = True) -> Optional[MatchInfo]:
-        if not exact and not self._orig_used(addr):
-            addr = self._get_closest_orig(addr)
-            if addr is None:
-                return None
+        return reccmp_to_matchinfo(obj)
 
-        cur = self._db.execute(
-            """SELECT * FROM `match_info`
-            WHERE orig_addr = ?
-            """,
-            (addr,),
-        )
-        cur.row_factory = matchinfo_factory
-        return cur.fetchone()
+    def get_by_recomp(self, target: int, exact: bool = True) -> Optional[MatchInfo]:
+        obj = self._core.get_closest_target(target)
+        if obj is None or exact and obj.target != target:
+            return None
 
-    def get_by_recomp(self, addr: int, exact: bool = True) -> Optional[MatchInfo]:
-        if not exact and not self._recomp_used(addr):
-            addr = self._get_closest_recomp(addr)
-            if addr is None:
-                return None
-
-        cur = self._db.execute(
-            """SELECT * FROM `match_info`
-            WHERE recomp_addr = ?
-            """,
-            (addr,),
-        )
-        cur.row_factory = matchinfo_factory
-        return cur.fetchone()
+        return reccmp_to_matchinfo(obj)
 
     def get_matches_by_type(self, compare_type: SymbolType) -> List[MatchInfo]:
-        cur = self._db.execute(
-            """SELECT * FROM `match_info`
-            WHERE compare_type = ?
-            AND orig_addr IS NOT NULL
-            AND recomp_addr IS NOT NULL
-            """,
-            (compare_type.value,),
-        )
-        cur.row_factory = matchinfo_factory
-
-        return cur.fetchall()
-
-    def _orig_used(self, addr: int) -> bool:
-        cur = self._db.execute("SELECT 1 FROM symbols WHERE orig_addr = ?", (addr,))
-        return cur.fetchone() is not None
-
-    def _recomp_used(self, addr: int) -> bool:
-        cur = self._db.execute("SELECT 1 FROM symbols WHERE recomp_addr = ?", (addr,))
-        return cur.fetchone() is not None
+        return [
+            reccmp_to_matchinfo(obj)
+            for obj in self._core.search(type=compare_type, matched=True)
+        ]
 
     def set_pair(
         self, orig: int, recomp: int, compare_type: Optional[SymbolType] = None
     ) -> bool:
-        if self._orig_used(orig):
+        if self._core.at_source(orig).exists():
             logger.debug("Original address %s not unique!", hex(orig))
             return False
 
-        compare_value = compare_type.value if compare_type is not None else None
-        cur = self._db.execute(
-            "UPDATE `symbols` SET orig_addr = ?, compare_type = ? WHERE recomp_addr = ?",
-            (orig, compare_value, recomp),
-        )
-
-        return cur.rowcount > 0
+        self._core.at_target(recomp).set(source=orig, type=compare_type)
+        return True  # Todo
 
     def set_pair_tentative(
         self, orig: int, recomp: int, compare_type: Optional[SymbolType] = None
@@ -255,21 +145,12 @@ class CompareDb:
 
         The purpose here is to set matches found via some automated analysis
         but to not overwrite a match provided by the human operator."""
-        if self._orig_used(orig):
+        if self._core.at_source(orig).exists():
             # Probable and expected situation. Just ignore it.
             return False
 
-        compare_value = compare_type.value if compare_type is not None else None
-
-        cur = self._db.execute(
-            """UPDATE `symbols`
-            SET orig_addr = ?, compare_type = coalesce(compare_type, ?)
-            WHERE recomp_addr = ?
-            AND orig_addr IS NULL""",
-            (orig, compare_value, recomp),
-        )
-
-        return cur.rowcount > 0
+        self._core.at_target(recomp).patch(source=orig, type=compare_type)
+        return True
 
     def set_function_pair(self, orig: int, recomp: int) -> bool:
         """For lineref match or _entry"""
@@ -280,20 +161,16 @@ class CompareDb:
         We are here because we have a match on the thunked function,
         but it is not thunked in the recomp build."""
 
-        if self._orig_used(addr):
+        if self._core.at_source(addr).exists():
             return False
 
         thunk_name = f"Thunk of '{name}'"
-
         # Assuming relative jump instruction for thunks (5 bytes)
-        cur = self._db.execute(
-            """INSERT INTO `symbols`
-            (orig_addr, compare_type, name, size)
-            VALUES (?,?,?,?)""",
-            (addr, SymbolType.FUNCTION.value, thunk_name, 5),
+        self._core.at_source(addr).set(
+            type=SymbolType.FUNCTION, size=5, name=thunk_name
         )
 
-        return cur.rowcount > 0
+        return True
 
     def create_recomp_thunk(self, addr: int, name: str) -> bool:
         """Create a thunk function reference using the recomp address.
@@ -301,84 +178,52 @@ class CompareDb:
         to have full information from the PDB. We can use a regular function
         match later to pull in the orig address."""
 
-        if self._recomp_used(addr):
+        if self._core.at_target(addr).exists():
             return False
 
         thunk_name = f"Thunk of '{name}'"
-
         # Assuming relative jump instruction for thunks (5 bytes)
-        cur = self._db.execute(
-            """INSERT INTO `symbols`
-            (recomp_addr, compare_type, name, size)
-            VALUES (?,?,?,?)""",
-            (addr, SymbolType.FUNCTION.value, thunk_name, 5),
+        self._core.at_target(addr).set(
+            type=SymbolType.FUNCTION, size=5, name=thunk_name
         )
 
-        return cur.rowcount > 0
-
-    def _set_opt_bool(self, addr: int, option: str, enabled: bool = True):
-        if enabled:
-            self._db.execute(
-                """INSERT OR IGNORE INTO `match_options`
-                (addr, name)
-                VALUES (?, ?)""",
-                (addr, option),
-            )
-        else:
-            self._db.execute(
-                """DELETE FROM `match_options` WHERE addr = ? AND name = ?""",
-                (addr, option),
-            )
+        return True
 
     def mark_stub(self, orig: int):
-        self._set_opt_bool(orig, "stub")
+        self._core.at_source(orig).set(stub=True)
 
     def skip_compare(self, orig: int):
-        self._set_opt_bool(orig, "skip")
+        self._core.at_source(orig).set(skip=True)
 
     def get_match_options(self, addr: int) -> Optional[dict[str, Any]]:
-        cur = self._db.execute(
-            """SELECT name, value FROM `match_options` WHERE addr = ?""", (addr,)
-        )
+        """Todo: remove this. wonky API"""
+        n = self._core.get_source(addr)
+        if n is not None:
+            return n._extras  # pylint: disable=protected-access
 
-        return {
-            option: value if value is not None else True
-            for (option, value) in cur.fetchall()
-        }
+        return {}
 
     def is_vtordisp(self, recomp_addr: int) -> bool:
         """Check whether this function is a vtordisp based on its
         decorated name. If its demangled name is missing the vtordisp
         indicator, correct that."""
-        row = self._db.execute(
-            """SELECT name, decorated_name
-            FROM `symbols`
-            WHERE recomp_addr = ?""",
-            (recomp_addr,),
-        ).fetchone()
+        func = self._core.get_target(recomp_addr)
 
-        if row is None:
+        if func is None:
             return False
 
-        (name, decorated_name) = row
-        if "`vtordisp" in name:
+        if "`vtordisp" in func.get("name"):
             return True
 
-        if decorated_name is None:
+        if func.symbol is None:
             # happens in debug builds, e.g. for "Thunk of 'LegoAnimActor::ClassName'"
             return False
 
-        new_name = get_vtordisp_name(decorated_name)
+        new_name = get_vtordisp_name(func.symbol)
         if new_name is None:
             return False
 
-        self._db.execute(
-            """UPDATE `symbols`
-            SET name = ?
-            WHERE recomp_addr = ?""",
-            (new_name, recomp_addr),
-        )
-
+        self._core.at_target(recomp_addr).set(name=new_name)
         return True
 
     def _find_potential_match(
@@ -387,51 +232,17 @@ class CompareDb:
         """Name lookup"""
         match_decorate = compare_type != SymbolType.STRING and name.startswith("?")
         if match_decorate:
-            sql = """
-            SELECT recomp_addr
-            FROM `symbols`
-            WHERE orig_addr IS NULL
-            AND decorated_name = ?
-            AND (compare_type IS NULL OR compare_type = ?)
-            LIMIT 1
-            """
-        else:
-            sql = """
-            SELECT recomp_addr
-            FROM `symbols`
-            WHERE orig_addr IS NULL
-            AND name = ?
-            AND (compare_type IS NULL OR compare_type = ?)
-            LIMIT 1
-            """
+            obj = self._core.get_symbol(name)
+            if obj is not None and obj.source is None:
+                return obj.target
 
-        row = self._db.execute(sql, (name, compare_type.value)).fetchone()
-        return row[0] if row is not None else None
+            return None
 
-    def _find_static_variable(
-        self, variable_name: str, function_sym: str
-    ) -> Optional[int]:
-        """Get the recomp address of a static function variable.
-        Matches using a LIKE clause on the combination of:
-        1. The variable name read from decomp marker.
-        2. The decorated name of the enclosing function.
-        For example, the variable "g_startupDelay" from function "IsleApp::Tick"
-        has symbol: `?g_startupDelay@?1??Tick@IsleApp@@QAEXH@Z@4HA`
-        The function's decorated name is: `?Tick@IsleApp@@QAEXH@Z`"""
+        for obj in self._core.search(name=name, matched=False):
+            if obj.get("type") is None or obj.get("type") == compare_type:
+                return obj.target
 
-        row = self._db.execute(
-            """SELECT recomp_addr FROM `symbols`
-            WHERE decorated_name LIKE '%' || ? || '%' || ? || '%'
-            AND orig_addr IS NULL
-            AND (compare_type = ? OR compare_type = ? OR compare_type IS NULL)""",
-            (
-                variable_name,
-                function_sym,
-                SymbolType.DATA.value,
-                SymbolType.POINTER.value,
-            ),
-        ).fetchone()
-        return row[0] if row is not None else None
+        return None
 
     def _match_on(self, compare_type: SymbolType, addr: int, name: str) -> bool:
         # Update the compare_type here too since the marker tells us what we should do
@@ -452,16 +263,7 @@ class CompareDb:
         """Return the original address (matched or not) that follows
         the one given. If our recomp function size would cause us to read
         too many bytes for the original function, we can adjust it."""
-        result = self._db.execute(
-            """SELECT orig_addr
-            FROM `symbols`
-            WHERE orig_addr > ?
-            ORDER BY orig_addr
-            LIMIT 1""",
-            (addr,),
-        ).fetchone()
-
-        return result[0] if result is not None else None
+        return next(self._core.iter_source(addr + 1), None)
 
     def match_function(self, addr: int, name: str) -> bool:
         did_match = self._match_on(SymbolType.FUNCTION, addr, name)
@@ -478,27 +280,15 @@ class CompareDb:
         for_name = base_class if base_class is not None else name
         for_vftable = f"{name}::`vftable'{{for `{for_name}'}}"
 
+        # Try to match on the "vftable for X first"
+        for row in self._core.search(name=for_vftable, matched=False):
+            return self.set_pair(addr, row.target, SymbolType.VTABLE)
+
         # Only allow a match against "Class:`vftable'"
         # if this is the derived class.
         if base_class is None or base_class == name:
-            name_options = (for_vftable, bare_vftable)
-        else:
-            name_options = (for_vftable, for_vftable)
-
-        row = self._db.execute(
-            """
-            SELECT recomp_addr
-            FROM `symbols`
-            WHERE orig_addr IS NULL
-            AND (name = ? OR name = ?)
-            AND (compare_type = ?)
-            LIMIT 1
-            """,
-            (*name_options, SymbolType.VTABLE.value),
-        ).fetchone()
-
-        if row is not None and self.set_pair(addr, row[0], SymbolType.VTABLE):
-            return True
+            for row in self._core.search(name=bare_vftable, matched=False):
+                return self.set_pair(addr, row.target, SymbolType.VTABLE)
 
         logger.error("Failed to find vtable for class: %s", name)
         return False
@@ -507,31 +297,32 @@ class CompareDb:
         """Matching a static function variable by combining the variable name
         with the decorated (mangled) name of its parent function."""
 
-        cur = self._db.execute(
-            """SELECT name, decorated_name
-            FROM `symbols`
-            WHERE orig_addr = ?""",
-            (function_addr,),
-        )
-
-        if (result := cur.fetchone()) is None:
+        func = self._core.get_source(function_addr)
+        if func is None:
             logger.error("No function for static variable: %s", name)
             return False
 
-        # Get the friendly name for the "failed to match" error message
-        (function_name, decorated_name) = result
+        # Get the recomp address of a static function variable.
+        # Matches using a LIKE clause on the combination of:
+        # 1. The variable name read from decomp marker.
+        # 2. The decorated name of the enclosing function.
+        # For example, the variable "g_startupDelay" from function "IsleApp::Tick"
+        # has symbol: `?g_startupDelay@?1??Tick@IsleApp@@QAEXH@Z@4HA`
+        # The function's decorated name is: `?Tick@IsleApp@@QAEXH@Z`
+        if func.symbol is not None:
+            for var_symbol in self._core.search_symbol(func.symbol):
+                if name not in var_symbol:
+                    continue
 
-        recomp_addr = self._find_static_variable(name, decorated_name)
-        if recomp_addr is not None:
-            # TODO: This variable could be a pointer, but I don't think we
-            # have a way to tell that right now.
-            if self.set_pair(addr, recomp_addr, SymbolType.DATA):
-                return True
+                obj = self._core.get_symbol(var_symbol)
+
+                if not obj.matched and obj.get("type") in (None, SymbolType.DATA):
+                    return self.set_pair(addr, obj.target, SymbolType.DATA)
 
         logger.error(
             "Failed to match static variable %s from function %s",
             name,
-            function_name,
+            func.get("name"),
         )
 
         return False

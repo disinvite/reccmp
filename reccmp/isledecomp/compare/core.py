@@ -14,7 +14,7 @@ from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.compare.asm import ParseAsm
 from reccmp.isledecomp.compare.asm.fixes import assert_fixup, find_effective_match
-from .matchdb import CompareDb, MatchInfo
+from .db import CompareDb, MatchInfo
 from .diff import combined_diff, CombinedDiffOutput
 from .lines import LinesDb
 

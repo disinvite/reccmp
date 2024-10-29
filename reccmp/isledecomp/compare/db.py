@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator, List, Optional
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
-from reccmp.isledecomp.db import ReccmpThing, ReccmpDb
+from reccmp.isledecomp.storage import ReccmpThing, ReccmpDb
 
 
 @dataclass

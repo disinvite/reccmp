@@ -1,7 +1,7 @@
 import sqlite3
 import pytest
-from reccmp.isledecomp.db import ReccmpDb
-from reccmp.isledecomp.db import InvalidItemKeyError as BadKeyError  # final name?
+from reccmp.isledecomp.storage import ReccmpDb
+from reccmp.isledecomp.storage import InvalidItemKeyError as BadKeyError  # final name?
 
 
 @pytest.fixture(name="db")

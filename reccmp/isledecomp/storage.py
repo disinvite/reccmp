@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 import json
+from functools import cache
 from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
@@ -12,13 +13,57 @@ CREATE table reccmp (
     target int unique,
     symbol text unique,
     matched int generated always as (source is not null and target is not null) virtual,
-    kwstore text
+    kwstore text default '{}'
 );
 """
 
 
+@cache
+def to_json_fullkey(key):
+    return f"'$.{key}',?"
+
+
 class InvalidItemKeyError(Exception):
     """Key used in search() or set() failed validation"""
+
+
+def do_connect_query(_db, _anchor_col, _anchor_val, _new_col, _new_val):
+    if _new_val is None:
+        return
+
+    assert _anchor_col in {"source", "target", "symbol"}
+    assert _new_col in {"source", "target", "symbol"}
+
+    cur = _db.execute(
+        f"UPDATE reccmp SET {_new_col} = coalesce({_new_col},?) WHERE {_anchor_col} = ?",
+        (_new_val, _anchor_val),
+    )
+    if cur.rowcount == 0:
+        _db.execute(
+            f"INSERT INTO reccmp ({_new_col},{_anchor_col}) VALUES (?,?)",
+            (_new_val, _anchor_val),
+        )
+
+
+def do_update_query(_db, _anchor_col, _anchor_val, _patch, **kwargs):
+    assert _anchor_col in {"source", "target", "symbol"}
+    if not kwargs:
+        _db.execute(
+            f"INSERT or ignore into reccmp ({_anchor_col}) values (?)", (_anchor_val,)
+        )
+        return
+
+    operation = "insert" if _patch else "set"
+    keys = ",".join(map(to_json_fullkey, kwargs.keys()))
+    cur = _db.execute(
+        f"UPDATE reccmp SET kwstore = json_{operation}(kwstore,{keys}) WHERE {_anchor_col} = ?",
+        (*kwargs.values(), _anchor_val),
+    )
+    if cur.rowcount == 0:
+        _db.execute(
+            f"INSERT INTO reccmp (kwstore,{_anchor_col}) VALUES (json_set('{{}}',{keys}),?)",
+            (*kwargs.values(), _anchor_val),
+        )
 
 
 class AnchorSource:
@@ -42,15 +87,9 @@ class AnchorSource:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(source) DO UPDATE SET
-            target = coalesce(target, excluded.target),
-            symbol = coalesce(symbol, excluded.symbol),
-            kwstore = json_patch(kwstore, excluded.kwstore)
-            """,
-            (self._source, target, symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "source", self._source, "target", target)
+        do_connect_query(self._sql, "source", self._source, "symbol", symbol)
+        do_update_query(self._sql, "source", self._source, False, **kwargs)
         return self
 
     def patch(
@@ -60,14 +99,9 @@ class AnchorSource:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(source) DO UPDATE SET
-            target = coalesce(target, excluded.target),
-            symbol = coalesce(symbol, excluded.symbol),
-            kwstore = json_patch(kwstore, json_patch(excluded.kwstore, kwstore))""",
-            (self._source, target, symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "source", self._source, "target", target)
+        do_connect_query(self._sql, "source", self._source, "symbol", symbol)
+        do_update_query(self._sql, "source", self._source, True, **kwargs)
         return self
 
 
@@ -92,15 +126,9 @@ class AnchorTarget:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(target) DO UPDATE SET
-            source = coalesce(source, excluded.source),
-            symbol = coalesce(symbol, excluded.symbol),
-            kwstore = json_patch(kwstore, excluded.kwstore)
-            """,
-            (source, self._target, symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "target", self._target, "source", source)
+        do_connect_query(self._sql, "target", self._target, "symbol", symbol)
+        do_update_query(self._sql, "target", self._target, False, **kwargs)
         return self
 
     def patch(
@@ -110,14 +138,9 @@ class AnchorTarget:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(target) DO UPDATE SET
-            source = coalesce(source, excluded.source),
-            symbol = coalesce(symbol, excluded.symbol),
-            kwstore = json_patch(kwstore, json_patch(excluded.kwstore, kwstore))""",
-            (source, self._target, symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "target", self._target, "source", source)
+        do_connect_query(self._sql, "target", self._target, "symbol", symbol)
+        do_update_query(self._sql, "target", self._target, True, **kwargs)
         return self
 
 
@@ -142,15 +165,9 @@ class AnchorSymbol:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(symbol) DO UPDATE SET
-            source = coalesce(source, excluded.source),
-            target = coalesce(target, excluded.target),
-            kwstore = json_patch(kwstore, excluded.kwstore)
-            """,
-            (source, target, self._symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "symbol", self._symbol, "source", source)
+        do_connect_query(self._sql, "symbol", self._symbol, "target", target)
+        do_update_query(self._sql, "symbol", self._symbol, False, **kwargs)
         return self
 
     def patch(
@@ -160,14 +177,9 @@ class AnchorSymbol:
         symbol: Optional[str] = None,
         **kwargs,
     ):
-        self._sql.execute(
-            """INSERT into reccmp (source, target, symbol, kwstore) values (?,?,?,?)
-            ON CONFLICT(symbol) DO UPDATE SET
-            source = coalesce(source, excluded.source),
-            target = coalesce(target, excluded.target),
-            kwstore = json_patch(kwstore, json_patch(excluded.kwstore, kwstore))""",
-            (source, target, self._symbol, json.dumps(kwargs)),
-        )
+        do_connect_query(self._sql, "symbol", self._symbol, "source", source)
+        do_connect_query(self._sql, "symbol", self._symbol, "target", target)
+        do_update_query(self._sql, "symbol", self._symbol, True, **kwargs)
         return self
 
 

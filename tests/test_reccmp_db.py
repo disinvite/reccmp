@@ -15,7 +15,7 @@ def test_fundamentals(db):
     # To add data to the db, use an "anchor" to one of the three unique fields:
     db.at_source(100).set(name="some_function")
     db.at_target(500).set(name="abs")
-    db.at_symbol("_printf").set(is_library=True)
+    db.at_symbol("_printf").set(nargs=3)
 
     # Check identity properties:
     assert db.get_source(100).source == 100
@@ -26,7 +26,7 @@ def test_fundamentals(db):
     # Access non-unique fields with get()
     assert db.get_source(100).get("name") == "some_function"
     assert db.get_target(500).get("name") == "abs"
-    assert db.get_symbol("_printf").get("is_library") is True
+    assert db.get_symbol("_printf").get("nargs") == 3
 
     # Can set other unique fields to establish a link
     db.at_source(100).set(target=999)
@@ -191,3 +191,20 @@ def test_kwargs_restrict(db):
 
     with pytest.raises(BadKeyError):
         db.check_kwargs({"' drop table program; --": None})
+
+
+def test_search_on_new_column(db):
+    """If searching on a column that is not used by any rows, we should not raise an exception"""
+
+    # Add a row
+    db.at_source(100).set(name="hello")
+
+    with pytest.raises(StopIteration):
+        next(db.search(test=123))
+
+
+@pytest.mark.xfail(reason="may not work with json")
+def test_bools(db):
+    """Make sure that if bools go in we get bools out"""
+    db.at_source(123).set(func=True)
+    assert db.get_source(123).get("func") is True

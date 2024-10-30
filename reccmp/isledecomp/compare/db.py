@@ -130,7 +130,12 @@ class CompareDb(ReccmpDb):
             logger.debug("Original address %s not unique!", hex(orig))
             return False
 
-        self.at_target(recomp).set(source=orig, type=compare_type)
+        self.sql.execute(
+            "UPDATE reccmp set source = ?, kwstore=json_set(kwstore,'$.type',?) WHERE target = ?",
+            (orig, compare_type, recomp),
+        )
+
+        # self.at_target(recomp).set(source=orig, type=compare_type)
         return True  # Todo
 
     def set_pair_tentative(

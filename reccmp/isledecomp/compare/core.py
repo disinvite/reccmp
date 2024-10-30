@@ -8,7 +8,6 @@ from typing import Any, Callable, Iterable, List, Optional
 from reccmp.isledecomp.bin import Bin as IsleBin, InvalidVirtualAddressError
 from reccmp.isledecomp.cvdump.demangler import demangle_string_const
 from reccmp.isledecomp.cvdump import Cvdump, CvdumpAnalysis
-from reccmp.isledecomp.cvdump.types import scalar_type_pointer
 from reccmp.isledecomp.parser import DecompCodebase
 from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.types import SymbolType
@@ -166,9 +165,15 @@ class Compare:
                 except UnicodeDecodeError:
                     pass
 
-            self._db.set_recomp_symbol(
-                addr, sym.node_type, sym.name(), sym.decorated_name, sym.size()
+            self._db.sql.execute(
+                """
+                INSERT or ignore INTO reccmp (target, symbol, kwstore)
+                VALUES (?,?,json_set('{}', '$.name', ?, '$.type', ?, '$.size', ?))""",
+                (addr, sym.decorated_name, sym.name(), sym.node_type, sym.size()),
             )
+            # self._db.set_recomp_symbol(
+            #    addr, sym.node_type, sym.name(), sym.decorated_name, sym.size()
+            # )
 
         for (section, offset), (
             filename,
@@ -261,15 +266,20 @@ class Compare:
         def _add_match_in_array(
             name: str, type_id: str, orig_addr: int, recomp_addr: int
         ):
-            self._db.set_recomp_symbol(
-                recomp_addr,
-                SymbolType.POINTER if scalar_type_pointer(type_id) else SymbolType.DATA,
-                name,
-                name,
-                # we only need the matches when they are referenced elsewhere, hence we don't need the size
-                size=None,
+            self._db.sql.execute(
+                """INSERT or ignore INTO reccmp (source,target,kwstore)
+                values (?,?,json_set('{}','$.name',?,'$.type_id',?))""",
+                (orig_addr, recomp_addr, name, type_id),
             )
-            self._db.set_pair(orig_addr, recomp_addr)
+            # self._db.set_recomp_symbol(
+            #    recomp_addr,
+            #    SymbolType.POINTER if scalar_type_pointer(type_id) else SymbolType.DATA,
+            #    name,
+            #    name,
+            #    # we only need the matches when they are referenced elsewhere, hence we don't need the size
+            #    size=None,
+            # )
+            # self._db.set_pair(orig_addr, recomp_addr)
 
         matchinfo = self._db.get_by_orig(orig_addr)
         if matchinfo is None or matchinfo.recomp_addr is None:

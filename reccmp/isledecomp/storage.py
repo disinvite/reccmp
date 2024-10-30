@@ -1,7 +1,7 @@
 import sqlite3
 import logging
 import json
-from functools import cache
+from functools import cache, cached_property
 from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
@@ -189,7 +189,7 @@ class ReccmpThing:
     _source: Optional[int]
     _target: Optional[int]
     _symbol: Optional[str]
-    _extras: dict[str, Any]
+    _json: str
 
     def __init__(
         self,
@@ -197,15 +197,12 @@ class ReccmpThing:
         source: Optional[int] = None,
         target: Optional[int] = None,
         symbol: Optional[str] = None,
-        extras: Optional[str] = None,
+        json_str: Optional[str] = "{}",
     ) -> None:
         self._source = source
         self._target = target
         self._symbol = symbol
-        self._extras = {}
-
-        if extras is not None:
-            self._extras = json.loads(extras)
+        self._json = json_str
 
         self._backref = backref
 
@@ -221,12 +218,21 @@ class ReccmpThing:
     def symbol(self) -> Optional[str]:
         return self._symbol
 
+    @cached_property
+    def extras(self) -> dict[str, Any]:
+        """Defer this operation until necessary"""
+        return json.loads(self._json)
+
     @property
     def matched(self) -> bool:
         return self._source is not None and self._target is not None
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self._extras.get(key, default)
+        return self.extras.get(key, default)
+
+    def test(self, key: str) -> bool:
+        """Convert falsy/truthy to bool. SQLite has no boolean type."""
+        return bool(self.extras.get(key))
 
 
 class ReccmpDb:
@@ -241,39 +247,36 @@ class ReccmpDb:
 
     @classmethod
     def check_kwargs(cls, kwargs):
-        for key, _ in kwargs.items():
+        for key in kwargs.keys():
             if not key.isascii() or not key.isidentifier():
                 raise InvalidItemKeyError(key)
 
     def get_source(self, source: int) -> Optional[ReccmpThing]:
-        res = self.sql.execute(
+        for res in self.sql.execute(
             "SELECT source, target, symbol, kwstore from reccmp where source = ?",
             (source,),
-        ).fetchone()
-        if res is None:
-            return None
+        ):
+            return ReccmpThing(self, *res)
 
-        return ReccmpThing(self, *res)
+        return None
 
     def get_target(self, target: int) -> Optional[ReccmpThing]:
-        res = self.sql.execute(
+        for res in self.sql.execute(
             "SELECT source, target, symbol, kwstore from reccmp where target = ?",
             (target,),
-        ).fetchone()
-        if res is None:
-            return None
+        ):
+            return ReccmpThing(self, *res)
 
-        return ReccmpThing(self, *res)
+        return None
 
     def get_symbol(self, symbol: str) -> Optional[ReccmpThing]:
-        res = self.sql.execute(
+        for res in self.sql.execute(
             "SELECT source, target, symbol, kwstore from reccmp where symbol = ?",
             (symbol,),
-        ).fetchone()
-        if res is None:
-            return None
+        ):
+            return ReccmpThing(self, *res)
 
-        return ReccmpThing(self, *res)
+        return None
 
     def get_closest_source(self, source: int) -> Optional[ReccmpThing]:
         for res in self.sql.execute(

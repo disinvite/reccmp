@@ -198,7 +198,7 @@ class CompareDb(ReccmpDb):
         """Todo: remove this. wonky API"""
         n = self.get_source(addr)
         if n is not None:
-            return n._extras  # pylint: disable=protected-access
+            return n.extras
 
         return {}
 

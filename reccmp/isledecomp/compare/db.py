@@ -469,27 +469,17 @@ class CompareDb:
         for_name = base_class if base_class is not None else name
         for_vftable = f"{name}::`vftable'{{for `{for_name}'}}"
 
+        # Try to match on the "vftable for X first"
+        recomp_addr = self._find_potential_match(for_vftable, SymbolType.VTABLE)
+        if recomp_addr is not None:
+            return self.set_pair(addr, recomp_addr, SymbolType.VTABLE)
+
         # Only allow a match against "Class:`vftable'"
         # if this is the derived class.
         if base_class is None or base_class == name:
-            name_options = (for_vftable, bare_vftable)
-        else:
-            name_options = (for_vftable, for_vftable)
-
-        row = self._db.execute(
-            """
-            SELECT recomp_addr
-            FROM `symbols`
-            WHERE orig_addr IS NULL
-            AND (name = ? OR name = ?)
-            AND (compare_type = ?)
-            LIMIT 1
-            """,
-            (*name_options, SymbolType.VTABLE),
-        ).fetchone()
-
-        if row is not None and self.set_pair(addr, row[0], SymbolType.VTABLE):
-            return True
+            recomp_addr = self._find_potential_match(bare_vftable, SymbolType.VTABLE)
+            if recomp_addr is not None:
+                return self.set_pair(addr, recomp_addr, SymbolType.VTABLE)
 
         logger.error("Failed to find vtable for class: %s", name)
         return False

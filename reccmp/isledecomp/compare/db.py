@@ -399,31 +399,6 @@ class CompareDb:
         row = self._db.execute(sql, (name, compare_type)).fetchone()
         return row[0] if row is not None else None
 
-    def _find_static_variable(
-        self, variable_name: str, function_sym: str
-    ) -> Optional[int]:
-        """Get the recomp address of a static function variable.
-        Matches using a LIKE clause on the combination of:
-        1. The variable name read from decomp marker.
-        2. The decorated name of the enclosing function.
-        For example, the variable "g_startupDelay" from function "IsleApp::Tick"
-        has symbol: `?g_startupDelay@?1??Tick@IsleApp@@QAEXH@Z@4HA`
-        The function's decorated name is: `?Tick@IsleApp@@QAEXH@Z`"""
-
-        row = self._db.execute(
-            """SELECT recomp_addr FROM `symbols`
-            WHERE decorated_name LIKE '%' || ? || '%' || ? || '%'
-            AND orig_addr IS NULL
-            AND (compare_type = ? OR compare_type = ? OR compare_type IS NULL)""",
-            (
-                variable_name,
-                function_sym,
-                SymbolType.DATA,
-                SymbolType.POINTER,
-            ),
-        ).fetchone()
-        return row[0] if row is not None else None
-
     def _match_on(self, compare_type: SymbolType, addr: int, name: str) -> bool:
         # Update the compare_type here too since the marker tells us what we should do
 
@@ -484,34 +459,40 @@ class CompareDb:
         logger.error("Failed to find vtable for class: %s", name)
         return False
 
-    def match_static_variable(self, addr: int, name: str, function_addr: int) -> bool:
+    def match_static_variable(
+        self, addr: int, variable_name: str, function_addr: int
+    ) -> bool:
         """Matching a static function variable by combining the variable name
         with the decorated (mangled) name of its parent function."""
 
-        cur = self._db.execute(
-            """SELECT name, decorated_name
-            FROM `symbols`
-            WHERE orig_addr = ?""",
+        result = self._db.execute(
+            "SELECT name, decorated_name FROM `symbols` WHERE orig_addr = ?",
             (function_addr,),
-        )
+        ).fetchone()
 
-        if (result := cur.fetchone()) is None:
-            logger.error("No function for static variable: %s", name)
+        if result is None:
+            logger.error("No function for static variable: %s", variable_name)
             return False
 
         # Get the friendly name for the "failed to match" error message
-        (function_name, decorated_name) = result
+        (function_name, function_symbol) = result
 
-        recomp_addr = self._find_static_variable(name, decorated_name)
-        if recomp_addr is not None:
-            # TODO: This variable could be a pointer, but I don't think we
-            # have a way to tell that right now.
-            if self.set_pair(addr, recomp_addr, SymbolType.DATA):
-                return True
+        # If the static variable has a symbol, it will contain the parent function's symbol.
+        # e.g. Static variable "g_startupDelay" from function "IsleApp::Tick"
+        # The function symbol is:                    "?Tick@IsleApp@@QAEXH@Z"
+        # The variable symbol is: "?g_startupDelay@?1??Tick@IsleApp@@QAEXH@Z@4HA"
+        for (recomp_addr,) in self._db.execute(
+            """SELECT recomp_addr FROM symbols
+            WHERE orig_addr IS NULL
+            AND (compare_type = ? OR compare_type IS NULL)
+            AND decorated_name LIKE '%' || ? || '%' || ? || '%'""",
+            (SymbolType.DATA, variable_name, function_symbol),
+        ):
+            return self.set_pair(addr, recomp_addr, SymbolType.DATA)
 
         logger.error(
             "Failed to match static variable %s from function %s",
-            name,
+            variable_name,
             function_name,
         )
 

@@ -3,7 +3,7 @@ addresses/symbols that we want to compare between the original and recompiled bi
 
 import sqlite3
 import logging
-from typing import Any, Iterator, List, Optional
+from typing import Any, Iterable, Iterator, List, Optional
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
 
@@ -117,6 +117,13 @@ class CompareDb:
         self._db.execute(
             "INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size) VALUES (?,?,?,?,?)",
             (addr, compare_type, name, decorated_name, size),
+        )
+
+    def bulk_cvdump_insert(self, rows: Iterable[dict[str, Any]]):
+        self._db.executemany(
+            """INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size)
+            VALUES (:addr, :type, :name, :symbol, :size)""",
+            rows,
         )
 
     def get_unmatched_strings(self) -> List[str]:

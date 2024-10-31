@@ -104,6 +104,10 @@ class Compare:
         )
         self.cvdump_analysis = CvdumpAnalysis(self.cv)
 
+        # Build the list of entries to insert to the DB.
+        # In the rare case we have duplicate symbols for an address, ignore them.
+        dataset = {}
+
         for sym in self.cvdump_analysis.nodes:
             # Skip nodes where we have almost no information.
             # These probably came from SECTION CONTRIBUTIONS.
@@ -119,6 +123,9 @@ class Compare:
 
             addr = self.recomp_bin.get_abs_addr(sym.section, sym.offset)
             sym.addr = addr
+
+            if addr in dataset:
+                continue
 
             # If this symbol is the final one in its section, we were not able to
             # estimate its size because we didn't have the total size of that section.
@@ -164,9 +171,17 @@ class Compare:
                 except UnicodeDecodeError:
                     pass
 
-            self._db.set_recomp_symbol(
-                addr, sym.node_type, sym.name(), sym.decorated_name, sym.size()
-            )
+            dataset[addr] = {
+                "type": sym.node_type,
+                "name": sym.name(),
+                "symbol": sym.decorated_name,
+                "size": sym.size(),
+            }
+
+        # Convert dict of dicts (keyed by addr) to list of dicts (that contains the addr)
+        self._db.bulk_cvdump_insert(
+            ({"addr": key, **values} for key, values in dataset.items())
+        )
 
         for (section, offset), (
             filename,

@@ -3,7 +3,7 @@ addresses/symbols that we want to compare between the original and recompiled bi
 
 import sqlite3
 import logging
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
 
@@ -129,13 +129,12 @@ class CompareDb:
 
         return [string for (string,) in cur.fetchall()]
 
-    def get_all(self) -> List[MatchInfo]:
+    def get_all(self) -> Iterator[MatchInfo]:
         cur = self._db.execute("SELECT * FROM `match_info`")
         cur.row_factory = matchinfo_factory
+        yield from cur
 
-        return cur.fetchall()
-
-    def get_matches(self) -> Optional[MatchInfo]:
+    def get_matches(self) -> Iterator[MatchInfo]:
         cur = self._db.execute(
             """SELECT * FROM `match_info`
             WHERE orig_addr IS NOT NULL
@@ -143,8 +142,7 @@ class CompareDb:
             """,
         )
         cur.row_factory = matchinfo_factory
-
-        return cur.fetchall()
+        yield from cur
 
     def get_one_match(self, addr: int) -> Optional[MatchInfo]:
         cur = self._db.execute(
@@ -207,7 +205,7 @@ class CompareDb:
         cur.row_factory = matchinfo_factory
         return cur.fetchone()
 
-    def get_matches_by_type(self, compare_type: SymbolType) -> List[MatchInfo]:
+    def get_matches_by_type(self, compare_type: SymbolType) -> Iterator[MatchInfo]:
         cur = self._db.execute(
             """SELECT * FROM `match_info`
             WHERE compare_type = ?
@@ -217,8 +215,7 @@ class CompareDb:
             (compare_type,),
         )
         cur.row_factory = matchinfo_factory
-
-        return cur.fetchall()
+        yield from cur
 
     def _orig_used(self, addr: int) -> bool:
         cur = self._db.execute("SELECT 1 FROM symbols WHERE orig_addr = ?", (addr,))

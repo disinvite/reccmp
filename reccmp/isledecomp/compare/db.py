@@ -96,10 +96,9 @@ class CompareDb:
         if self._orig_used(addr):
             return
 
-        compare_value = compare_type.value if compare_type is not None else None
         self._db.execute(
             "INSERT INTO `symbols` (orig_addr, compare_type, name, size) VALUES (?,?,?,?)",
-            (addr, compare_value, name, size),
+            (addr, compare_type, name, size),
         )
 
     def set_recomp_symbol(
@@ -115,10 +114,9 @@ class CompareDb:
         if self._recomp_used(addr):
             return
 
-        compare_value = compare_type.value if compare_type is not None else None
         self._db.execute(
             "INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size) VALUES (?,?,?,?,?)",
-            (addr, compare_value, name, decorated_name, size),
+            (addr, compare_type, name, decorated_name, size),
         )
 
     def get_unmatched_strings(self) -> List[str]:
@@ -126,7 +124,7 @@ class CompareDb:
 
         cur = self._db.execute(
             "SELECT name FROM `symbols` WHERE compare_type = ? AND orig_addr IS NULL",
-            (SymbolType.STRING.value,),
+            (SymbolType.STRING,),
         )
 
         return [string for (string,) in cur.fetchall()]
@@ -216,7 +214,7 @@ class CompareDb:
             AND orig_addr IS NOT NULL
             AND recomp_addr IS NOT NULL
             """,
-            (compare_type.value,),
+            (compare_type,),
         )
         cur.row_factory = matchinfo_factory
 
@@ -237,10 +235,9 @@ class CompareDb:
             logger.debug("Original address %s not unique!", hex(orig))
             return False
 
-        compare_value = compare_type.value if compare_type is not None else None
         cur = self._db.execute(
             "UPDATE `symbols` SET orig_addr = ?, compare_type = ? WHERE recomp_addr = ?",
-            (orig, compare_value, recomp),
+            (orig, compare_type, recomp),
         )
 
         return cur.rowcount > 0
@@ -259,14 +256,12 @@ class CompareDb:
             # Probable and expected situation. Just ignore it.
             return False
 
-        compare_value = compare_type.value if compare_type is not None else None
-
         cur = self._db.execute(
             """UPDATE `symbols`
             SET orig_addr = ?, compare_type = coalesce(compare_type, ?)
             WHERE recomp_addr = ?
             AND orig_addr IS NULL""",
-            (orig, compare_value, recomp),
+            (orig, compare_type, recomp),
         )
 
         return cur.rowcount > 0
@@ -290,7 +285,7 @@ class CompareDb:
             """INSERT INTO `symbols`
             (orig_addr, compare_type, name, size)
             VALUES (?,?,?,?)""",
-            (addr, SymbolType.FUNCTION.value, thunk_name, 5),
+            (addr, SymbolType.FUNCTION, thunk_name, 5),
         )
 
         return cur.rowcount > 0
@@ -311,7 +306,7 @@ class CompareDb:
             """INSERT INTO `symbols`
             (recomp_addr, compare_type, name, size)
             VALUES (?,?,?,?)""",
-            (addr, SymbolType.FUNCTION.value, thunk_name, 5),
+            (addr, SymbolType.FUNCTION, thunk_name, 5),
         )
 
         return cur.rowcount > 0
@@ -405,7 +400,7 @@ class CompareDb:
             LIMIT 1
             """
 
-        row = self._db.execute(sql, (name, compare_type.value)).fetchone()
+        row = self._db.execute(sql, (name, compare_type)).fetchone()
         return row[0] if row is not None else None
 
     def _find_static_variable(
@@ -427,8 +422,8 @@ class CompareDb:
             (
                 variable_name,
                 function_sym,
-                SymbolType.DATA.value,
-                SymbolType.POINTER.value,
+                SymbolType.DATA,
+                SymbolType.POINTER,
             ),
         ).fetchone()
         return row[0] if row is not None else None
@@ -494,7 +489,7 @@ class CompareDb:
             AND (compare_type = ?)
             LIMIT 1
             """,
-            (*name_options, SymbolType.VTABLE.value),
+            (*name_options, SymbolType.VTABLE),
         ).fetchone()
 
         if row is not None and self.set_pair(addr, row[0], SymbolType.VTABLE):

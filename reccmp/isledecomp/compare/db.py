@@ -126,6 +126,13 @@ class CompareDb:
             rows,
         )
 
+    def bulk_array_insert(self, rows: Iterable[dict[str, Any]]):
+        self._db.executemany(
+            """INSERT INTO `symbols` (orig_addr, recomp_addr, name)
+            VALUES (:orig, :recomp, :name)""",
+            rows,
+        )
+
     def get_unmatched_strings(self) -> List[str]:
         """Return any strings not already identified by STRING markers."""
 

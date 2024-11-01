@@ -270,22 +270,16 @@ class Compare:
         This step is necessary e.g. for `0x100f0a20` (LegoRacers.cpp).
         """
 
+        dataset = {}
+
         # Helper function
         def _add_match_in_array(
             name: str, type_id: str, orig_addr: int, recomp_addr: int
         ):
             # pylint: disable=unused-argument
             # TODO: Previously used scalar_type_pointer(type_id) to set whether this is a pointer
-            self._db.set_recomp_symbol(
-                recomp_addr,
-                # No type so we don't try to compare in datacmp
-                compare_type=None,
-                name=name,
-                decorated_name=None,
-                # we only need the matches when they are referenced elsewhere, hence we don't need the size
-                size=None,
-            )
-            self._db.set_pair(orig_addr, recomp_addr)
+            if recomp_addr not in dataset:
+                dataset[recomp_addr] = {"orig": orig_addr, "name": name}
 
         # Indexed by recomp addr. Need to preload this data because it is not stored alongside the db rows.
         cvdump_lookup = {x.addr: x for x in self.cvdump_analysis.nodes}
@@ -324,6 +318,10 @@ class Compare:
                                 orig_element_base_addr + member.offset,
                                 recomp_element_base_addr + member.offset,
                             )
+
+        self._db.bulk_array_insert(
+            ({"recomp": key, **values} for key, values in dataset.items())
+        )
 
     def _find_original_strings(self):
         """Go to the original binary and look for the specified string constants

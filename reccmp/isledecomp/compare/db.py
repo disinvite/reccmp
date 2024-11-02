@@ -9,13 +9,10 @@ from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
 
 _SETUP_SQL = """
-    DROP TABLE IF EXISTS `symbols`;
-    DROP TABLE IF EXISTS `match_options`;
-
     CREATE TABLE `symbols` (
         compare_type int,
-        orig_addr int,
-        recomp_addr int,
+        orig_addr int unique,
+        recomp_addr int unique,
         name text,
         decorated_name text,
         size int
@@ -34,8 +31,6 @@ _SETUP_SQL = """
         FROM `symbols`
         ORDER BY orig_addr NULLS LAST;
 
-    CREATE INDEX `symbols_or` ON `symbols` (orig_addr);
-    CREATE INDEX `symbols_re` ON `symbols` (recomp_addr);
     CREATE INDEX `symbols_na` ON `symbols` (name);
 """
 
@@ -92,11 +87,8 @@ class CompareDb:
         size: Optional[int],
     ):
         # Ignore collisions here.
-        if self._orig_used(addr):
-            return
-
         self._db.execute(
-            "INSERT INTO `symbols` (orig_addr, compare_type, name, size) VALUES (?,?,?,?)",
+            "INSERT or ignore INTO `symbols` (orig_addr, compare_type, name, size) VALUES (?,?,?,?)",
             (addr, compare_type, name, size),
         )
 
@@ -110,24 +102,22 @@ class CompareDb:
     ):
         # Ignore collisions here. The same recomp address can have
         # multiple names (e.g. _strlwr and __strlwr)
-        if self._recomp_used(addr):
-            return
 
         self._db.execute(
-            "INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size) VALUES (?,?,?,?,?)",
+            "INSERT or ignore INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size) VALUES (?,?,?,?,?)",
             (addr, compare_type, name, decorated_name, size),
         )
 
     def bulk_cvdump_insert(self, rows: Iterable[dict[str, Any]]):
         self._db.executemany(
-            """INSERT INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size)
+            """INSERT or ignore INTO `symbols` (recomp_addr, compare_type, name, decorated_name, size)
             VALUES (:addr, :type, :name, :symbol, :size)""",
             rows,
         )
 
     def bulk_array_insert(self, rows: Iterable[dict[str, Any]]):
         self._db.executemany(
-            """INSERT INTO `symbols` (orig_addr, recomp_addr, name)
+            """INSERT or ignore INTO `symbols` (orig_addr, recomp_addr, name)
             VALUES (:orig, :recomp, :name)""",
             rows,
         )
@@ -383,11 +373,14 @@ class CompareDb:
     ) -> Optional[int]:
         """Name lookup"""
         match_decorate = compare_type != SymbolType.STRING and name.startswith("?")
+        # If the index on orig_addr is unique, sqlite will prefer to use it over the name index.
+        # But this index will not help if we are checking for NULL, so we exclude it
+        # by adding the plus sign (Reference: https://www.sqlite.org/optoverview.html#uplus)
         if match_decorate:
             sql = """
             SELECT recomp_addr
             FROM `symbols`
-            WHERE orig_addr IS NULL
+            WHERE +orig_addr IS NULL
             AND decorated_name = ?
             AND (compare_type IS NULL OR compare_type = ?)
             LIMIT 1
@@ -396,7 +389,7 @@ class CompareDb:
             sql = """
             SELECT recomp_addr
             FROM `symbols`
-            WHERE orig_addr IS NULL
+            WHERE +orig_addr IS NULL
             AND name = ?
             AND (compare_type IS NULL OR compare_type = ?)
             LIMIT 1

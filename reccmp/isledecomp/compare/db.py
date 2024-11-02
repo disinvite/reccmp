@@ -3,6 +3,7 @@ addresses/symbols that we want to compare between the original and recompiled bi
 
 import sqlite3
 import logging
+from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, List, Optional
 from reccmp.isledecomp.types import SymbolType
 from reccmp.isledecomp.cvdump.demangler import get_vtordisp_name
@@ -44,20 +45,13 @@ SymbolTypeLookup: dict[int, str] = {
 }
 
 
+@dataclass
 class MatchInfo:
-    def __init__(
-        self,
-        ctype: Optional[int],
-        orig: Optional[int],
-        recomp: Optional[int],
-        name: Optional[str],
-        size: Optional[int],
-    ) -> None:
-        self.compare_type = ctype
-        self.orig_addr = orig
-        self.recomp_addr = recomp
-        self.name = name
-        self.size = size
+    compare_type: Optional[int]
+    orig_addr: Optional[int]
+    recomp_addr: Optional[int]
+    name: Optional[str]
+    size: Optional[int]
 
     def match_name(self) -> Optional[str]:
         """Combination of the name and compare type.

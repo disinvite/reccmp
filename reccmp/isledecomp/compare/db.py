@@ -39,6 +39,11 @@ _SETUP_SQL = """
 """
 
 
+SymbolTypeLookup: dict[int, str] = {
+    value: name for name, value in SymbolType.__members__.items()
+}
+
+
 class MatchInfo:
     def __init__(
         self,
@@ -48,7 +53,7 @@ class MatchInfo:
         name: Optional[str],
         size: Optional[int],
     ) -> None:
-        self.compare_type = SymbolType(ctype) if ctype is not None else None
+        self.compare_type = ctype
         self.orig_addr = orig
         self.recomp_addr = recomp
         self.name = name
@@ -61,8 +66,8 @@ class MatchInfo:
         if self.name is None:
             return None
 
-        ctype = self.compare_type.name if self.compare_type is not None else "UNK"
-        name = repr(self.name) if ctype == "STRING" else self.name
+        ctype = SymbolTypeLookup.get(self.compare_type or -1, "UNK")
+        name = repr(self.name) if self.compare_type == SymbolType.STRING else self.name
         return f"{name} ({ctype})"
 
     def offset_name(self, ofs: int) -> Optional[str]:

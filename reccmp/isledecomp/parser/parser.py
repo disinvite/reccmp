@@ -25,6 +25,7 @@ from .node import (
     ParserString,
 )
 from .error import ParserAlert, ParserError
+from .tokenizer import TokenType, tokenize  # pylint: disable=unused-import
 
 
 class ReaderState(Enum):
@@ -71,6 +72,8 @@ class CurlyManager:
 
     def __init__(self):
         self._stack = []
+        self._pending: Optional[str] = None
+        self._state = 0
 
     def reset(self):
         self._stack = []
@@ -79,6 +82,8 @@ class CurlyManager:
         """Pop stack safely"""
         try:
             self._stack.pop()
+            if self._stack[-1] != "{":
+                self._stack.pop()
         except IndexError:
             pass
 
@@ -94,8 +99,33 @@ class CurlyManager:
 
         return "::".join(scopes)
 
+    def read_token(self, token):
+        (token_type, _, value) = token
+
+        if token_type == TokenType.OPERATOR:
+            self._state = 0
+            if value == "{":
+                if self._pending is not None:
+                    self._stack.append(self._pending)
+                    self._pending = None
+                self._stack.append("{")
+            elif value == "}":
+                self._pop()
+            elif value == ";":
+                self._pending = None
+        elif token_type == TokenType.IDENTIFIER:
+            if self._state == 0:
+                if value in ("class", "struct", "namespace"):
+                    self._state = 1
+            elif self._state == 1:
+                self._pending = value
+
     def read_line(self, raw_line: str):
         """Read a line of code and update the stack."""
+        # for token in tokenize(raw_line):
+        #    self.read_token(token)
+        # return
+
         line = sanitize_code_line(raw_line)
         if (match := scopeDetectRegex.match(line)) is not None:
             if not line.endswith(";"):
@@ -107,13 +137,6 @@ class CurlyManager:
                 self._stack.append("{")
         elif change < 0:
             for _ in range(-change):
-                self._pop()
-
-            if len(self._stack) == 0:
-                return
-
-            last = self._stack[-1]
-            if last != "{":
                 self._pop()
 
 

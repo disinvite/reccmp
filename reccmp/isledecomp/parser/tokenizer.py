@@ -17,6 +17,7 @@ r_identifier = re.compile(r"[_a-zA-Z]\w*")
 r_const = re.compile(r"\d[\.\w]*")
 
 OPERATOR_SET = frozenset("()[]{}*,:=;+><|~!#-/&.?%^")
+WHITESPACE = frozenset(" \t\r\n")
 
 
 class TokenType(enum.Enum):
@@ -31,7 +32,6 @@ class TokenType(enum.Enum):
 
 
 Rejex = (
-    (" \t\r\n", None, None),
     ("/", r_any_comment, TokenType.COMMENT),
     (OPERATOR_SET, None, TokenType.OPERATOR),
     (string.ascii_letters + "_", r_identifier, TokenType.IDENTIFIER),
@@ -48,8 +48,12 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int]]]:
 
     end_of_code = len(code)
     while curpos < end_of_code:
+        if code[curpos] in WHITESPACE:
+            curpos += 1
+            continue
+
         for start_char, compiled_re, token_type in Rejex:
-            if start_char is not None and code[curpos] not in start_char:
+            if code[curpos] not in start_char:
                 continue
 
             if compiled_re is not None:
@@ -57,22 +61,18 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int]]]:
                 if match is None:
                     continue
 
+                value = match.group(0)
+                end = curpos + len(value)
+            else:
+                value = code[curpos]
+                end = curpos + 1
+
             if pending != "":
                 # TODO: curpos wrong?
                 yield (TokenType.STUFF, (pend_start, curpos), pending)
                 pending = ""
 
-            if compiled_re is None:
-                value = code[curpos]
-                end = curpos + 1
-            else:
-                value = match.group(0)
-                end = curpos + len(value)
-
-            # don't emit on whitespace
-            if token_type is not None:
-                yield (token_type, (curpos, end), value)
-
+            yield (token_type, (curpos, end), value)
             curpos = end
             break
         else:

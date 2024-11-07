@@ -17,7 +17,8 @@ r_identifier = re.compile(r"[_a-zA-Z]\w*")
 r_const = re.compile(r"\d[\.\w]*")
 
 OPERATOR_SET = frozenset("()[]{}*,:=;+><|~!#-/&.?%^\\")
-WHITESPACE = frozenset(" \t\r\n")
+WHITESPACE = frozenset(string.whitespace)
+NEWLINES = frozenset("\r\n")
 
 
 class TokenType(enum.Enum):
@@ -43,10 +44,16 @@ Rejex = (
 
 def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     curpos = 0
+    last_newline = 0
+    line_no = 1
 
     end_of_code = len(code)
     while curpos < end_of_code:
         if code[curpos] in WHITESPACE:
+            if code[curpos] in NEWLINES:
+                last_newline = curpos + 1
+                line_no += 1
+
             curpos += 1
             continue
 
@@ -65,7 +72,7 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
                 value = code[curpos]
                 end = curpos + 1
 
-            yield (token_type, (curpos, end), value)
+            yield (token_type, (line_no, curpos - last_newline + 1), value)
             curpos = end
             break
         else:

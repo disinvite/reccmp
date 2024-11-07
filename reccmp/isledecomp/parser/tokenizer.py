@@ -16,7 +16,7 @@ r_whitespace = re.compile(r"[\s\n]+")
 r_identifier = re.compile(r"[_a-zA-Z]\w*")
 r_const = re.compile(r"\d[\.\w]*")
 
-OPERATOR_SET = frozenset("()[]{}*,:=;+><|~!#-/&.?%^")
+OPERATOR_SET = frozenset("()[]{}*,:=;+><|~!#-/&.?%^\\")
 WHITESPACE = frozenset(" \t\r\n")
 
 
@@ -41,9 +41,7 @@ Rejex = (
 )
 
 
-def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int]]]:
-    pending = ""
-    pend_start = 0
+def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     curpos = 0
 
     end_of_code = len(code)
@@ -61,25 +59,15 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int]]]:
                 if match is None:
                     continue
 
-                value = match.group(0)
-                end = curpos + len(value)
+                end = match.end(0)
+                value = code[curpos:end]
             else:
                 value = code[curpos]
                 end = curpos + 1
-
-            if pending != "":
-                # TODO: curpos wrong?
-                yield (TokenType.STUFF, (pend_start, curpos), pending)
-                pending = ""
 
             yield (token_type, (curpos, end), value)
             curpos = end
             break
         else:
             # no match on regex
-            try:
-                pending += code[curpos]
-            except IndexError:
-                break
-
             curpos += 1

@@ -33,7 +33,6 @@ class TokenType(enum.Enum):
 
 
 Rejex = (
-    ("/", r_any_comment, TokenType.COMMENT),
     (OPERATOR_SET, None, TokenType.OPERATOR),
     ('"', r_string, TokenType.STRING),  # Match L"" strings
     ("'", r_char, TokenType.CHAR),
@@ -55,6 +54,31 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
 
             curpos += 1
             continue
+
+        if code[curpos] == "/":
+            if code[curpos + 1] == "/":
+                end = code.index("\n", curpos + 1)
+                yield (
+                    TokenType.COMMENT,
+                    (line_no, curpos - last_newline + 1),
+                    code[curpos:end],
+                )
+                curpos = end
+                continue
+
+            if code[curpos + 1] == "*":
+                end = (
+                    code.index("*/", curpos + 1) + 2
+                )  # Plus two to seek past this block.
+                yield (
+                    TokenType.COMMENT,
+                    (line_no, curpos - last_newline + 1),
+                    code[curpos:end],
+                )
+                # Adjust line number if this spans multiple lines.
+                line_no += code[curpos:end].count("\n")
+                curpos = end
+                continue
 
         for start_char, compiled_re, token_type in Rejex:
             if code[curpos] not in start_char:

@@ -55,28 +55,11 @@ def test_unicode_identifier():
     ]
 
 
-def test_line_continuation():
-    """Line continuation character (backslash) does not get its own token.
-    Clang combines the lines (as the compiler would want) and newlines
-    that follow start after that line number. We may or may not choose
-    to emulate that behavior because it's not intuitive to fix syntax
-    errors with your annotations."""
+def test_macro_line_continuation():
+    """For macros with the line continuation character (backslash)
+    match the entire thing as one token."""
     code = "#define TestMacro(value)  \\\n  value"
-    tokens = list(tokenize(code))
-
-    # Assert continuation is not its own token
-    assert [value for (_, __, value) in tokens] == [
-        "#",
-        "define",
-        "TestMacro",
-        "(",
-        "value",
-        ")",
-        "value",
-    ]
-
-    # Assert all tokens on first line
-    assert all(line_no == 1 for (_, (line_no, __), ___) in tokens)
+    assert token_types(tokenize(code)) == [TokenType.STUFF]  # TODO: name
 
 
 def test_block_comment_line_number():
@@ -89,8 +72,8 @@ def test_block_comment_line_number():
     )
 
     tokens = list(tokenize(code))
-    # Assert correct line and column
-    assert [pos for (_, pos, ___) in tokens] == [(1, 1), (4, 1), (4, 7)]
+    # Assert correct line and position
+    assert [pos for (_, pos, ___) in tokens] == [(1, 0), (4, 52), (4, 58)]
 
 
 def test_non_naive_operator_split():

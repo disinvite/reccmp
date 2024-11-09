@@ -2,7 +2,6 @@
 
 import re
 import enum
-import string
 from typing import Iterator
 
 __all__ = ["TokenType", "tokenize"]
@@ -10,14 +9,16 @@ __all__ = ["TokenType", "tokenize"]
 r_omni = re.compile(
     "|".join(
         [
+            r"(?P<ppc>#[a-z]+(?:\\\n|[^\n])*)",
             r"(?P<block>\/\*.*?\*\/)",
             r"(?P<comment>\/\/[^\n]*)",
-            r"(?P<string>\"(?:[^\n\"\\]|\\[^\n])*\")",
-            r"(?P<char>'(?:[^\n\'\\]|\\[^\n])')",
-            r"(?P<newline>\n)",
-            r"(?P<punctuation>::|>>=?|<<=?|->|\+{1,2}|-{1,2}|&{1,2}|\|{1,2}|[!\^\+\-\*\/%]=?|[\#\",:\.\(\)\[\]~;<>{}])",
+            r"(?P<string>L?\"(?:[^\n\"\\]|\\[^\n])*\")",
+            r"(?P<char>L?'(?:[^\n\'\\]|\\[^\n])')",
+            r"(?P<separator>[\(\)\[\]{}\?,:\.\"\'\#])",
+            r"(?P<punctuation>\:{2}|->|>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|\+{1,2}|-{1,2}|\.{3})",
             r"(?P<literal>\d[\.\w]*)",
             r"(?P<identifier>[^\s\d]\w*)",
+            r"(?P<newline>\n+)",
         ]
     ),
     flags=re.DOTALL,
@@ -37,29 +38,29 @@ class TokenType(enum.Enum):
 
 def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     lastgroupmap = {
+        "ppc": TokenType.STUFF,
         "block": TokenType.COMMENT,
         "comment": TokenType.COMMENT,
         "string": TokenType.STRING,
         "char": TokenType.CHAR,
         "literal": TokenType.CONST,
+        "separator": TokenType.OPERATOR,
         "punctuation": TokenType.OPERATOR,
         "identifier": TokenType.IDENTIFIER,
     }
 
-    last_newline = 0
     line_no = 1
 
     for match in r_omni.finditer(code):
         (start, end) = match.span()
         which = match.lastgroup
-        if which == "newline":
-            last_newline = start
-            line_no += 1
-        else:
+        value = code[start:end]
+        if which != "newline":
             yield (
                 lastgroupmap[which],
-                (line_no, start - last_newline + 1),
-                code[start:end],
+                (line_no, start),
+                value,
             )
 
-    return
+        if which in ("ppc", "block", "newline"):
+            line_no += value.count("\n")

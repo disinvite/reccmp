@@ -14,7 +14,7 @@ r_omni = re.compile(
             r"(?P<comment>\/\/[^\n]*)",
             r"(?P<string>L?\"(?:[^\n\"\\]|\\[^\n])*\")",
             r"(?P<char>L?'(?:[^\n\'\\]|\\[^\n])')",
-            r"(?P<separator>[\(\)\[\]{}\?,:\.\"\'\#])",
+            r"(?P<separator>[\(\)\[\]{}\?,:;\.\"\'\#])",
             r"(?P<punctuation>\:{2}|->|>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|\+{1,2}|-{1,2}|\.{3})",
             r"(?P<literal>\d[\.\w]*)",
             r"(?P<identifier>[^\s\d]\w*)",
@@ -26,7 +26,8 @@ r_omni = re.compile(
 
 
 class TokenType(enum.Enum):
-    COMMENT = enum.auto()
+    BLOCK_COMMENT = enum.auto()
+    LINE_COMMENT = enum.auto()
     CHAR = enum.auto()
     STRING = enum.auto()
     IDENTIFIER = enum.auto()
@@ -39,8 +40,8 @@ class TokenType(enum.Enum):
 def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     lastgroupmap = {
         "ppc": TokenType.STUFF,
-        "block": TokenType.COMMENT,
-        "comment": TokenType.COMMENT,
+        "block": TokenType.BLOCK_COMMENT,
+        "comment": TokenType.LINE_COMMENT,
         "string": TokenType.STRING,
         "char": TokenType.CHAR,
         "literal": TokenType.CONST,

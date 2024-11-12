@@ -9,6 +9,11 @@ def token_types(tokens: Iterable[tuple]) -> list[TokenType]:
     return [token_type for (token_type, _, __) in tokens]
 
 
+def token_values(tokens: Iterable[tuple]) -> list[str]:
+    """Helper to unwrap token value"""
+    return [value for (_, __, value) in tokens]
+
+
 def test_string():
     assert token_types(tokenize('"test"')) == [TokenType.STRING]
     assert token_types(tokenize('"te\\"st"')) == [TokenType.STRING]
@@ -27,7 +32,7 @@ def test_busted_string():
     """
     # assert len([*tokenize('"te\\\nst"')]) == 1
 
-    assert [value for (_, __, value) in tokenize('"te\nst"')] == [
+    assert token_values(tokenize('"te\nst"')) == [
         '"te',
         "\n",
         "st",
@@ -46,6 +51,11 @@ def test_consts():
     assert token_types(tokenize("1.0.5")) == [TokenType.CONST]
     # Cannot be an identifier if it starts with a number, so anything goes
     assert token_types(tokenize("0whatever")) == [TokenType.CONST]
+
+    # Careful with dots at the start
+    assert token_types(tokenize(".m_info")) != [TokenType.CONST]
+
+    assert token_values(tokenize("thing0.m_info")) == ["thing0", ".", "m_info"]
 
 
 @pytest.mark.xfail(reason="stretch goal")
@@ -78,20 +88,11 @@ def test_block_comment_line_number():
 
 def test_non_naive_operator_split():
     """Need to break on the full operator, not just a single character"""
-    assert token_types(tokenize("a->m_test")) == [
-        TokenType.IDENTIFIER,
-        TokenType.OPERATOR,
-        TokenType.IDENTIFIER,
-    ]
+    assert token_values(tokenize("a->m_test")) == ["a", "->", "m_test"]
 
-    assert token_types(tokenize("x!=3")) == [
-        TokenType.IDENTIFIER,
-        TokenType.OPERATOR,
-        TokenType.CONST,
-    ]
+    assert token_values(tokenize("x!=3")) == ["x", "!=", "3"]
 
-    assert token_types(tokenize("x&&y")) == [
-        TokenType.IDENTIFIER,
-        TokenType.OPERATOR,
-        TokenType.IDENTIFIER,
-    ]
+    assert token_values(tokenize("x&&y")) == ["x", "&&", "y"]
+
+    # Double colon as one token
+    assert token_values(tokenize("MyClass::Test")) == ["MyClass", "::", "Test"]

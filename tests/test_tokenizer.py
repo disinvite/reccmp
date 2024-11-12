@@ -96,3 +96,14 @@ def test_non_naive_operator_split():
 
     # Double colon as one token
     assert token_values(tokenize("MyClass::Test")) == ["MyClass", "::", "Test"]
+
+
+def test_tilde():
+    """~ is unary NOT, but is also used in destructor names"""
+    assert token_values(tokenize("~a")) == ["~", "a"]
+    assert token_values(tokenize("MyClass::~MyClass")) == [
+        "MyClass",
+        "::",
+        "~",
+        "MyClass",
+    ]

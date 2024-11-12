@@ -16,10 +16,11 @@ r_omni = re.compile(
             r"(?P<char>L?'(?:[^\n\'\\]|\\[^\n])')",
             r"(?P<literal>(?:\d|\.\d)[\.\w]*)",
             r"(?P<separator>\:{1,2}|->|[\(\)\[\]{}\?,;\.\#])",
-            r"(?P<punctuation>>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|\+{1,2}|-{1,2}|\.{3})",
+            r"(?P<punctuation>>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|~|\+{1,2}|-{1,2}|\.{3})",
             r"(?P<identifier>[^\s\d]\w*)",
             r"(?P<continuation>\\\n+)",
             r"(?P<newline>\n+)",
+            r"(?P<unknown>\S)",
         ]
     ),
     flags=re.DOTALL,
@@ -37,8 +38,7 @@ class TokenType(enum.Enum):
     OPERATOR = enum.auto()
     CONTINUATION = enum.auto()
     NEWLINE = enum.auto()
-    #
-    STUFF = enum.auto()
+    UNKNOWN = enum.auto()
 
 
 def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
@@ -54,6 +54,7 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
         "identifier": TokenType.IDENTIFIER,
         "newline": TokenType.NEWLINE,
         "continuation": TokenType.CONTINUATION,
+        "unknown": TokenType.UNKNOWN,
     }
 
     line_no = 1

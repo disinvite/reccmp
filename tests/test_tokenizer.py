@@ -3,8 +3,6 @@ from typing import Iterable
 import pytest
 from reccmp.isledecomp.parser.tokenizer import tokenize, TokenType
 
-pytestmark = pytest.mark.xfail(reason="WIP")
-
 
 def token_types(tokens: Iterable[tuple]) -> list[TokenType]:
     """Helper to unwrap token type"""
@@ -27,10 +25,13 @@ def test_busted_string():
     """Not legal to have a newline inside a C string without a line continuation mark.
     Clang gives you this when that happens. We may or may not want this for our tokens.
     """
-    assert token_types(tokenize('"t\nest"')) == [
-        TokenType.OPERATOR,  # "te
-        TokenType.IDENTIFIER,  # st
-        TokenType.OPERATOR,  # "
+    # assert len([*tokenize('"te\\\nst"')]) == 1
+
+    assert [value for (_, __, value) in tokenize('"te\nst"')] == [
+        '"te',
+        "\n",
+        "st",
+        '"',
     ]
 
 
@@ -41,8 +42,13 @@ def test_consts():
     assert token_types(tokenize(".01")) == [TokenType.CONST]
     assert token_types(tokenize("0x1234")) == [TokenType.CONST]
     assert token_types(tokenize("0o777")) == [TokenType.CONST]
+    # Clang is very flexible here
+    assert token_types(tokenize("1.0.5")) == [TokenType.CONST]
+    # Cannot be an identifier if it starts with a number, so anything goes
+    assert token_types(tokenize("0whatever")) == [TokenType.CONST]
 
 
+@pytest.mark.xfail(reason="stretch goal")
 def test_unicode_identifier():
     """Example from MSVC site using Japanese characters
     https://learn.microsoft.com/en-us/cpp/cpp/identifiers-cpp?view=msvc-170"""
@@ -55,17 +61,11 @@ def test_unicode_identifier():
     ]
 
 
-def test_macro_line_continuation():
-    """For macros with the line continuation character (backslash)
-    match the entire thing as one token."""
-    code = "#define TestMacro(value)  \\\n  value"
-    assert token_types(tokenize(code)) == [TokenType.STUFF]  # TODO: name
-
-
 def test_block_comment_line_number():
     """Line number must be accurate for block comment that spans multiple lines"""
     code = dedent(
-        """/* this is a
+        """\
+        /* this is a
         big
         comment */
         return;"""
@@ -73,7 +73,7 @@ def test_block_comment_line_number():
 
     tokens = list(tokenize(code))
     # Assert correct line and position
-    assert [pos for (_, pos, ___) in tokens] == [(1, 0), (4, 52), (4, 58)]
+    assert [pos for (_, pos, ___) in tokens] == [(1, 0), (3, 27), (4, 28), (4, 34)]
 
 
 def test_non_naive_operator_split():

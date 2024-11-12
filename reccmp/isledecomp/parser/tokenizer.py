@@ -9,15 +9,16 @@ __all__ = ["TokenType", "tokenize"]
 r_omni = re.compile(
     "|".join(
         [
-            r"(?P<ppc>#[a-z]+(?:\\\n|[^\n])*)",
+            r"(?P<ppc>#[a-z]+)",
             r"(?P<block>\/\*.*?\*\/)",
             r"(?P<comment>\/\/[^\n]*)",
             r"(?P<string>L?\"(?:[^\n\"\\]|\\[^\n])*\")",
             r"(?P<char>L?'(?:[^\n\'\\]|\\[^\n])')",
-            r"(?P<separator>[\(\)\[\]{}\?,:;\.\"\'\#])",
-            r"(?P<punctuation>\:{2}|->|>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|\+{1,2}|-{1,2}|\.{3})",
-            r"(?P<literal>\d[\.\w]*)",
+            r"(?P<literal>[\.\d][\.\w]*)",
+            r"(?P<separator>\:{2}|->|[\(\)\[\]{}\?,:;\.\#])",
+            r"(?P<punctuation>>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|\+{1,2}|-{1,2}|\.{3})",
             r"(?P<identifier>[^\s\d]\w*)",
+            r"(?P<continuation>\\\n+)",
             r"(?P<newline>\n+)",
         ]
     ),
@@ -26,6 +27,7 @@ r_omni = re.compile(
 
 
 class TokenType(enum.Enum):
+    PREPROCESSOR = enum.auto()
     BLOCK_COMMENT = enum.auto()
     LINE_COMMENT = enum.auto()
     CHAR = enum.auto()
@@ -33,13 +35,15 @@ class TokenType(enum.Enum):
     IDENTIFIER = enum.auto()
     CONST = enum.auto()
     OPERATOR = enum.auto()
+    CONTINUATION = enum.auto()
+    NEWLINE = enum.auto()
     #
     STUFF = enum.auto()
 
 
 def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     lastgroupmap = {
-        "ppc": TokenType.STUFF,
+        "ppc": TokenType.PREPROCESSOR,
         "block": TokenType.BLOCK_COMMENT,
         "comment": TokenType.LINE_COMMENT,
         "string": TokenType.STRING,
@@ -48,6 +52,8 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
         "separator": TokenType.OPERATOR,
         "punctuation": TokenType.OPERATOR,
         "identifier": TokenType.IDENTIFIER,
+        "newline": TokenType.NEWLINE,
+        "continuation": TokenType.CONTINUATION,
     }
 
     line_no = 1
@@ -56,12 +62,11 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
         (start, end) = match.span()
         which = match.lastgroup
         value = code[start:end]
-        if which != "newline":
-            yield (
-                lastgroupmap[which],
-                (line_no, start),
-                value,
-            )
+        yield (
+            lastgroupmap[which],
+            (line_no, start),
+            value,
+        )
 
-        if which in ("ppc", "block", "newline"):
+        if which in ("block", "string", "char", "newline", "continuation"):
             line_no += value.count("\n")

@@ -1,128 +1,120 @@
-import re
 import enum
-from typing import Iterator, NamedTuple
+from typing import Iterator
 from .tokenizer import TokenType
 
-r_whitespace = re.compile(r"\s+")
+
+# TODO: What does this return? bool or Any?
+def evaluate(tokens: list, _=None):
+    # TODO
+    return tokens[0][2] == "1"
 
 
-class StackAction(enum.Enum):
-    CHECK = enum.auto()  # Do not passthru, test next directive at this level
-    ALLOW = enum.auto()  # Passthru, do not text next directive
-    IGNORE = enum.auto()  # Do not passthru, do not test next directive
+class PreprocessorMode(enum.Enum):
+    # Waiting for preprocessor token, passthru
+    WAITING = enum.auto()
 
+    # Store tokens until newline
+    COLLECT = enum.auto()
 
-class StackThing(NamedTuple):
-    level: int  # which layer of ppc directive this is
-    action: StackAction
+    # Condition met at this level, passthru
+    ALLOW = enum.auto()
 
+    # Waiting for #else / #elif / #endif
+    DELAY = enum.auto()
 
-def evaluate(expression: str) -> bool:
-    if expression == "0":
-        return False
+    # Collect tokens for evaluation. Return to DELAY if failed check.
+    DELAY_COLLECT = enum.auto()
 
-    if expression == "1":
-        return True
-
-    return False
+    # Waiting for #endif
+    DONE = enum.auto()
 
 
 def preprocessor(tokens) -> Iterator:
-    # pylint: disable=too-many-branches
+    # pylint: disable=too-many-nested-blocks
     # TODO: we're working on it
     ifdef_level = 0
-    passthru = True
     context = {}
     stack = []
 
+    directive = ""
+    mode = PreprocessorMode.WAITING
+    token_stack = []
+
     for token in tokens:
-        # Hide preprocessor tokens
-        if token[0] != TokenType.STUFF:
-            if passthru:
+        if token[0] != TokenType.PREPROCESSOR:
+            if mode in (PreprocessorMode.WAITING, PreprocessorMode.ALLOW):
+                # Passthru token
                 yield token
+            elif mode in (PreprocessorMode.COLLECT, PreprocessorMode.DELAY_COLLECT):
+                # TODO: Need to detect line break here even if we do not emit newline tokens
+                if token[0] == TokenType.NEWLINE:
+                    if directive == "#if":
+                        mode = (
+                            PreprocessorMode.ALLOW
+                            if evaluate(token_stack[0:])
+                            else PreprocessorMode.DELAY
+                        )
+                    else:
+                        variable = token_stack[0][2]  # TODO
+                        if directive == "#define":
+                            context[variable] = evaluate(token_stack[0:])
+                        elif directive == "#undef":
+                            context.pop(variable, None)
+                        elif directive == "#ifdef":
+                            mode = (
+                                PreprocessorMode.ALLOW
+                                if variable in context
+                                else PreprocessorMode.DELAY
+                            )
+                        elif directive == "#ifndef":
+                            mode = (
+                                PreprocessorMode.ALLOW
+                                if variable not in context
+                                else PreprocessorMode.DELAY
+                            )
+
+                    token_stack.clear()
+                else:
+                    token_stack.append(token)
+
             continue
 
-        if " " in token[2]:
-            [directive, expression] = r_whitespace.split(token[2], maxsplit=2)
-        else:
-            directive = token[2]
-            expression = ""
+        # Else: we have a preprocessor token.
 
-        if directive in ("#include", "#define", "#undef"):
-            continue
+        if token[2] in ("#define", "#undef"):
+            if mode in (PreprocessorMode.WAITING, PreprocessorMode.ALLOW):
+                # Capture the directive because we intend to act on it
+                directive = token[2]
+                mode = PreprocessorMode.COLLECT
 
-        if directive == "#ifdef":
+        elif token[2] in ("#ifdef", "#ifndef", "#if"):
             ifdef_level += 1
+            if mode in (PreprocessorMode.WAITING, PreprocessorMode.ALLOW):
+                # Capture the directive because we intend to act on it
+                stack.append(ifdef_level)
+                directive = token[2]
+                mode = PreprocessorMode.COLLECT
 
-            if not passthru:
-                continue
+        elif token[2] == "#elif":
+            if stack and stack[-1] == ifdef_level:
+                directive = "#if"  # mock
+                if mode == PreprocessorMode.ALLOW:
+                    mode = PreprocessorMode.DONE
+                elif mode == PreprocessorMode.DELAY:
+                    # Failed previous check, try again
+                    mode = PreprocessorMode.DELAY_COLLECT
 
-            if expression in context:
-                stack.append(StackThing(ifdef_level, StackAction.ALLOW))
-            else:
-                passthru = False
-                stack.append(StackThing(ifdef_level, StackAction.CHECK))
+        elif token[2] == "#else":
+            if stack and stack[-1] == ifdef_level:
+                if mode == PreprocessorMode.ALLOW:
+                    mode = PreprocessorMode.DONE
+                elif mode == PreprocessorMode.DELAY:
+                    mode = PreprocessorMode.ALLOW
 
-        elif directive == "#if":
-            ifdef_level += 1
-
-            if not passthru:
-                continue
-
-            if evaluate(expression):
-                stack.append(StackThing(ifdef_level, StackAction.ALLOW))
-            else:
-                passthru = False
-                stack.append(StackThing(ifdef_level, StackAction.CHECK))
-
-        elif directive == "#ifndef":
-            ifdef_level += 1
-
-            if not passthru:
-                continue
-
-            if expression not in context:
-                stack.append(StackThing(ifdef_level, StackAction.ALLOW))
-            else:
-                passthru = False
-                stack.append(StackThing(ifdef_level, StackAction.CHECK))
-        elif directive == "#else":
-            if not stack:
-                # error!
-                continue
-
-            top_node = stack[-1]
-            if ifdef_level == top_node.level:
-                if top_node.action == StackAction.ALLOW:
-                    stack.pop()
-                    stack.append(StackThing(ifdef_level, StackAction.IGNORE))
-                    passthru = False
-                elif top_node.action == StackAction.CHECK:
-                    stack.pop()
-                    stack.append(StackThing(ifdef_level, StackAction.ALLOW))
-                    passthru = True
-
-        elif directive == "#elif":
-            if not stack:
-                # error!
-                continue
-
-            top_node = stack[-1]
-            if ifdef_level == top_node.level:
-                if top_node.action == StackAction.ALLOW:
-                    stack.pop()
-                    stack.append(StackThing(ifdef_level, StackAction.IGNORE))
-                    passthru = False
-                elif top_node.action == StackAction.CHECK:
-                    if evaluate(expression):
-                        stack.pop()
-                        stack.append(StackThing(ifdef_level, StackAction.ALLOW))
-                        passthru = True
-
-        elif directive == "#endif":
+        elif token[2] == "#endif":
             ifdef_level -= 1
-
-            if stack and stack[-1].level > ifdef_level:
+            assert ifdef_level >= 0  # TODO
+            if stack and stack[-1] == ifdef_level:
+                # Must have been in ALLOW because we would have ignored this otherwise
                 stack.pop()
-
-            passthru = True  # always?
+                mode = PreprocessorMode.ALLOW

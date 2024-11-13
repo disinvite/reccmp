@@ -31,13 +31,11 @@ class ReaderState(Enum):
     SEARCH = 0
     WANT_SIG = 1
     IN_FUNC = 2
-    IN_TEMPLATE = 3
     WANT_CURLY = 4
     IN_GLOBAL = 5
     IN_FUNC_GLOBAL = 6
     IN_VTABLE = 7
-    IN_SYNTHETIC = 8
-    IN_LIBRARY = 9
+    IN_NAMEREF = 8
     DONE = 100
 
 
@@ -225,13 +223,7 @@ class DecompParser:
         """Functions explicitly referenced by name are set here"""
         if self.fun_markers.insert(marker):
             self._syntax_warning(ParserError.DUPLICATE_MODULE)
-
-        if marker.is_template():
-            self.state = ReaderState.IN_TEMPLATE
-        elif marker.is_synthetic():
-            self.state = ReaderState.IN_SYNTHETIC
-        else:
-            self.state = ReaderState.IN_LIBRARY
+        self.state = ReaderState.IN_NAMEREF
 
     def _function_done(self, lookup_by_name: bool = False, unexpected: bool = False):
         end_line = self.line_number
@@ -379,20 +371,9 @@ class DecompParser:
             else:
                 self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
 
-        elif marker.is_template():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_TEMPLATE):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
-
-        elif marker.is_synthetic():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_SYNTHETIC):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
-
-        elif marker.is_library():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_LIBRARY):
+        elif marker.is_explicit_byname():
+            top_marker = next(self.fun_markers.iter(), None)
+            if top_marker is None or top_marker.type == marker.type:
                 self._nameref_marker(marker)
             else:
                 self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
@@ -437,11 +418,7 @@ class DecompParser:
         self.curly.read_line(line)
 
         line_strip = line.strip()
-        if self.state in (
-            ReaderState.IN_SYNTHETIC,
-            ReaderState.IN_TEMPLATE,
-            ReaderState.IN_LIBRARY,
-        ):
+        if self.state == ReaderState.IN_NAMEREF:
             # Explicit nameref functions provide the function name
             # on the next line (in a // comment)
             name = get_synthetic_name(line)

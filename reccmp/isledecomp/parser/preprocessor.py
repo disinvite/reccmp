@@ -114,9 +114,10 @@ def preprocessor(tokens) -> Iterator:
                     mode = PreprocessorMode.ALLOW
 
         elif token[2] == "#endif":
-            ifdef_level -= 1
-            assert ifdef_level >= 0  # TODO
             if stack and stack[-1] == ifdef_level:
                 # Must have been in ALLOW because we would have ignored this otherwise
                 stack.pop()
                 mode = PreprocessorMode.ALLOW
+
+            ifdef_level -= 1
+            assert ifdef_level >= 0  # TODO

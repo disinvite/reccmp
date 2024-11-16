@@ -62,3 +62,16 @@ def test_define_inside_if():
     """
     )
     [*preprocessor(tokenize(code))]
+
+
+def test_stopped_after_ifdef():
+    code = dedent(
+        """\
+        #ifdef _DEBUG
+        void Dump(void (*pTracer)(const char*, ...)) const;
+        #endif
+        hello
+    """
+    )
+    tokens = list(preprocessor(tokenize(code)))
+    assert "hello" in [t[2] for t in tokens]

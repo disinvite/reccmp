@@ -39,9 +39,16 @@ class ReaderState(enum.Enum):
     FUNCTION_NAMEREF = enum.auto()
     # Inside the function, waiting for ending curly brace.
     IN_FUNC = enum.auto()
-    IN_GLOBAL = enum.auto()
-    IN_FUNC_GLOBAL = enum.auto()
-    IN_VTABLE = enum.auto()
+    # Read a variable/string annotation, waiting for nameref comment or code tokens
+    DATA_PENDING = enum.auto()
+    # Collecting code tokens to identify variable
+    DATA_COLLECT = enum.auto()
+    # Same as above two states but we are inside a function
+    IN_FUNC_DATA_PENDING = enum.auto()
+    IN_FUNC_DATA_COLLECT = enum.auto()
+    # for vtable
+    VTABLE_PENDING = enum.auto()
+    VTABLE_COLLECT = enum.auto()
     #
     DONE = enum.auto()
 
@@ -280,7 +287,7 @@ class DecompParser:
     def _vtable_marker(self, marker: DecompMarker):
         if self.tbl_markers.insert(marker):
             self._syntax_warning(ParserError.DUPLICATE_MODULE)
-        self.state = ReaderState.IN_VTABLE
+        self.state = ReaderState.VTABLE_PENDING
 
     def _vtable_done(self, class_name: str = None):
         if class_name is None:
@@ -306,10 +313,10 @@ class DecompParser:
         if self.var_markers.insert(marker):
             self._syntax_warning(ParserError.DUPLICATE_MODULE)
 
-        if self.state in (ReaderState.IN_FUNC, ReaderState.IN_FUNC_GLOBAL):
-            self.state = ReaderState.IN_FUNC_GLOBAL
+        if self.state in (ReaderState.IN_FUNC, ReaderState.IN_FUNC_DATA_PENDING):
+            self.state = ReaderState.IN_FUNC_DATA_PENDING
         else:
-            self.state = ReaderState.IN_GLOBAL
+            self.state = ReaderState.DATA_PENDING
 
     def _variable_done(
         self, variable_name: Optional[str] = None, string_value: Optional[str] = None
@@ -331,7 +338,7 @@ class DecompParser:
                 )
             else:
                 parent_function = None
-                is_static = self.state == ReaderState.IN_FUNC_GLOBAL
+                is_static = self.state == ReaderState.IN_FUNC_DATA_COLLECT
 
                 # If this is a static variable, we need to get the function
                 # where it resides so that we can match it up later with the
@@ -360,7 +367,7 @@ class DecompParser:
                 )
 
         self.var_markers.empty()
-        if self.state == ReaderState.IN_FUNC_GLOBAL:
+        if self.state == ReaderState.IN_FUNC_DATA_COLLECT:
             self.state = ReaderState.IN_FUNC
         else:
             self.state = ReaderState.SEARCH
@@ -409,16 +416,16 @@ class DecompParser:
         elif marker.is_string() or marker.is_variable():
             if self.state in (
                 ReaderState.SEARCH,
-                ReaderState.IN_GLOBAL,
+                ReaderState.DATA_PENDING,
                 ReaderState.IN_FUNC,
-                ReaderState.IN_FUNC_GLOBAL,
+                ReaderState.IN_FUNC_DATA_PENDING,
             ):
                 self._variable_marker(marker)
             else:
                 self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
 
         elif marker.is_vtable():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_VTABLE):
+            if self.state in (ReaderState.SEARCH, ReaderState.VTABLE_PENDING):
                 self._vtable_marker(marker)
             else:
                 self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
@@ -517,13 +524,47 @@ class DecompParser:
                     self._function_starts_here()
                     self._function_done(lookup_by_name=True)
 
-                return
+            elif self.state in (
+                ReaderState.DATA_PENDING,
+                ReaderState.IN_FUNC_DATA_PENDING,
+            ):
+                name = get_synthetic_name(token[2])
+                # TODO: Ignore comments here?
+                # We don't have much choice for array variables.
+                if name is not None:
+                    # TODO: drop string annotations if any are pending. syntax warning
+                    self._variable_done(name, None)
+
+            elif self.state == ReaderState.VTABLE_PENDING:
+                vtable_class = get_class_name(token[2])
+                if vtable_class is not None:
+                    # Ignore comments (like `// SIZE 0x100`) that don't match
+                    self._vtable_done(class_name=vtable_class)
+
+            return
 
         self.curly.read_token(token)
 
-        # Don't read more comments
+        # We require a nameref but got code instead
+        if self.state == ReaderState.FUNCTION_NAMEREF:
+            self._syntax_error(ParserError.BAD_NAMEREF)
+            return
+
+        # We read a code (non-comment) token, so flip to collect state.
+        # Fallthrough here because we start collecting with THIS token.
         if self.state == ReaderState.FUNCTION_PENDING:
             self.state = ReaderState.FUNCTION_COLLECT
+
+        if self.state == ReaderState.DATA_PENDING:
+            self.state = ReaderState.DATA_COLLECT
+
+        if self.state == ReaderState.IN_FUNC_DATA_PENDING:
+            self.state = ReaderState.IN_FUNC_DATA_COLLECT
+
+        if self.state == ReaderState.VTABLE_PENDING:
+            self.state = ReaderState.VTABLE_COLLECT
+
+        #####
 
         if self.state == ReaderState.FUNCTION_COLLECT:
             if token[2] == ";":
@@ -541,13 +582,7 @@ class DecompParser:
             if token[2] == "}" and self.curly.level <= self.curly_indent_stops:
                 self._function_done()
 
-        elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
-            if token[0] == TokenType.LINE_COMMENT:
-                variable_name = get_synthetic_name(token[2])
-                # TODO: drop string annotations if any are pending. syntax warning
-                self._variable_done(variable_name, None)
-                return
-
+        elif self.state in (ReaderState.DATA_COLLECT, ReaderState.IN_FUNC_DATA_COLLECT):
             if token[2] == ";":
                 string_value = None
 
@@ -574,16 +609,10 @@ class DecompParser:
                 self._variable_done(variable_name, string_value)
                 self.token_stack.clear()
             elif token[0] not in (TokenType.LINE_COMMENT, TokenType.BLOCK_COMMENT):
+                # TODO: comments captured upstream?
                 self.token_stack.append(token)
 
-        elif self.state == ReaderState.IN_VTABLE:
-            if token[0] == TokenType.LINE_COMMENT:
-                vtable_class = get_class_name(token[2])
-                if vtable_class is not None:
-                    # Ignore comments (like `// SIZE 0x100`) that don't match
-                    self._vtable_done(class_name=vtable_class)
-                    return
-
+        elif self.state == ReaderState.VTABLE_COLLECT:
             if token[2] == ";":
                 self._syntax_error(ParserError.NO_IMPLEMENTATION)  # TODO
             elif token[2] == "{":

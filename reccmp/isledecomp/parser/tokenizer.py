@@ -41,22 +41,23 @@ class TokenType(enum.Enum):
     UNKNOWN = enum.auto()
 
 
-def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
-    lastgroupmap = {
-        "ppc": TokenType.PREPROCESSOR,
-        "block": TokenType.BLOCK_COMMENT,
-        "comment": TokenType.LINE_COMMENT,
-        "string": TokenType.STRING,
-        "char": TokenType.CHAR,
-        "literal": TokenType.CONST,
-        "separator": TokenType.OPERATOR,
-        "punctuation": TokenType.OPERATOR,
-        "identifier": TokenType.IDENTIFIER,
-        "newline": TokenType.NEWLINE,
-        "continuation": TokenType.CONTINUATION,
-        "unknown": TokenType.UNKNOWN,
-    }
+_lastgroupmap = {
+    "ppc": TokenType.PREPROCESSOR,
+    "block": TokenType.BLOCK_COMMENT,
+    "comment": TokenType.LINE_COMMENT,
+    "string": TokenType.STRING,
+    "char": TokenType.CHAR,
+    "literal": TokenType.CONST,
+    "separator": TokenType.OPERATOR,
+    "punctuation": TokenType.OPERATOR,
+    "identifier": TokenType.IDENTIFIER,
+    "newline": TokenType.NEWLINE,
+    "continuation": TokenType.CONTINUATION,
+    "unknown": TokenType.UNKNOWN,
+}
 
+
+def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
     line_no = 1
 
     for match in r_omni.finditer(code):
@@ -64,7 +65,7 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
         which = match.lastgroup
         value = code[start:end]
         yield (
-            lastgroupmap[which],
+            _lastgroupmap[which],
             (line_no, start),
             value,
         )

@@ -70,29 +70,39 @@ class MarkerDict:
 class CurlyManager:
     """Overly simplified scope manager"""
 
+    _stack: list[tuple[str, int]]
+    _level: int
+    _pending: Optional[str]
+    _state: int
+
     def __init__(self):
-        self._stack = []
-        self._pending: Optional[str] = None
-        self._state = 0
+        self.reset()
+
+    @property
+    def level(self) -> int:
+        return self._level
 
     def reset(self):
         self._stack = []
+        self._level = 0
+
+        self._pending = None
+        self._state = 0
+
+    def _new_scope(self, scope: str):
+        self._stack.append((scope, self._level))
 
     def _pop(self):
         """Pop stack safely"""
-        try:
+        if self._level > 0:
+            self._level -= 1
+
+        while self._stack and self._stack[-1][1] >= self._level:
             self._stack.pop()
-            if self._stack[-1] != "{":
-                self._stack.pop()
-        except IndexError:
-            pass
 
     def get_prefix(self, name: Optional[str] = None) -> str:
-        """Return the prefix for where we are."""
-
-        scopes = [t for t in self._stack if t != "{"]
-        if len(scopes) == 0:
-            return name if name is not None else ""
+        """Combine all scope names and append the given name"""
+        scopes = [scope for (scope, _) in self._stack]
 
         if name is not None and name not in scopes:
             scopes.append(name)
@@ -101,14 +111,13 @@ class CurlyManager:
 
     def read_token(self, token):
         (token_type, _, value) = token
-
         if token_type == TokenType.OPERATOR:
             self._state = 0
             if value == "{":
                 if self._pending is not None:
-                    self._stack.append(self._pending)
+                    self._new_scope(self._pending)
                     self._pending = None
-                self._stack.append("{")
+                self._level += 1
             elif value == "}":
                 self._pop()
             elif value == ";":
@@ -122,23 +131,8 @@ class CurlyManager:
 
     def read_line(self, raw_line: str):
         """Read a line of code and update the stack."""
-        # for token in tokenize(raw_line):
-        #    self.read_token(token)
-        # return
-
-        line = sanitize_code_line(raw_line)
-        if (match := scopeDetectRegex.match(line)) is not None:
-            if not line.endswith(";"):
-                self._stack.append(match.group("name"))
-
-        change = line.count("{") - line.count("}")
-        if change > 0:
-            for _ in range(change):
-                self._stack.append("{")
-        elif change < 0:
-            for _ in range(-change):
-                self._pop()
-
+        for token in tokenize(raw_line):
+            self.read_token(token)
 
 class DecompParser:
     # pylint: disable=too-many-instance-attributes
@@ -153,6 +147,9 @@ class DecompParser:
         self.state: ReaderState = ReaderState.SEARCH
 
         self.last_line: str = ""
+        self.last_token = None
+
+        self.token_stack = []
 
         self.curly = CurlyManager()
 
@@ -441,136 +438,170 @@ class DecompParser:
         else:
             self._syntax_warning(ParserError.BOGUS_MARKER)
 
-    def read_line(self, line: str):
+    def _get_function_name(self):
+        substack = []
+        recording = False
+        for token in self.token_stack[::-1]:
+            if recording:
+                if substack:
+                    if substack[-1][0] == token[0]:
+                        break
+                    substack.insert(0, token)
+                elif token[0] == TokenType.IDENTIFIER:
+                    substack = [token]
+
+            # We recorded up to the opening curly brace. Rewind to the paren
+            elif token[2] == "(":
+                recording = True
+
+        return "".join(value for (_, __, value) in substack)
+
+    def _get_variable_name(self):
+        substack = []
+        for token in self.token_stack:
+            if substack:
+                if token[2] in ("=", ";"):
+                    break
+
+                if substack[-1][0] == token[0]:
+                    substack = [token]
+                else:
+                    substack.append(token)
+            elif token[0] == TokenType.IDENTIFIER:
+                substack = [token]
+
+        return "".join(value for (_, __, value) in substack)
+
+    def _get_vtable_name(self):
+        substack = []
+        for token in self.token_stack[::-1]:
+            # Drop stack if we detect that we have read a superclass
+            if token[2] == ":":
+                substack.clear()
+
+            if substack:
+                if token[2] in ("class", "struct"):
+                    break
+                substack.insert(0, token)
+            elif token[0] == TokenType.IDENTIFIER:
+                substack = [token]
+
+        return "".join(value for (_, __, value) in substack)
+
+    def read_token(self, token):
         if self.state == ReaderState.DONE:
             return
 
-        self.last_line = line  # TODO: Useful or hack for error reporting?
-        self.line_number += 1
+        self.last_token = token  # TODO: error reporting works this way for now
+        self.line_number = token[1][0]
 
-        marker = match_marker(line)
-        if marker is not None:
-            # TODO: what's the best place for this?
-            # Does it belong with reading or marker handling?
-            if not is_marker_exact(self.last_line):
-                self._syntax_warning(ParserError.BAD_DECOMP_MARKER)
-            self._handle_marker(marker)
-            return
+        if token[0] == TokenType.LINE_COMMENT:
+            marker = match_marker(token[2])
+            if marker is not None:
+                # TODO: what's the best place for this?
+                # Does it belong with reading or marker handling?
+                if not is_marker_exact(token[2]):
+                    self._syntax_warning(ParserError.BAD_DECOMP_MARKER)
+                self._handle_marker(marker)
+                return
 
-        self.curly.read_line(line)
-
-        line_strip = line.strip()
-        if self.state in (
-            ReaderState.IN_SYNTHETIC,
-            ReaderState.IN_TEMPLATE,
-            ReaderState.IN_LIBRARY,
-        ):
-            # Explicit nameref functions provide the function name
-            # on the next line (in a // comment)
-            name = get_synthetic_name(line)
-            if name is None:
-                self._syntax_error(ParserError.BAD_NAMEREF)
-            else:
-                self.function_sig = name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
-
-        elif self.state == ReaderState.WANT_SIG:
-            # Ignore blanks on the way to function start or function name
-            if len(line_strip) == 0:
-                self._syntax_warning(ParserError.UNEXPECTED_BLANK_LINE)
-
-            elif line_strip.startswith("//"):
-                # If we found a comment, assume implicit lookup-by-name
-                # function and end here. We know this is not a decomp marker
-                # because it would have been handled already.
-                self.function_sig = get_synthetic_name(line)
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
-
-            elif line_strip == "{":
-                # We missed the function signature but we can recover from this
-                self.function_sig = "(unknown)"
-                self._function_starts_here()
-                self._syntax_warning(ParserError.MISSED_START_OF_FUNCTION)
-                self.state = ReaderState.IN_FUNC
-
-            else:
-                # Inline functions may end with a comment. Strip that out
-                # to help parsing.
-                self.function_sig = remove_trailing_comment(line_strip)
-
-                # Now check to see if the opening curly bracket is on the
-                # same line. clang-format should prevent this (BraceWrapping)
-                # but it is easy to detect.
-                # If the entire function is on one line, handle that too.
-                if self.function_sig.endswith("{"):
-                    self._function_starts_here()
-                    self.state = ReaderState.IN_FUNC
-                elif self.function_sig.endswith("}") or self.function_sig.endswith(
-                    "};"
-                ):
-                    self._function_starts_here()
-                    self._function_done()
-                elif self.function_sig.endswith(");"):
-                    # Detect forward reference or declaration
-                    self._syntax_error(ParserError.NO_IMPLEMENTATION)
+            if self.state in (
+                ReaderState.WANT_SIG,
+                ReaderState.IN_SYNTHETIC,
+                ReaderState.IN_TEMPLATE,
+                ReaderState.IN_LIBRARY,
+            ):
+                # Explicit nameref functions provide the function name
+                # on the next line (in a // comment)
+                name = get_synthetic_name(token[2])
+                if name is None:
+                    self._syntax_error(ParserError.BAD_NAMEREF)
                 else:
-                    self.state = ReaderState.WANT_CURLY
+                    self.function_sig = name
+                    self._function_starts_here()
+                    self._function_done(lookup_by_name=True)
 
-        elif self.state == ReaderState.WANT_CURLY:
-            if line_strip == "{":
-                self.curly_indent_stops = line.index("{")
-                self._function_starts_here()
+                return
+
+        self.curly.read_token(token)
+
+        if self.state == ReaderState.WANT_SIG:
+            if token[2] == ";":
+                self._syntax_error(ParserError.NO_IMPLEMENTATION)
+            elif token[2] == "{":
+                self.function_sig = self._get_function_name()
+                self.function_start = token[1][0]  # line number of curly
+                self.curly_indent_stops = self.curly.level
                 self.state = ReaderState.IN_FUNC
+                self.token_stack.clear()
+            else:
+                self.token_stack.append(token)
 
         elif self.state == ReaderState.IN_FUNC:
-            if line_strip.startswith("}") and line[self.curly_indent_stops] == "}":
+            if token[2] == "}" and self.curly.level <= self.curly_indent_stops:
                 self._function_done()
 
         elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
-            # TODO: Known problem that an error here will cause us to abandon a
-            # function we have already parsed if state == IN_FUNC_GLOBAL.
-            # However, we are not tolerant of _any_ syntax problems in our
-            # CI actions, so the solution is to just fix the invalid marker.
-            variable_name = None
-
-            global_markers_queued = any(
-                m.is_variable() for m in self.var_markers.iter()
-            )
-
-            if len(line_strip) == 0:
-                self._syntax_warning(ParserError.UNEXPECTED_BLANK_LINE)
+            if token[0] == TokenType.LINE_COMMENT:
+                variable_name = get_synthetic_name(token[2])
+                # TODO: drop string annotations if any are pending. syntax warning
+                self._variable_done(variable_name, None)
                 return
 
-            if global_markers_queued:
-                # Not the greatest solution, but a consequence of combining GLOBAL and
-                # STRING markers together. If the marker precedes a return statement, it is
-                # valid for a STRING marker to be here, but not a GLOBAL. We need to look
-                # ahead and tell whether this *would* fail.
-                if line_strip.startswith("return"):
+            if token[2] == ";":
+                string_value = None
+
+                # TODO
+                if self.token_stack[-1][0] == TokenType.STRING:
+                    string_value = self.token_stack[-1][2]
+
+                variable_name = self._get_variable_name()  # TODO
+                # TODO: no variable name found.
+
+                global_markers_queued = any(
+                    m.is_variable() for m in self.var_markers.iter()
+                )
+
+                return_statement = any(
+                    value == "return" for (_, __, value) in self.token_stack
+                )
+
+                if global_markers_queued and return_statement:
                     self._syntax_error(ParserError.GLOBAL_NOT_VARIABLE)
                     return
-                if line_strip.startswith("//"):
-                    # If we found a comment, assume implicit lookup-by-name
-                    # function and end here. We know this is not a decomp marker
-                    # because it would have been handled already.
-                    variable_name = get_synthetic_name(line)
-                else:
-                    variable_name = get_variable_name(line)
 
-            string_name = get_string_contents(line)
-
-            self._variable_done(variable_name, string_name)
+                self._variable_done(variable_name, string_value)
+                self.token_stack.clear()
+            else:
+                self.token_stack.append(token)
 
         elif self.state == ReaderState.IN_VTABLE:
-            vtable_class = get_class_name(line)
-            if vtable_class is not None:
+            if token[0] == TokenType.LINE_COMMENT:
+                vtable_class = get_class_name(token[2])
                 self._vtable_done(class_name=vtable_class)
+                return
+
+            if token[2] == ";":
+                self._syntax_error(ParserError.NO_IMPLEMENTATION)  # TODO
+            elif token[2] == "{":
+                vtable_class = self._get_vtable_name()
+                self._vtable_done(class_name=vtable_class)
+                self.token_stack.clear()
+            else:
+                self.token_stack.append(token)
+
+    def read_line(self, line: str):
+        for token in tokenize(line):
+            self.read_token(token)
+
+    def read_text(self, text: str):
+        for token in tokenize(text):
+            self.read_token(token)
 
     def read_lines(self, lines: Iterable):
-        for line in lines:
-            self.read_line(line)
+        text = "\n".join(lines)
+        for token in tokenize(text):
+            self.read_token(token)
 
     def finish(self):
         if self.state != ReaderState.SEARCH:

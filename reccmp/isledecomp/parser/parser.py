@@ -134,6 +134,7 @@ class CurlyManager:
         for token in tokenize(raw_line):
             self.read_token(token)
 
+
 class DecompParser:
     # pylint: disable=too-many-instance-attributes
     # Could combine output lists into a single list to get under the limit,
@@ -457,14 +458,20 @@ class DecompParser:
         return "".join(value for (_, __, value) in substack)
 
     def _get_variable_name(self):
+        """Read L to R, get last identifier before = or ;
+        This should ignore the [] on arrays"""
         substack = []
         for token in self.token_stack:
             if substack:
-                if token[2] in ("=", ";"):
-                    break
-
-                if substack[-1][0] == token[0]:
+                if (
+                    substack[-1][0] == TokenType.IDENTIFIER
+                    and token[0] == TokenType.IDENTIFIER
+                ):
                     substack = [token]
+                elif token[2] in ("*", "&"):
+                    substack.clear()
+                elif token[2] in ("=", ";", "["):
+                    break
                 else:
                     substack.append(token)
             elif token[0] == TokenType.IDENTIFIER:
@@ -494,6 +501,10 @@ class DecompParser:
 
         self.last_token = token  # TODO: error reporting works this way for now
         self.line_number = token[1][0]
+
+        # TODO!
+        if token[0] == TokenType.NEWLINE:
+            return
 
         if token[0] == TokenType.LINE_COMMENT:
             marker = match_marker(token[2])
@@ -525,7 +536,11 @@ class DecompParser:
 
         self.curly.read_token(token)
 
+        # Don't read more comments
         if self.state == ReaderState.WANT_SIG:
+            self.state = ReaderState.WANT_CURLY
+
+        if self.state == ReaderState.WANT_CURLY:
             if token[2] == ";":
                 self._syntax_error(ParserError.NO_IMPLEMENTATION)
             elif token[2] == "{":
@@ -554,6 +569,7 @@ class DecompParser:
                 # TODO
                 if self.token_stack[-1][0] == TokenType.STRING:
                     string_value = self.token_stack[-1][2]
+                    string_value = string_value[1:-1]  # TODO, remove double quotes
 
                 variable_name = self._get_variable_name()  # TODO
                 # TODO: no variable name found.
@@ -572,14 +588,16 @@ class DecompParser:
 
                 self._variable_done(variable_name, string_value)
                 self.token_stack.clear()
-            else:
+            elif token[0] not in (TokenType.LINE_COMMENT, TokenType.BLOCK_COMMENT):
                 self.token_stack.append(token)
 
         elif self.state == ReaderState.IN_VTABLE:
             if token[0] == TokenType.LINE_COMMENT:
                 vtable_class = get_class_name(token[2])
-                self._vtable_done(class_name=vtable_class)
-                return
+                if vtable_class is not None:
+                    # Ignore comments (like `// SIZE 0x100`) that don't match
+                    self._vtable_done(class_name=vtable_class)
+                    return
 
             if token[2] == ";":
                 self._syntax_error(ParserError.NO_IMPLEMENTATION)  # TODO

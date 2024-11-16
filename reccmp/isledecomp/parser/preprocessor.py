@@ -58,8 +58,10 @@ def preprocessor(tokens) -> Iterator:
                         variable = token_stack[0][2]  # TODO
                         if directive == "#define":
                             context[variable] = evaluate(token_stack[0:])
+                            mode = PreprocessorMode.ALLOW
                         elif directive == "#undef":
                             context.pop(variable, None)
+                            mode = PreprocessorMode.ALLOW
                         elif directive == "#ifdef":
                             mode = (
                                 PreprocessorMode.ALLOW

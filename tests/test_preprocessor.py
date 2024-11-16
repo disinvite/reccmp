@@ -47,3 +47,18 @@ def test_one():
     )
     tokens = [*preprocessor(tokenize(code))]
     assert "return" not in [value for (_, __, value) in tokens]
+
+
+def test_define_inside_if():
+    """Assert that this does not raise an exception
+    The bug was that we did not leave COLLECT mode after the second #define."""
+    code = dedent(
+        """\
+        #if defined(_M_IX86) || defined(__i386__)
+        #define COMPARE_POINTER_TYPE MxS32
+        #else
+        #define COMPARE_POINTER_TYPE MxS32*
+        #endif
+    """
+    )
+    [*preprocessor(tokenize(code))]

@@ -493,6 +493,9 @@ class DecompParser:
 
     def read_token(self, token):
         # pylint: disable=too-many-branches
+        # pylint: disable=too-many-statements
+        # pylint: disable=too-many-return-statements
+        # Gimme a break!!!
         if self.state == ReaderState.DONE:
             return
 
@@ -504,6 +507,15 @@ class DecompParser:
             return
 
         if token[0] == TokenType.LINE_COMMENT:
+            # TODO: temporary hack to resolve confusing marker stack
+            # of GLOBAL plus array with other markers inside it
+            if self.state in (
+                ReaderState.FUNCTION_COLLECT,
+                ReaderState.DATA_COLLECT,
+                ReaderState.IN_FUNC_DATA_COLLECT,
+                ReaderState.VTABLE_COLLECT,
+            ):
+                return
             marker = match_marker(token[2])
             if marker is not None:
                 # TODO: what's the best place for this?

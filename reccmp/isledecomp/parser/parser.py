@@ -585,7 +585,11 @@ class DecompParser:
             if token[2] == ";":
                 self._syntax_error(ParserError.NO_IMPLEMENTATION)
             elif token[2] == "{":
-                self.function_sig = self._get_function_name()
+                name = self._get_function_name()
+                if name == "":
+                    self._syntax_warning(ParserError.MISSED_START_OF_FUNCTION)
+
+                self.function_sig = name
                 self.function_start = token[1][0]  # line number of curly
                 # Minus one here. Scope manager read the "{" earlier
                 # and bumped the level.

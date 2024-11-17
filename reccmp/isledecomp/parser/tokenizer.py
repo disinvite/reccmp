@@ -10,10 +10,10 @@ r_omni = re.compile(
     "|".join(
         [
             r"(?P<ppc>#[a-z]+)",
-            r"(?P<block>\/\*.*?\*\/)",
-            r"(?P<comment>\/\/[^\n]*)",
-            r"(?P<string>L?\"(?:[^\n\"\\]|\\[^\n])*\")",
-            r"(?P<char>L?'(?:[^\n\'\\]|\\[^\n])')",
+            r"(?P<block>\/\*(?:.|\n)*?\*\/)",
+            r"(?P<comment>//.*\n?)",
+            r"(?P<string>L?\"(?:[^\n\"\\]|\\.)*\")",
+            r"(?P<char>L?'(?:[^\n\'\\]|\\.)')",
             r"(?P<literal>(?:\d|\.\d)[\.\w]*)",
             r"(?P<separator>\:{1,2}|->|[\(\)\[\]{}\?,;\.\#])",
             r"(?P<punctuation>>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|~|\+{1,2}|-{1,2}|\.{3})",
@@ -23,7 +23,6 @@ r_omni = re.compile(
             r"(?P<unknown>\S)",
         ]
     ),
-    flags=re.DOTALL,
 )
 
 
@@ -70,5 +69,5 @@ def tokenize(code: str) -> Iterator[tuple[TokenType, tuple[int, int], str]]:
             value,
         )
 
-        if which in ("block", "string", "char", "newline", "continuation"):
+        if which in ("block", "string", "char", "newline", "continuation", "comment"):
             line_no += value.count("\n")

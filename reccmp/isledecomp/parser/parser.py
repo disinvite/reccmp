@@ -4,12 +4,8 @@ from typing import List, Iterable, Iterator, Optional
 import enum
 from .util import (
     get_class_name,
-    get_variable_name,
     get_synthetic_name,
-    remove_trailing_comment,
     get_string_contents,
-    sanitize_code_line,
-    scopeDetectRegex,
 )
 from .marker import (
     DecompMarker,
@@ -25,7 +21,8 @@ from .node import (
     ParserString,
 )
 from .error import ParserAlert, ParserError
-from .tokenizer import TokenType, tokenize  # pylint: disable=unused-import
+from .tokenizer import TokenType, tokenize
+from .preprocessor import preprocessor
 
 
 class ReaderState(enum.Enum):
@@ -455,7 +452,10 @@ class DecompParser:
         """Read L to R, get last identifier before = or ;
         This should ignore the [] on arrays"""
         substack = []
+        func_pointer = False
         for token in self.token_stack:
+            if token[2] == "(":
+                func_pointer = True
             if substack:
                 if (
                     substack[-1][0] == TokenType.IDENTIFIER
@@ -465,6 +465,8 @@ class DecompParser:
                 elif token[2] in ("*", "&"):
                     substack.clear()
                 elif token[2] in ("=", ";", "["):
+                    break
+                elif func_pointer and token[2] == ")":
                     break
                 else:
                     substack.append(token)
@@ -490,6 +492,7 @@ class DecompParser:
         return "".join(value for (_, __, value) in substack)
 
     def read_token(self, token):
+        # pylint: disable=too-many-branches
         if self.state == ReaderState.DONE:
             return
 
@@ -572,7 +575,9 @@ class DecompParser:
             elif token[2] == "{":
                 self.function_sig = self._get_function_name()
                 self.function_start = token[1][0]  # line number of curly
-                self.curly_indent_stops = self.curly.level
+                # Minus one here. Scope manager read the "{" earlier
+                # and bumped the level.
+                self.curly_indent_stops = self.curly.level - 1
                 self.state = ReaderState.IN_FUNC
                 self.token_stack.clear()
             else:
@@ -588,8 +593,7 @@ class DecompParser:
 
                 # TODO
                 if self.token_stack[-1][0] == TokenType.STRING:
-                    string_value = self.token_stack[-1][2]
-                    string_value = string_value[1:-1]  # TODO, remove double quotes
+                    string_value = get_string_contents(self.token_stack[-1][2])
 
                 variable_name = self._get_variable_name()  # TODO
                 # TODO: no variable name found.
@@ -627,7 +631,7 @@ class DecompParser:
             self.read_token(token)
 
     def read_text(self, text: str):
-        for token in tokenize(text):
+        for token in preprocessor(tokenize(text)):
             self.read_token(token)
 
     def read_lines(self, lines: Iterable):

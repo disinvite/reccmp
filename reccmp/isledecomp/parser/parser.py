@@ -6,6 +6,7 @@ from .util import (
     get_class_name,
     get_synthetic_name,
     get_string_contents,
+    get_variable_name,
 )
 from .marker import (
     DecompMarker,
@@ -430,6 +431,20 @@ class DecompParser:
         else:
             self._syntax_warning(ParserError.BOGUS_MARKER)
 
+    def _squash_token_stack(self) -> str:
+        whitespace_stack = []
+        last_idx = -1
+        for token in self.token_stack:
+            if last_idx > 0:
+                gap = token[1][1] - last_idx
+                whitespace_stack.append(" " * gap)
+
+            if token[0] != TokenType.NEWLINE:
+                last_idx = token[1][1] + len(token[2])
+                whitespace_stack.append(token[2])
+
+        return "".join(whitespace_stack)
+
     def _get_function_name(self):
         substack = []
         recording = False
@@ -445,33 +460,6 @@ class DecompParser:
             # We recorded up to the opening curly brace. Rewind to the paren
             elif token[2] == "(":
                 recording = True
-
-        return "".join(value for (_, __, value) in substack)
-
-    def _get_variable_name(self):
-        """Read L to R, get last identifier before = or ;
-        This should ignore the [] on arrays"""
-        substack = []
-        func_pointer = False
-        for token in self.token_stack:
-            if token[2] == "(":
-                func_pointer = True
-            if substack:
-                if (
-                    substack[-1][0] == TokenType.IDENTIFIER
-                    and token[0] == TokenType.IDENTIFIER
-                ):
-                    substack = [token]
-                elif token[2] in ("*", "&"):
-                    substack.clear()
-                elif token[2] in ("=", ";", "["):
-                    break
-                elif func_pointer and token[2] == ")":
-                    break
-                else:
-                    substack.append(token)
-            elif token[0] == TokenType.IDENTIFIER:
-                substack = [token]
 
         return "".join(value for (_, __, value) in substack)
 
@@ -612,14 +600,8 @@ class DecompParser:
 
         elif self.state in (ReaderState.DATA_COLLECT, ReaderState.IN_FUNC_DATA_COLLECT):
             if token[2] == ";":
-                string_value = None
-
-                # TODO
-                if self.token_stack[-1][0] == TokenType.STRING:
-                    string_value = get_string_contents(self.token_stack[-1][2])
-
-                variable_name = self._get_variable_name()  # TODO
-                # TODO: no variable name found.
+                string_value = get_string_contents(self._squash_token_stack())
+                variable_name = get_variable_name(self._squash_token_stack())
 
                 global_markers_queued = any(
                     m.is_variable() for m in self.var_markers.iter()

@@ -234,7 +234,7 @@ class DecompParser:
             ParserAlert(
                 line_number=self.line_number,
                 code=code,
-                line=self.last_line.strip(),
+                line=self.last_token,
             )
         )
 
@@ -504,6 +504,13 @@ class DecompParser:
 
         # TODO!
         if token[0] == TokenType.NEWLINE:
+            if self.state in (
+                ReaderState.FUNCTION_PENDING,
+                ReaderState.DATA_PENDING,
+                ReaderState.IN_FUNC_DATA_PENDING,
+                ReaderState.VTABLE_PENDING,
+            ):
+                self._syntax_warning(ParserError.UNEXPECTED_BLANK_LINE)
             return
 
         if token[0] == TokenType.LINE_COMMENT:
@@ -643,7 +650,7 @@ class DecompParser:
                 self.token_stack.append(token)
 
     def read_line(self, line: str):
-        for token in tokenize(line):
+        for token in preprocessor(tokenize(line)):
             self.read_token(token)
 
     def read_text(self, text: str):
@@ -652,7 +659,7 @@ class DecompParser:
 
     def read_lines(self, lines: Iterable):
         text = "\n".join(lines)
-        for token in tokenize(text):
+        for token in preprocessor(tokenize(text)):
             self.read_token(token)
 
     def finish(self):

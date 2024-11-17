@@ -54,6 +54,9 @@ def preprocessor(tokens) -> Iterator:
                             if evaluate(token_stack[0:])
                             else PreprocessorMode.DELAY
                         )
+                    elif directive == "#include":
+                        # No action. We just want to clear the tokens from the board.
+                        mode = PreprocessorMode.ALLOW
                     else:
                         variable = token_stack[0][2]  # TODO
                         if directive == "#define":
@@ -83,7 +86,7 @@ def preprocessor(tokens) -> Iterator:
 
         # Else: we have a preprocessor token.
 
-        if token[2] in ("#define", "#undef"):
+        if token[2] in ("#define", "#undef", "#include"):
             if mode in (PreprocessorMode.WAITING, PreprocessorMode.ALLOW):
                 # Capture the directive because we intend to act on it
                 directive = token[2]

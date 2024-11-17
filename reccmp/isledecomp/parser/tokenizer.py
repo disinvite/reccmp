@@ -18,8 +18,8 @@ r_omni = re.compile(
             r"(?P<separator>\:{1,2}|->|[\(\)\[\]{}\?,;\.\#])",
             r"(?P<punctuation>>{1,2}=?|<{1,2}=?|&{2}|\|{2}|[!\+\-\*/%\^&\|\=]=?|~|\+{1,2}|-{1,2}|\.{3})",
             r"(?P<identifier>[^\s\d]\w*)",
-            r"(?P<continuation>\\\n+)",
-            r"(?P<newline>\n+)",
+            r"(?P<continuation>\\\n)",
+            r"(?P<newline>\n)",
             r"(?P<unknown>\S)",
         ]
     ),

@@ -61,7 +61,7 @@ def test_define_inside_if():
         #endif
     """
     )
-    [*preprocessor(tokenize(code))]
+    _ = [*preprocessor(tokenize(code))]
 
 
 def test_stopped_after_ifdef():

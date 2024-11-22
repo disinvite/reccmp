@@ -1,7 +1,7 @@
 # C++ file parser
 
-from typing import List, Iterable, Iterator, Optional
 import enum
+from typing import List, Iterator, Optional
 from .util import (
     get_class_name,
     get_synthetic_name,
@@ -631,16 +631,7 @@ class DecompParser:
             else:
                 self.token_stack.append(token)
 
-    def read_line(self, line: str):
-        for token in preprocessor(tokenize(line)):
-            self.read_token(token)
-
-    def read_text(self, text: str):
-        for token in preprocessor(tokenize(text)):
-            self.read_token(token)
-
-    def read_lines(self, lines: Iterable):
-        text = "\n".join(lines)
+    def read(self, text: str):
         for token in preprocessor(tokenize(text)):
             self.read_token(token)
 

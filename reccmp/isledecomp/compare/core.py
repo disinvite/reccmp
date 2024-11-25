@@ -168,10 +168,12 @@ class Compare:
                     decoded_string = raw.decode("latin1")
                     rstrip_string = decoded_string.rstrip("\x00")
 
-                    if decoded_string != "" and rstrip_string != "":
-                        sym.friendly_name = rstrip_string
-                    else:
-                        sym.friendly_name = decoded_string
+                    # TODO: Hack to exclude a string that contains \x00 bytes
+                    # The cvdump has one such string. We will have to compare/annotate
+                    # these differently
+                    if "\x00" in decoded_string and rstrip_string == "":
+                        continue
+                    sym.friendly_name = rstrip_string
 
                 except UnicodeDecodeError:
                     pass

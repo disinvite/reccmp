@@ -81,3 +81,38 @@ def test_match_options_bool(db):
 
     db.mark_stub(0x1234)
     assert "stub" in db.get_match_options(0x1234)
+
+
+def test_orm_boolean(db):
+    """Demonstrating the need for the test() method to convert truthiness to bool"""
+    db.sql.executemany(
+        "INSERT INTO symbols (recomp_addr, kvstore) values (?, json_insert('{}', '$.boolean', ?))",
+        (
+            (100, False),
+            (200, True),
+        ),
+    )
+
+    # We have inserted two python bools into the database by using a parameter inside the SQLite JSON function.
+    # The python datatype is lost when the JSON string is serialized.
+    assert db.get_by_recomp(100).get("boolean") == 0
+    assert db.get_by_recomp(200).get("boolean") == 1
+
+    # If we use the test() method, we get the booleans we expect
+    assert db.get_by_recomp(100).test("boolean") is False
+    assert db.get_by_recomp(200).test("boolean") is True
+
+    # However, JSON supports bool, so if we set the value directly in the string...
+    db.sql.executemany(
+        "INSERT INTO symbols (recomp_addr, kvstore) values (?, ?)",
+        (
+            (300, '{"boolean": false}'),
+            (400, '{"boolean": true}'),
+        ),
+    )
+
+    # ...it will be deserialized back into a python boolean.
+    assert db.get_by_recomp(300).get("boolean") is False
+    assert db.get_by_recomp(300).test("boolean") is False
+    assert db.get_by_recomp(400).get("boolean") is True
+    assert db.get_by_recomp(400).test("boolean") is True

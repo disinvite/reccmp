@@ -66,7 +66,7 @@ class MatchInfo:
         return self.options.get(key)
 
     def test(self, key: str) -> bool:
-        return self.options.get(key, False) and True
+        return bool(self.options.get(key, False))
 
     def match_name(self) -> Optional[str]:
         """Combination of the name and compare type.

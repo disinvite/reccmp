@@ -395,26 +395,28 @@ class CompareDb:
         # But this index will not help if we are checking for NULL, so we exclude it
         # by adding the plus sign (Reference: https://www.sqlite.org/optoverview.html#uplus)
         if match_decorate:
-            sql = """
-            SELECT recomp_addr
-            FROM `symbols`
-            WHERE +orig_addr IS NULL
-            AND decorated_name = ?
-            AND (json_extract(kwstore, '$.type') IS NULL OR json_extract(kwstore, '$.type') = ?)
-            LIMIT 1
+            # TODO: Change when/if decorated becomes a unique column
+            for (recomp_addr,) in self._db.execute(
+                "SELECT recomp_addr FROM symbols WHERE decorated_name = ? AND +orig_addr IS NULL LIMIT 1",
+                (name,),
+            ):
+                return recomp_addr
+
+            return None
+
+        for (reccmp_addr,) in self._db.execute(
             """
-        else:
-            sql = """
             SELECT recomp_addr
             FROM `symbols`
             WHERE +orig_addr IS NULL
             AND json_extract(kwstore, '$.name') = ?
             AND (json_extract(kwstore, '$.type') IS NULL OR json_extract(kwstore, '$.type') = ?)
-            LIMIT 1
-            """
+            LIMIT 1""",
+            (name, compare_type),
+        ):
+            return reccmp_addr
 
-        row = self._db.execute(sql, (name, compare_type)).fetchone()
-        return row[0] if row is not None else None
+        return None
 
     def _match_on(self, compare_type: SymbolType, addr: int, name: str) -> bool:
         # Update the compare_type here too since the marker tells us what we should do

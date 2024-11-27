@@ -15,6 +15,7 @@ _SETUP_SQL = """
         orig_addr int unique,
         recomp_addr int unique,
         decorated_name text,
+        matched int as (orig_addr is not null and recomp_addr is not null),
         kwstore text default '{}'
     );
 
@@ -36,7 +37,6 @@ SymbolTypeLookup: dict[int, str] = {
 
 @dataclass
 class MatchInfo:
-    # compare_type: Optional[int]
     orig_addr: Optional[int]
     recomp_addr: Optional[int]
     decorated_name: Optional[str]
@@ -57,6 +57,16 @@ class MatchInfo:
     @property
     def size(self) -> Optional[int]:
         return self.options.get("size")
+
+    @property
+    def matched(self) -> bool:
+        return self.orig_addr is not None and self.recomp_addr is not None
+
+    def get(self, key: str) -> Any:
+        return self.options.get(key)
+
+    def test(self, key: str) -> bool:
+        return self.options.get(key, False) and True
 
     def match_name(self) -> Optional[str]:
         """Combination of the name and compare type.
@@ -151,15 +161,16 @@ class CompareDb:
         return [string for (string,) in cur.fetchall()]
 
     def get_all(self) -> Iterator[MatchInfo]:
-        cur = self._db.execute("SELECT * FROM symbols ORDER BY orig_addr NULLS LAST")
+        cur = self._db.execute(
+            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols ORDER BY orig_addr NULLS LAST"
+        )
         cur.row_factory = matchinfo_factory
         yield from cur
 
     def get_matches(self) -> Iterator[MatchInfo]:
         cur = self._db.execute(
-            """SELECT * FROM symbols
-            WHERE orig_addr IS NOT NULL
-            AND recomp_addr IS NOT NULL
+            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
+            WHERE matched = 1
             ORDER BY orig_addr NULLS LAST
             """,
         )
@@ -168,7 +179,7 @@ class CompareDb:
 
     def get_one_match(self, addr: int) -> Optional[MatchInfo]:
         cur = self._db.execute(
-            """SELECT * FROM symbols
+            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
             WHERE orig_addr = ?
             AND recomp_addr IS NOT NULL
             """,
@@ -201,7 +212,7 @@ class CompareDb:
             return None
 
         cur = self._db.execute(
-            "SELECT * FROM symbols WHERE orig_addr = ?",
+            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols WHERE orig_addr = ?",
             (addr,),
         )
         cur.row_factory = matchinfo_factory
@@ -213,7 +224,7 @@ class CompareDb:
             return None
 
         cur = self._db.execute(
-            "SELECT * FROM symbols WHERE recomp_addr = ?",
+            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols WHERE recomp_addr = ?",
             (addr,),
         )
         cur.row_factory = matchinfo_factory
@@ -221,10 +232,9 @@ class CompareDb:
 
     def get_matches_by_type(self, compare_type: SymbolType) -> Iterator[MatchInfo]:
         cur = self._db.execute(
-            """SELECT * FROM symbols
+            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
             WHERE json_extract(kwstore, '$.type') = ?
-            AND orig_addr IS NOT NULL
-            AND recomp_addr IS NOT NULL
+            AND matched = 1
             ORDER BY orig_addr NULLS LAST
             """,
             (compare_type,),

@@ -169,8 +169,9 @@ class Compare:
                     rstrip_string = decoded_string.rstrip("\x00")
 
                     # TODO: Hack to exclude a string that contains \x00 bytes
-                    # The cvdump has one such string. We will have to compare/annotate
-                    # these differently
+                    # The proper solution is to escape the text for JSON or use
+                    # base64 encoding for comparing binary values.
+                    # Kicking the can down the road for now.
                     if "\x00" in decoded_string and rstrip_string == "":
                         continue
                     sym.friendly_name = rstrip_string

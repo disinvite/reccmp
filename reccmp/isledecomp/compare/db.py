@@ -16,7 +16,7 @@ _SETUP_SQL = """
         recomp_addr int unique,
         decorated_name text,
         matched int as (orig_addr is not null and recomp_addr is not null),
-        kwstore text default '{}'
+        kvstore text default '{}'
     );
 
     CREATE TABLE `match_options` (
@@ -26,7 +26,7 @@ _SETUP_SQL = """
         primary key (addr, name)
     ) without rowid;
 
-    CREATE INDEX `symbols_na` ON `symbols` (json_extract(kwstore, '$.name'));
+    CREATE INDEX `symbols_na` ON `symbols` (json_extract(kvstore, '$.name'));
 """
 
 
@@ -40,11 +40,11 @@ class MatchInfo:
     orig_addr: Optional[int]
     recomp_addr: Optional[int]
     decorated_name: Optional[str]
-    kwstore: str
+    kvstore: str
 
     @cached_property
     def options(self) -> dict[str, Any]:
-        return json.loads(self.kwstore)
+        return json.loads(self.kvstore)
 
     @property
     def compare_type(self) -> Optional[int]:
@@ -108,7 +108,7 @@ class CompareDb:
     ):
         # Ignore collisions here.
         self._db.execute(
-            """INSERT or ignore INTO `symbols` (orig_addr, kwstore)
+            """INSERT or ignore INTO `symbols` (orig_addr, kvstore)
             VALUES (:addr, json_insert('{}', '$.name', :name, '$.type', :type))""",
             {"addr": addr, "type": compare_type, "name": name, "size": size},
         )
@@ -125,7 +125,7 @@ class CompareDb:
         # multiple names (e.g. _strlwr and __strlwr)
 
         self._db.execute(
-            """INSERT or ignore INTO `symbols` (recomp_addr, decorated_name, kwstore)
+            """INSERT or ignore INTO `symbols` (recomp_addr, decorated_name, kvstore)
             VALUES (:addr, :symbol, json_insert('{}', '$.type', :type, '$.name', :name, '$.size', :size))""",
             {
                 "addr": addr,
@@ -138,14 +138,14 @@ class CompareDb:
 
     def bulk_cvdump_insert(self, rows: Iterable[dict[str, Any]]):
         self._db.executemany(
-            """INSERT or ignore INTO `symbols` (recomp_addr, decorated_name, kwstore)
+            """INSERT or ignore INTO `symbols` (recomp_addr, decorated_name, kvstore)
             VALUES (:addr, :symbol, json_insert('{}', '$.type', :type, '$.name', :name, '$.size', :size))""",
             rows,
         )
 
     def bulk_array_insert(self, rows: Iterable[dict[str, Any]]):
         self._db.executemany(
-            """INSERT or ignore INTO `symbols` (orig_addr, recomp_addr, kwstore)
+            """INSERT or ignore INTO `symbols` (orig_addr, recomp_addr, kvstore)
             VALUES (:orig, :recomp, json_insert('{}', '$.name', :name))""",
             rows,
         )
@@ -154,7 +154,7 @@ class CompareDb:
         """Return any strings not already identified by STRING markers."""
 
         cur = self._db.execute(
-            "SELECT json_extract(kwstore,'$.name') FROM `symbols` WHERE json_extract(kwstore, '$.type') = ? AND orig_addr IS NULL",
+            "SELECT json_extract(kvstore,'$.name') FROM `symbols` WHERE json_extract(kvstore, '$.type') = ? AND orig_addr IS NULL",
             (SymbolType.STRING,),
         )
 
@@ -162,14 +162,14 @@ class CompareDb:
 
     def get_all(self) -> Iterator[MatchInfo]:
         cur = self._db.execute(
-            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols ORDER BY orig_addr NULLS LAST"
+            "SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols ORDER BY orig_addr NULLS LAST"
         )
         cur.row_factory = matchinfo_factory
         yield from cur
 
     def get_matches(self) -> Iterator[MatchInfo]:
         cur = self._db.execute(
-            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
+            """SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols
             WHERE matched = 1
             ORDER BY orig_addr NULLS LAST
             """,
@@ -179,7 +179,7 @@ class CompareDb:
 
     def get_one_match(self, addr: int) -> Optional[MatchInfo]:
         cur = self._db.execute(
-            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
+            """SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols
             WHERE orig_addr = ?
             AND recomp_addr IS NOT NULL
             """,
@@ -212,7 +212,7 @@ class CompareDb:
             return None
 
         cur = self._db.execute(
-            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols WHERE orig_addr = ?",
+            "SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols WHERE orig_addr = ?",
             (addr,),
         )
         cur.row_factory = matchinfo_factory
@@ -224,7 +224,7 @@ class CompareDb:
             return None
 
         cur = self._db.execute(
-            "SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols WHERE recomp_addr = ?",
+            "SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols WHERE recomp_addr = ?",
             (addr,),
         )
         cur.row_factory = matchinfo_factory
@@ -232,8 +232,8 @@ class CompareDb:
 
     def get_matches_by_type(self, compare_type: SymbolType) -> Iterator[MatchInfo]:
         cur = self._db.execute(
-            """SELECT orig_addr, recomp_addr, decorated_name, kwstore FROM symbols
-            WHERE json_extract(kwstore, '$.type') = ?
+            """SELECT orig_addr, recomp_addr, decorated_name, kvstore FROM symbols
+            WHERE json_extract(kvstore, '$.type') = ?
             AND matched = 1
             ORDER BY orig_addr NULLS LAST
             """,
@@ -258,7 +258,7 @@ class CompareDb:
             return False
 
         cur = self._db.execute(
-            "UPDATE `symbols` SET orig_addr = ?, kwstore=json_set(kwstore,'$.type',?) WHERE recomp_addr = ?",
+            "UPDATE `symbols` SET orig_addr = ?, kvstore=json_set(kvstore,'$.type',?) WHERE recomp_addr = ?",
             (orig, compare_type, recomp),
         )
 
@@ -280,7 +280,7 @@ class CompareDb:
 
         cur = self._db.execute(
             """UPDATE `symbols`
-            SET orig_addr = ?, kwstore = json_insert(kwstore,'$.type',?)
+            SET orig_addr = ?, kvstore = json_insert(kvstore,'$.type',?)
             WHERE recomp_addr = ?
             AND orig_addr IS NULL""",
             (orig, compare_type, recomp),
@@ -304,7 +304,7 @@ class CompareDb:
 
         # Assuming relative jump instruction for thunks (5 bytes)
         cur = self._db.execute(
-            """INSERT INTO symbols (orig_addr, kwstore)
+            """INSERT INTO symbols (orig_addr, kvstore)
             VALUES (:addr, json_insert('{}', '$.type', :type, '$.name', :name, '$.size', :size))""",
             {"addr": addr, "type": SymbolType.FUNCTION, "name": thunk_name, "size": 5},
         )
@@ -324,7 +324,7 @@ class CompareDb:
 
         # Assuming relative jump instruction for thunks (5 bytes)
         cur = self._db.execute(
-            """INSERT INTO symbols (recomp_addr, kwstore)
+            """INSERT INTO symbols (recomp_addr, kvstore)
             VALUES (:addr, json_insert('{}', '$.type', :type, '$.name', :name, '$.size', :size))""",
             {"addr": addr, "type": SymbolType.FUNCTION, "name": thunk_name, "size": 5},
         )
@@ -366,7 +366,7 @@ class CompareDb:
         decorated name. If its demangled name is missing the vtordisp
         indicator, correct that."""
         row = self._db.execute(
-            """SELECT json_extract(kwstore,'$.name'), decorated_name
+            """SELECT json_extract(kvstore,'$.name'), decorated_name
             FROM `symbols`
             WHERE recomp_addr = ?""",
             (recomp_addr,),
@@ -389,7 +389,7 @@ class CompareDb:
 
         self._db.execute(
             """UPDATE `symbols`
-            SET kwstore = json_set(kwstore, '$.name', ?)
+            SET kvstore = json_set(kvstore, '$.name', ?)
             WHERE recomp_addr = ?""",
             (new_name, recomp_addr),
         )
@@ -419,8 +419,8 @@ class CompareDb:
             SELECT recomp_addr
             FROM `symbols`
             WHERE +orig_addr IS NULL
-            AND json_extract(kwstore, '$.name') = ?
-            AND (json_extract(kwstore, '$.type') IS NULL OR json_extract(kwstore, '$.type') = ?)
+            AND json_extract(kvstore, '$.name') = ?
+            AND (json_extract(kvstore, '$.type') IS NULL OR json_extract(kvstore, '$.type') = ?)
             LIMIT 1""",
             (name, compare_type),
         ):
@@ -495,7 +495,7 @@ class CompareDb:
         with the decorated (mangled) name of its parent function."""
 
         result = self._db.execute(
-            "SELECT json_extract(kwstore, '$.name'), decorated_name FROM `symbols` WHERE orig_addr = ?",
+            "SELECT json_extract(kvstore, '$.name'), decorated_name FROM `symbols` WHERE orig_addr = ?",
             (function_addr,),
         ).fetchone()
 
@@ -513,7 +513,7 @@ class CompareDb:
         for (recomp_addr,) in self._db.execute(
             """SELECT recomp_addr FROM symbols
             WHERE orig_addr IS NULL
-            AND (json_extract(kwstore, '$.type') = ? OR json_extract(kwstore, '$.type') IS NULL)
+            AND (json_extract(kvstore, '$.type') = ? OR json_extract(kvstore, '$.type') IS NULL)
             AND decorated_name LIKE '%' || ? || '%' || ? || '%'""",
             (SymbolType.DATA, variable_name, function_symbol),
         ):

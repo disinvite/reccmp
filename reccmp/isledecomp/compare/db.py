@@ -18,6 +18,12 @@ _SETUP_SQL = """
         kvstore text default '{}'
     );
 
+    CREATE TABLE stage (
+        addr int,
+        k text,
+        v
+    );
+
     CREATE TABLE `match_options` (
         addr int not null,
         name text not null,
@@ -116,14 +122,17 @@ class CompareDb:
             (addr, json.dumps(kwargs)),
         )
 
-    def bulk_cvdump_insert(self, rows: Iterable[dict[str, Any]]):
-        def addr_separate(addr=None, **kwargs):
-            return (addr, json.dumps(kwargs))
-
-        self._sql.executemany(
-            "INSERT or ignore INTO `symbols` (recomp_addr, kvstore) VALUES (?, ?)",
-            (addr_separate(**row) for row in rows),
-        )
+    def bulk_cvdump_insert(self, rows: Iterable[tuple[int, dict[str, Any]]]):
+        with self._sql:
+            self._sql.executemany(
+                "INSERT INTO stage (addr, k, v) values (?,?,?)",
+                ((addr, k, v) for addr, values in rows for k, v in values.items()),
+            )
+            self._sql.execute(
+                """INSERT or ignore INTO symbols (recomp_addr, kvstore)
+                SELECT addr, json_group_object(k,v) from stage group by addr"""
+            )
+            self._sql.execute("DELETE from stage")
 
     def bulk_array_insert(self, rows: Iterable[dict[str, Any]]):
         def addr_separate(orig=None, recomp=None, **kwargs):

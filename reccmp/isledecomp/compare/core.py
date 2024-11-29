@@ -187,9 +187,7 @@ class Compare:
             }
 
         # Convert dict of dicts (keyed by addr) to list of dicts (that contains the addr)
-        self._db.bulk_cvdump_insert(
-            ({"addr": key, **values} for key, values in dataset.items())
-        )
+        self._db.bulk_cvdump_insert(dataset.items())
 
         for (section, offset), (
             filename,

@@ -325,8 +325,12 @@ class Compare:
                                 recomp_element_base_addr + member.offset,
                             )
 
-        self._db.bulk_array_insert(
-            ({"recomp": key, **values} for key, values in dataset.items())
+        # Upsert here to update the starting address of variables already in the db.
+        self._db.bulk_cvdump_upsert(
+            ((addr, {"name": values["name"]}) for addr, values in dataset.items())
+        )
+        self._db.bulk_match(
+            ((values["orig"], addr) for addr, values in dataset.items())
         )
 
     def _find_original_strings(self):

@@ -21,7 +21,7 @@ _SETUP_SQL = """
     CREATE TABLE stage (
         addr int,
         k text,
-        v
+        v -- datatype intentionally omitted
     );
 
     CREATE TABLE `match_options` (
@@ -134,13 +134,24 @@ class CompareDb:
             )
             self._sql.execute("DELETE from stage")
 
-    def bulk_array_insert(self, rows: Iterable[dict[str, Any]]):
-        def addr_separate(orig=None, recomp=None, **kwargs):
-            return (orig, recomp, json.dumps(kwargs))
+    def bulk_cvdump_upsert(self, rows: Iterable[tuple[int, dict[str, Any]]]):
+        with self._sql:
+            self._sql.executemany(
+                "INSERT INTO stage (addr, k, v) values (?,?,?)",
+                ((addr, k, v) for addr, values in rows for k, v in values.items()),
+            )
+            self._sql.execute(
+                """INSERT INTO symbols (recomp_addr, kvstore)
+                SELECT addr, json_group_object(k,v) from stage group by addr
+                ON CONFLICT (recomp_addr) DO UPDATE
+                SET kvstore = json_patch(kvstore, excluded.kvstore)"""
+            )
+            self._sql.execute("DELETE from stage")
 
+    def bulk_match(self, pairs: Iterable[tuple[int, int]]):
+        """Expects iterable of (orig_addr, recomp_addr)."""
         self._sql.executemany(
-            "INSERT or ignore INTO `symbols` (orig_addr, recomp_addr, kvstore) VALUES (?, ?, ?)",
-            (addr_separate(**row) for row in rows),
+            "UPDATE or ignore symbols SET orig_addr = ? WHERE recomp_addr = ?", pairs
         )
 
     def get_unmatched_strings(self) -> List[str]:

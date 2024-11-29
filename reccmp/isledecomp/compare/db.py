@@ -31,7 +31,7 @@ _SETUP_SQL = """
         primary key (addr, name)
     ) without rowid;
 
-    CREATE INDEX `symbols_na` ON `symbols` (json_extract(kvstore, '$.name'));
+    CREATE INDEX `symbols_na` ON `symbols` (kvstore->>'$.name');
 """
 
 
@@ -158,7 +158,7 @@ class CompareDb:
         """Return any strings not already identified by STRING markers."""
 
         cur = self._sql.execute(
-            "SELECT json_extract(kvstore,'$.name') FROM `symbols` WHERE json_extract(kvstore, '$.type') = ? AND orig_addr IS NULL",
+            "SELECT kvstore->>'$.name' FROM `symbols` WHERE kvstore->>'$.type' = ? AND orig_addr IS NULL",
             (SymbolType.STRING,),
         )
 
@@ -237,7 +237,7 @@ class CompareDb:
     def get_matches_by_type(self, compare_type: SymbolType) -> Iterator[MatchInfo]:
         cur = self._sql.execute(
             """SELECT orig_addr, recomp_addr, kvstore FROM symbols
-            WHERE json_extract(kvstore, '$.type') = ?
+            WHERE kvstore->>'$.type' = ?
             AND matched = 1
             ORDER BY orig_addr NULLS LAST
             """,
@@ -370,7 +370,7 @@ class CompareDb:
         decorated name. If its demangled name is missing the vtordisp
         indicator, correct that."""
         row = self._sql.execute(
-            """SELECT json_extract(kvstore,'$.name'), json_extract(kvstore,'$.symbol')
+            """SELECT kvstore->>'$.name', kvstore->>'$.symbol'
             FROM `symbols`
             WHERE recomp_addr = ?""",
             (recomp_addr,),
@@ -411,7 +411,7 @@ class CompareDb:
         if match_decorate:
             # TODO: Change when/if decorated becomes a unique column
             for (recomp_addr,) in self._sql.execute(
-                "SELECT recomp_addr FROM symbols WHERE json_extract(kvstore, '$.symbol') = ? AND +orig_addr IS NULL LIMIT 1",
+                "SELECT recomp_addr FROM symbols WHERE kvstore->>'$.symbol' = ? AND +orig_addr IS NULL LIMIT 1",
                 (name,),
             ):
                 return recomp_addr
@@ -423,8 +423,8 @@ class CompareDb:
             SELECT recomp_addr
             FROM `symbols`
             WHERE +orig_addr IS NULL
-            AND json_extract(kvstore, '$.name') = ?
-            AND (json_extract(kvstore, '$.type') IS NULL OR json_extract(kvstore, '$.type') = ?)
+            AND kvstore->>'$.name' = ?
+            AND (kvstore->>'$.type' IS NULL OR kvstore->>'$.type' = ?)
             LIMIT 1""",
             (name, compare_type),
         ):
@@ -499,7 +499,7 @@ class CompareDb:
         with the decorated (mangled) name of its parent function."""
 
         result = self._sql.execute(
-            "SELECT json_extract(kvstore, '$.name'), json_extract(kvstore, '$.symbol') FROM `symbols` WHERE orig_addr = ?",
+            "SELECT kvstore->>'$.name', kvstore->>'$.symbol' FROM `symbols` WHERE orig_addr = ?",
             (function_addr,),
         ).fetchone()
 
@@ -517,8 +517,8 @@ class CompareDb:
         for (recomp_addr,) in self._sql.execute(
             """SELECT recomp_addr FROM symbols
             WHERE orig_addr IS NULL
-            AND (json_extract(kvstore, '$.type') = ? OR json_extract(kvstore, '$.type') IS NULL)
-            AND json_extract(kvstore, '$.symbol') LIKE '%' || ? || '%' || ? || '%'""",
+            AND (kvstore->>'$.type' = ? OR kvstore->>'$.type' IS NULL)
+            AND kvstore->>'$.symbol' LIKE '%' || ? || '%' || ? || '%'""",
             (SymbolType.DATA, variable_name, function_symbol),
         ):
             return self.set_pair(addr, recomp_addr, SymbolType.DATA)

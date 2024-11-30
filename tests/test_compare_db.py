@@ -125,4 +125,4 @@ def test_dynamic_metadata(db):
     db.set_recomp_symbol(1234, hello="abcdef", option=True)
     obj = db.get_by_recomp(1234)
     assert obj.get("hello") == "abcdef"
-    assert obj.get("option") is True
+    assert obj.test("option") is True

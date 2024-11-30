@@ -108,44 +108,54 @@ class CompareDb:
         return self._sql
 
     def set_orig_symbol(self, addr: int, **kwargs):
-        # Ignore collisions here.
-        self._sql.execute(
-            "INSERT or ignore INTO `symbols` (orig_addr, kvstore) VALUES (?, ?)",
-            (addr, json.dumps(kwargs)),
-        )
+        self.bulk_orig_insert(iter([(addr, kwargs)]))
 
     def set_recomp_symbol(self, addr: int, **kwargs):
-        # Ignore collisions here. The same recomp address can have
-        # multiple names (e.g. _strlwr and __strlwr)
-        self._sql.execute(
-            "INSERT or ignore INTO `symbols` (recomp_addr, kvstore) VALUES (?, ?)",
-            (addr, json.dumps(kwargs)),
-        )
+        self.bulk_recomp_insert(iter([(addr, kwargs)]))
 
-    def bulk_cvdump_insert(self, rows: Iterable[tuple[int, dict[str, Any]]]):
+    def bulk_orig_insert(
+        self, rows: Iterable[tuple[int, dict[str, Any]]], upsert: bool = False
+    ):
         with self._sql:
             self._sql.executemany(
                 "INSERT INTO stage (addr, k, v) values (?,?,?)",
                 ((addr, k, v) for addr, values in rows for k, v in values.items()),
             )
-            self._sql.execute(
-                """INSERT or ignore INTO symbols (recomp_addr, kvstore)
-                SELECT addr, json_group_object(k,v) from stage group by addr"""
-            )
+            if upsert:
+                self._sql.execute(
+                    """INSERT INTO symbols (orig_addr, kvstore)
+                    SELECT addr, json_group_object(k,v) from stage group by addr
+                    ON CONFLICT (orig_addr) DO UPDATE
+                    SET kvstore = json_patch(kvstore, excluded.kvstore)"""
+                )
+            else:
+                self._sql.execute(
+                    """INSERT or ignore INTO symbols (orig_addr, kvstore)
+                    SELECT addr, json_group_object(k,v) from stage group by addr"""
+                )
+
             self._sql.execute("DELETE from stage")
 
-    def bulk_cvdump_upsert(self, rows: Iterable[tuple[int, dict[str, Any]]]):
+    def bulk_recomp_insert(
+        self, rows: Iterable[tuple[int, dict[str, Any]]], upsert: bool = False
+    ):
         with self._sql:
             self._sql.executemany(
                 "INSERT INTO stage (addr, k, v) values (?,?,?)",
                 ((addr, k, v) for addr, values in rows for k, v in values.items()),
             )
-            self._sql.execute(
-                """INSERT INTO symbols (recomp_addr, kvstore)
-                SELECT addr, json_group_object(k,v) from stage group by addr
-                ON CONFLICT (recomp_addr) DO UPDATE
-                SET kvstore = json_patch(kvstore, excluded.kvstore)"""
-            )
+            if upsert:
+                self._sql.execute(
+                    """INSERT INTO symbols (recomp_addr, kvstore)
+                    SELECT addr, json_group_object(k,v) from stage group by addr
+                    ON CONFLICT (recomp_addr) DO UPDATE
+                    SET kvstore = json_patch(kvstore, excluded.kvstore)"""
+                )
+            else:
+                self._sql.execute(
+                    """INSERT or ignore INTO symbols (recomp_addr, kvstore)
+                    SELECT addr, json_group_object(k,v) from stage group by addr"""
+                )
             self._sql.execute("DELETE from stage")
 
     def bulk_match(self, pairs: Iterable[tuple[int, int]]):

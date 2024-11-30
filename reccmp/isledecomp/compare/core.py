@@ -187,7 +187,7 @@ class Compare:
             }
 
         # Convert dict of dicts (keyed by addr) to list of dicts (that contains the addr)
-        self._db.bulk_cvdump_insert(dataset.items())
+        self._db.bulk_recomp_insert(dataset.items())
 
         for (section, offset), (
             filename,
@@ -326,8 +326,9 @@ class Compare:
                             )
 
         # Upsert here to update the starting address of variables already in the db.
-        self._db.bulk_cvdump_upsert(
-            ((addr, {"name": values["name"]}) for addr, values in dataset.items())
+        self._db.bulk_recomp_insert(
+            ((addr, {"name": values["name"]}) for addr, values in dataset.items()),
+            upsert=True,
         )
         self._db.bulk_match(
             ((values["orig"], addr) for addr, values in dataset.items())

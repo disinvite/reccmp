@@ -18,12 +18,6 @@ _SETUP_SQL = """
         kvstore text default '{}'
     );
 
-    CREATE TABLE stage (
-        addr int,
-        k text,
-        v -- datatype intentionally omitted
-    );
-
     CREATE TABLE `match_options` (
         addr int not null,
         name text not null,
@@ -116,47 +110,34 @@ class CompareDb:
     def bulk_orig_insert(
         self, rows: Iterable[tuple[int, dict[str, Any]]], upsert: bool = False
     ):
-        with self._sql:
+        if upsert:
             self._sql.executemany(
-                "INSERT INTO stage (addr, k, v) values (?,?,?)",
-                ((addr, k, v) for addr, values in rows for k, v in values.items()),
+                """INSERT INTO symbols (orig_addr, kvstore) values (?,?)
+                ON CONFLICT (orig_addr) DO UPDATE
+                SET kvstore = json_patch(kvstore, excluded.kvstore)""",
+                ((addr, json.dumps(values)) for addr, values in rows),
             )
-            if upsert:
-                self._sql.execute(
-                    """INSERT INTO symbols (orig_addr, kvstore)
-                    SELECT addr, json_group_object(k,v) from stage group by addr
-                    ON CONFLICT (orig_addr) DO UPDATE
-                    SET kvstore = json_patch(kvstore, excluded.kvstore)"""
-                )
-            else:
-                self._sql.execute(
-                    """INSERT or ignore INTO symbols (orig_addr, kvstore)
-                    SELECT addr, json_group_object(k,v) from stage group by addr"""
-                )
-
-            self._sql.execute("DELETE from stage")
+        else:
+            self._sql.executemany(
+                "INSERT or ignore INTO symbols (orig_addr, kvstore) values (?,?)",
+                ((addr, json.dumps(values)) for addr, values in rows),
+            )
 
     def bulk_recomp_insert(
         self, rows: Iterable[tuple[int, dict[str, Any]]], upsert: bool = False
     ):
-        with self._sql:
+        if upsert:
             self._sql.executemany(
-                "INSERT INTO stage (addr, k, v) values (?,?,?)",
-                ((addr, k, v) for addr, values in rows for k, v in values.items()),
+                """INSERT INTO symbols (recomp_addr, kvstore) values (?,?)
+                ON CONFLICT (recomp_addr) DO UPDATE
+                SET kvstore = json_patch(kvstore, excluded.kvstore)""",
+                ((addr, json.dumps(values)) for addr, values in rows),
             )
-            if upsert:
-                self._sql.execute(
-                    """INSERT INTO symbols (recomp_addr, kvstore)
-                    SELECT addr, json_group_object(k,v) from stage group by addr
-                    ON CONFLICT (recomp_addr) DO UPDATE
-                    SET kvstore = json_patch(kvstore, excluded.kvstore)"""
-                )
-            else:
-                self._sql.execute(
-                    """INSERT or ignore INTO symbols (recomp_addr, kvstore)
-                    SELECT addr, json_group_object(k,v) from stage group by addr"""
-                )
-            self._sql.execute("DELETE from stage")
+        else:
+            self._sql.executemany(
+                "INSERT or ignore INTO symbols (recomp_addr, kvstore) values (?,?)",
+                ((addr, json.dumps(values)) for addr, values in rows),
+            )
 
     def bulk_match(self, pairs: Iterable[tuple[int, int]]):
         """Expects iterable of (orig_addr, recomp_addr)."""

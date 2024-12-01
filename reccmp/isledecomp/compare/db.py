@@ -63,9 +63,6 @@ class MatchInfo:
     def get(self, key: str) -> Any:
         return self.options.get(key)
 
-    def test(self, key: str) -> bool:
-        return bool(self.options.get(key, False))
-
     def match_name(self) -> Optional[str]:
         """Combination of the name and compare type.
         Intended for name substitution in the diff. If there is a diff,

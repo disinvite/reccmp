@@ -13,7 +13,7 @@ from typing import Callable, List, Optional, Tuple
 from collections import namedtuple
 from .const import JUMP_MNEMONICS, SINGLE_OPERAND_INSTS
 from .instgen import InstructGen, SectionType
-from .replacement import NameReplacementProtocol
+from .replacement import AddrTestProtocol, NameReplacementProtocol
 
 ptr_replace_regex = re.compile(r"\[(0x[0-9a-f]+)\]")
 
@@ -46,7 +46,7 @@ def bytes_to_dword(b: bytes) -> Optional[int]:
 class ParseAsm:
     def __init__(
         self,
-        relocate_lookup: Optional[Callable[[int], bool]] = None,
+        relocate_lookup: Optional[AddrTestProtocol] = None,
         name_lookup: Optional[NameReplacementProtocol] = None,
         bin_lookup: Optional[Callable[[int, int], Optional[bytes]]] = None,
     ) -> None:

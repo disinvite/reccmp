@@ -4,6 +4,11 @@ from reccmp.isledecomp.compare.db import MatchInfo
 from reccmp.isledecomp.types import SymbolType
 
 
+class AddrTestProtocol(Protocol):
+    def __call__(self, addr: int) -> bool:
+        pass
+
+
 class NameReplacementProtocol(Protocol):
     def __call__(self, addr: int, exact: bool = False) -> Optional[str]:
         pass

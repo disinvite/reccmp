@@ -47,10 +47,37 @@ POINTER_INSTRUCTIONS = (
 def test_sanitize_pointer_instructions(inst: DisasmLiteInst):
     """Can identify the pointer and insert a placeholder, regardless of the size
     of the pointed-at-item or the operand position."""
-    p = ParseAsm()
+    addr_test = Mock(spec=AddrTestProtocol, return_value=False)
+    p = ParseAsm(addr_test=addr_test)
     (_, op_str) = p.sanitize(inst)
-    assert "0x1234" not in op_str
-    assert "<OFFSET1>" in op_str
+
+    # We always replace pointers. No need to verify the address.
+    addr_test.assert_not_called()
+    assert "[0x1234]" not in op_str
+    assert "[<OFFSET1>]" in op_str
+
+
+@pytest.mark.parametrize("inst", POINTER_INSTRUCTIONS)
+def test_sanitize_pointer_instructions_is_deterministic(inst: DisasmLiteInst):
+    """Calling sanitize() twice on the same instruction should give the same result.
+    i.e. we use the same placeholder for the same address."""
+    p = ParseAsm()
+    (_, op_str1) = p.sanitize(inst)
+    (_, op_str2) = p.sanitize(inst)
+    assert op_str1 == op_str2
+
+
+@pytest.mark.parametrize("inst", POINTER_INSTRUCTIONS)
+def test_sanitize_pointer_instructions_with_name(inst: DisasmLiteInst):
+    """Same as above, but using name lookup and substitution."""
+    name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
+    p = ParseAsm(name_lookup=name_lookup)
+    (_, op_str) = p.sanitize(inst)
+
+    # Using sample instructions where exact match is not required
+    name_lookup.assert_called_with(0x1234, exact=False)
+    assert "[0x1234]" not in op_str
+    assert "[Hello]" in op_str
 
 
 DISPLACE_INSTRUCTIONS = (
@@ -82,8 +109,8 @@ def test_sanitize_displacement_with_addr_verify(inst: DisasmLiteInst):
     (_, op_str) = p.sanitize(inst)
 
     addr_test.assert_called_with(0x1234)
-    assert "0x1234" not in op_str
-    assert "<OFFSET1>" in op_str
+    assert "0x1234]" not in op_str
+    assert "<OFFSET1>]" in op_str
 
 
 IMMEDIATE_VALUE_INSTRUCTIONS = (
@@ -143,6 +170,26 @@ def test_sanitize_pointer_and_immediate_is_addr():
     assert op_str == "dword ptr [<OFFSET1>], <OFFSET2>"
 
 
+JUMP_SAMPLES = (
+    (DisasmLiteInst(0x1000, 5, "jmp", "0x10ac"), "0xa7"),
+    (DisasmLiteInst(0x1000, 5, "jmp", "0x805"), "-0x800"),
+    (DisasmLiteInst(0x1000, 2, "je", "0x1006"), "0x4"),
+    (DisasmLiteInst(0x1000, 2, "je", "0x1000"), "-0x2"),
+)
+
+
+@pytest.mark.parametrize("inst, expected", JUMP_SAMPLES)
+def test_jump_displacement(inst: DisasmLiteInst, expected: str):
+    """Jump instructions use a displacement value as their operand.
+    Meaning: the jump destination is the jump instruction's address
+    plus the instruction size plus the operand value.
+    capstone calculates the absolute address, but it is more helpful to the
+    reader to see the raw displacement so you know whether the jump is up or down."""
+    p = ParseAsm()
+    (_, op_str) = p.sanitize(inst)
+    assert op_str == expected
+
+
 SMALL_INSTRUCTIONS = (
     b"\xfb",  # sti
     b"\x53",  # push ebx
@@ -177,165 +224,108 @@ def test_should_skip_regardless_of_register():
 
 
 def test_no_placeholder_for_jumps():
-    """Jumps probably point to a label inside the current function. It is more
-    helpful to the reader to not use a placeholder string. However, some JMP
-    instructions point at the start of another function (e.g. destructors
+    """Some JMP instructions point at the start of another function (e.g. destructors
     called in the SEH Unwind section.) These would be candidates for a placeholder
     but doing this would cause the placeholder number to vary with annotation
     coverage. The compromise is to use the name if we have it, but not use a
     placeholder OR bump the placeholder number."""
-
     p = ParseAsm()
-    # No name lookup means no replacement
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x1000"))
-    # Replace with jump displacement
-    assert op_str == "-0x5"
-    assert len(p.replacements) == 0
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x2000"))
 
-    # Establish placeholder for address 0x1000
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x1000"))
-    assert op_str == "<OFFSET1>"
-    assert len(p.replacements) == 1
+    # We don't have the name, so don't use a placeholder.
+    assert op_str != "<OFFSET1>"
 
-    # Do not use placeholder for a JMP to 0x1000
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x1000"))
-    assert op_str == "-0x5"
 
-    # Use name if we have it
-    # Require exact match here: this should be the start of a function or asm label
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x1000"))
-    p.name_lookup.assert_called_with(0x1000, exact=True)
+def test_sanitize_jmp_ignore_placeholder():
+    """Do not use a cached placeholder value for a JMP instruction."""
+    p = ParseAsm()
+
+    # Establish placeholder for 0x2000
+    p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x2000"))
+    assert 0x2000 in p.replacements
+
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x2000"))
+
+    # Do not use the existing placeholder
+    assert op_str != "<OFFSET1>"
+
+
+def test_sanitize_jmp_with_name_lookup():
+    """Exact match required for JMP destination. This should be either the start of
+    a function or an asm label"""
+    name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
+    p = ParseAsm(name_lookup=name_lookup)
+
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "jmp", "0x2000"))
+
+    name_lookup.assert_called_with(0x2000, exact=True)
     assert op_str == "Hello"
 
 
-def test_no_placeholder_for_cmp():
-    """Similar to the situation with JMP instructions, we intentionally do not
-    use a placeholder for a CMP on an immediate value, even if we know it is an address.
-    The reason is that a diff may be hidden behind the placeholder. Loops on an array of
-    structs might use an arbitrary address past the end of the array for the range check.
-    We want to see when this happens because it means variables are probably out of order.
-    """
+def test_sanitize_cmp_without_name_lookup():
+    """We intentionally do not use a placeholder for CMP instructions with an immediate value
+    because it can hide a diff. Loops on an array of structs can use an arbitrary address
+    past the end of the array for the range check. We want to see when this happens
+    because it suggests that some variables are out of order."""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=False)
+    p = ParseAsm(addr_test=addr_test)
+    inst = DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x2000")
 
+    (_, op_str) = p.sanitize(inst)
+
+    addr_test.assert_not_called()
+    assert op_str == inst.op_str
+
+
+def test_sanitize_cmp_ignore_placeholder():
+    """Do not use a cached placeholder value for an address in a CMP instruction.
+    Always call the name lookup function."""
     p = ParseAsm()
-    # No name lookup means no replacement
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x1000"))
-    assert op_str == "eax, 0x1000"
-    assert len(p.replacements) == 0
 
-    # Establish placeholder for address 0x1000
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x1000"))
-    assert op_str == "<OFFSET1>"
-    assert len(p.replacements) == 1
+    # Establish placeholder for 0x2000
+    p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x2000"))
+    assert 0x2000 in p.replacements
 
-    # Ignore the placeholder
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x1000"))
-    assert op_str == "eax, 0x1000"
+    inst = DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x2000")
 
-    # Use name if we have it
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x1000"))
-    p.name_lookup.assert_called_with(0x1000, exact=False)
+    (_, op_str) = p.sanitize(inst)
+
+    # Do not use the existing placeholder
+    assert op_str == inst.op_str
+
+
+def test_sanitize_cmp_with_name_lookup():
+    """We will replace the value in a CMP instruction if we have a name for the address."""
+    name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
+    p = ParseAsm(name_lookup=name_lookup)
+    inst = DisasmLiteInst(0x1000, 5, "cmp", "eax, 0x2000")
+
+    (_, op_str) = p.sanitize(inst)
+
+    name_lookup.assert_called_with(0x2000, exact=False)
     assert op_str == "eax, Hello"
 
 
-def test_call_replacement():
-    """CALL 0x____ instructions always use a placeholder.
-    We require an exact address match from the database to use the name."""
+def test_sanitize_call_without_name_lookup():
+    """CALL 0x____ instructions always use a placeholder."""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=False)
+    p = ParseAsm(addr_test=addr_test)
+    inst = DisasmLiteInst(0x1000, 5, "call", "0x1234")
 
-    p = ParseAsm()
-    # Always use placeholder even without callback methods
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x2000"))
+    (_, op_str) = p.sanitize(inst)
+
+    # Always replaced. Do not verify address.
+    addr_test.assert_not_called()
     assert op_str == "<OFFSET1>"
 
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value=None)
 
-    # Use cached placeholder
-    p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x2000"))
-    p.name_lookup.assert_not_called()
+def test_sanitize_call_with_name_lookup():
+    """CALL instructions require exact addr match"""
+    name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
+    p = ParseAsm(name_lookup=name_lookup)
+    inst = DisasmLiteInst(0x1000, 5, "call", "0x1234")
 
-    # Require exact match from lookup
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x3000"))
-    p.name_lookup.assert_called_with(0x3000, exact=True)
-    # No name given, use placeholder again
-    assert op_str == "<OFFSET2>"
+    (_, op_str) = p.sanitize(inst)
 
-    # Use cached placeholder, don't call lookup again
-    assert len(p.name_lookup.mock_calls) == 1
-    p.sanitize(DisasmLiteInst(0x1000, 5, "call", "0x3000"))
-    assert len(p.name_lookup.mock_calls) == 1
-
-
-def test_push_replacement():
-    """PUSH 0x____ instructions use a placeholder but we need to check
-    whether the value is an address."""
-    p = ParseAsm()
-
-    # Do not replace if we cannot test the address.
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "push", "0x2000"))
-    p.name_lookup.assert_not_called()
-    assert op_str == "0x2000"
-
-    # Set addr test method, should now call lookup and use name.
-    p.addr_test = Mock(spec=AddrTestProtocol, return_value=True)
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "push", "0x2000"))
-    p.addr_test.assert_called_with(0x2000)
-    p.name_lookup.assert_called_with(0x2000, exact=False)
+    name_lookup.assert_called_with(0x1234, exact=True)
     assert op_str == "Hello"
-
-    # Simulate failed name lookup. Use placeholder.
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value=None)
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "push", "0x3000"))
-    p.addr_test.assert_called_with(0x3000)
-    p.name_lookup.assert_called_with(0x3000, exact=False)
-    assert op_str == "<OFFSET2>"  # Second replacement, 'Hello' cached above
-
-
-def test_pointer_replacement():
-    """A value in brackets (dword ptr [0x5555]) is obviously an address, so
-    we always replace these with a placeholder."""
-
-    p = ParseAsm()
-    # Add address test, but we won't use it
-    p.addr_test = Mock(spec=AddrTestProtocol, return_value=False)
-
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x5555]"))
-    assert op_str == "dword ptr [<OFFSET1>]"
-
-    # Add name lookup
-    p.name_lookup = Mock(spec=NameReplacementProtocol, return_value="Hello")
-    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x1234]"))
-    p.name_lookup.assert_called_with(0x1234, exact=False)
-    assert op_str == "dword ptr [Hello]"
-
-    # Can replace with two operands
-    (_, op_str) = p.sanitize(
-        DisasmLiteInst(0x1000, 6, "mov", "eax, dword ptr [0x2000]")
-    )
-    p.name_lookup.assert_called_with(0x2000, exact=False)
-    assert op_str == "eax, dword ptr [Hello]"
-
-    # We always replace these pointer values, no need to check if it's an address
-    p.addr_test.assert_not_called()
-
-
-def test_displace_replacement():
-    """Need to test values used in pointer displacement (dword ptr[register + value])
-    because many are struct offset or vtable calls."""
-    p = ParseAsm()
-    inst = DisasmLiteInst(0x1000, 3, "mov", "eax, dword ptr [ecx + 0x1000]")
-
-    # Should not replace
-    p.addr_test = Mock(spec=AddrTestProtocol, return_value=False)
-    (_, op_str) = p.sanitize(inst)
-    p.addr_test.assert_called_with(0x1000)
-    assert op_str == inst.op_str
-    assert len(p.replacements) == 0
-
-    # Should replace
-    p.addr_test = Mock(spec=AddrTestProtocol, return_value=True)
-    (_, op_str) = p.sanitize(inst)
-    p.addr_test.assert_called_with(0x1000)
-    assert op_str == "eax, dword ptr [ecx + <OFFSET1>]"
-    assert len(p.replacements) == 1

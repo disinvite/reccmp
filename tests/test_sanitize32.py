@@ -22,7 +22,7 @@ REGISTER_ONLY_INSTRUCTIONS = (
 
 
 @pytest.mark.parametrize("inst", REGISTER_ONLY_INSTRUCTIONS)
-def test_instructions_with_nothing_to_replace(inst: DisasmLiteInst):
+def test_sanitize_nothing_to_replace(inst: DisasmLiteInst):
     """There's no pointer or address value in these instructions,
     so your operand string should not be manipulated."""
     p = ParseAsm()
@@ -65,7 +65,7 @@ DISPLACE_INSTRUCTIONS = (
 
 
 @pytest.mark.parametrize("inst", DISPLACE_INSTRUCTIONS)
-def test_sanitize_displacement_instructions(inst: DisasmLiteInst):
+def test_sanitize_displacement_without_addr_verify(inst: DisasmLiteInst):
     """Can identify displacement operand (i.e. register plus address)
     but we only replace the value if it passes the address test."""
     p = ParseAsm()
@@ -73,9 +73,15 @@ def test_sanitize_displacement_instructions(inst: DisasmLiteInst):
     # No address test function provided, should not replace.
     assert op_str == inst.op_str
 
-    # Assume all values are addreses
-    p.addr_test = lambda _: True
+
+@pytest.mark.parametrize("inst", DISPLACE_INSTRUCTIONS)
+def test_sanitize_displacement_with_addr_verify(inst: DisasmLiteInst):
+    """Same test as above, but with the address test function provided."""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=True)
+    p = ParseAsm(addr_test=addr_test)
     (_, op_str) = p.sanitize(inst)
+
+    addr_test.assert_called_with(0x1234)
     assert "0x1234" not in op_str
     assert "<OFFSET1>" in op_str
 
@@ -89,17 +95,23 @@ IMMEDIATE_VALUE_INSTRUCTIONS = (
 
 
 @pytest.mark.parametrize("inst", IMMEDIATE_VALUE_INSTRUCTIONS)
-def test_sanitize_immediate_value_instructions(inst: DisasmLiteInst):
+def test_sanitize_immediate_without_addr_verify(inst: DisasmLiteInst):
     """If an operand is just a number, we will substitute the name
     or placeholder if it passes the address test."""
     p = ParseAsm()
     (_, op_str) = p.sanitize(inst)
     # No address test function provided, should not replace.
-    assert "0x1234" in op_str
+    assert op_str == inst.op_str
 
-    # Assume all values are addresses
-    p.addr_test = lambda _: True
+
+@pytest.mark.parametrize("inst", IMMEDIATE_VALUE_INSTRUCTIONS)
+def test_sanitize_immediate_with_addr_verify(inst: DisasmLiteInst):
+    """Same test as above, but with the address test function provided."""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=True)
+    p = ParseAsm(addr_test=addr_test)
     (_, op_str) = p.sanitize(inst)
+
+    addr_test.assert_called_with(0x1234)
     assert "0x1234" not in op_str
     assert "<OFFSET1>" in op_str
 

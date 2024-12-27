@@ -116,18 +116,29 @@ def test_sanitize_immediate_with_addr_verify(inst: DisasmLiteInst):
     assert "<OFFSET1>" in op_str
 
 
-def test_sanitize_pointer_and_immediate():
-    """Can handle instructions where two replacements are possible."""
-    p = ParseAsm()
+def test_sanitize_pointer_and_immediate_is_not_addr():
+    """Can handle instructions where two replacements are possible.
+    In this case, we assume 0x5555 is not an address"""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=False)
+    p = ParseAsm(addr_test=addr_test)
     inst = DisasmLiteInst(0x1000, 10, "mov", "dword ptr [0x1234], 0x5555")
 
     (_, op_str) = p.sanitize(inst)
 
-    # Should only replace the pointer if we cannot test the address.
+    # We only verify the immediate address
+    addr_test.assert_called_once()
+    addr_test.assert_called_with(0x5555)
+
+    # Assumes 0x5555 is not an address. Don't replace it.
     assert op_str == "dword ptr [<OFFSET1>], 0x5555"
 
-    # Assume all values are addresses
-    p.addr_test = lambda _: True
+
+def test_sanitize_pointer_and_immediate_is_addr():
+    """Same test as above, assumes 0x5555 is a valid address."""
+    addr_test = Mock(spec=AddrTestProtocol, return_value=True)
+    p = ParseAsm(addr_test=addr_test)
+    inst = DisasmLiteInst(0x1000, 10, "mov", "dword ptr [0x1234], 0x5555")
+
     (_, op_str) = p.sanitize(inst)
     assert op_str == "dword ptr [<OFFSET1>], <OFFSET2>"
 
@@ -201,7 +212,7 @@ def test_no_placeholder_for_jumps():
 def test_no_placeholder_for_cmp():
     """Similar to the situation with JMP instructions, we intentionally do not
     use a placeholder for a CMP on an immediate value, even if we know it is an address.
-    The reason is that a diff may be hidden behind the placholder. Loops on an array of
+    The reason is that a diff may be hidden behind the placeholder. Loops on an array of
     structs might use an arbitrary address past the end of the array for the range check.
     We want to see when this happens because it means variables are probably out of order.
     """

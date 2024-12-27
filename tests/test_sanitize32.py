@@ -9,13 +9,115 @@ from reccmp.isledecomp.compare.asm.replacement import (
 )
 
 
-def mock_inst(mnemonic: str, op_str: str) -> DisasmLiteInst:
-    """Mock up the named tuple DisasmLite from just a mnemonic and op_str.
-    To be used for tests on sanitize that do not require the instruction address
-    or size. i.e. any non-jump instruction."""
-    # TODO: This isn't really ideal. We could have a separate function just for jumps
-    # and then use the address and size fields in that function only.
-    return DisasmLiteInst(0, 0, mnemonic, op_str)
+REGISTER_ONLY_INSTRUCTIONS = (
+    # No operands
+    DisasmLiteInst(0x1000, 1, "sti", ""),
+    DisasmLiteInst(0x1000, 1, "ret", ""),
+    # One operand
+    DisasmLiteInst(0x1000, 1, "push", "eax"),
+    DisasmLiteInst(0x1000, 2, "call", "eax"),
+    # Two operands
+    DisasmLiteInst(0x1000, 2, "cmp", "eax, edx"),
+)
+
+
+@pytest.mark.parametrize("inst", REGISTER_ONLY_INSTRUCTIONS)
+def test_instructions_with_nothing_to_replace(inst: DisasmLiteInst):
+    """There's no pointer or address value in these instructions,
+    so your operand string should not be manipulated."""
+    p = ParseAsm()
+    (_, op_str) = p.sanitize(inst)
+    assert op_str == inst.op_str
+
+
+# There is one pointer in these instructions and we always replace it.
+POINTER_INSTRUCTIONS = (
+    # One operand
+    DisasmLiteInst(0x1000, 6, "inc", "byte ptr [0x1234]"),
+    DisasmLiteInst(0x1000, 6, "inc", "word ptr [0x1234]"),
+    DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x1234]"),
+    DisasmLiteInst(0x1000, 6, "inc", "qword ptr [0x1234]"),
+    # Two operands
+    DisasmLiteInst(0x1000, 5, "mov", "eax, dword ptr [0x1234]"),
+    DisasmLiteInst(0x1000, 5, "mov", "dword ptr [0x1234], eax"),
+)
+
+
+@pytest.mark.parametrize("inst", POINTER_INSTRUCTIONS)
+def test_sanitize_pointer_instructions(inst: DisasmLiteInst):
+    """Can identify the pointer and insert a placeholder, regardless of the size
+    of the pointed-at-item or the operand position."""
+    p = ParseAsm()
+    (_, op_str) = p.sanitize(inst)
+    assert "0x1234" not in op_str
+    assert "<OFFSET1>" in op_str
+
+
+DISPLACE_INSTRUCTIONS = (
+    # One operand
+    DisasmLiteInst(0x1000, 6, "inc", "byte ptr [eax + 0x1234]"),
+    # Two operands
+    DisasmLiteInst(0x1000, 6, "mov", "eax, dword ptr [ecx + 0x1234]"),
+    DisasmLiteInst(0x1000, 6, "mov", "dword ptr [ecx + 0x1234], eax"),
+    # Jump table
+    DisasmLiteInst(0x1000, 7, "jmp", "dword ptr [eax*4 + 0x1234]"),
+)
+
+
+@pytest.mark.parametrize("inst", DISPLACE_INSTRUCTIONS)
+def test_sanitize_displacement_instructions(inst: DisasmLiteInst):
+    """Can identify displacement operand (i.e. register plus address)
+    but we only replace the value if it passes the address test."""
+    p = ParseAsm()
+    (_, op_str) = p.sanitize(inst)
+    # No address test function provided, should not replace.
+    assert op_str == inst.op_str
+
+    # Assume all values are addreses
+    p.relocate_lookup = lambda _: True
+    (_, op_str) = p.sanitize(inst)
+    assert "0x1234" not in op_str
+    assert "<OFFSET1>" in op_str
+
+
+IMMEDIATE_VALUE_INSTRUCTIONS = (
+    # One operand
+    DisasmLiteInst(0x1000, 5, "push", "0x1234"),
+    # Two operands
+    DisasmLiteInst(0x1000, 5, "mov", "eax, 0x1234"),
+)
+
+
+@pytest.mark.parametrize("inst", IMMEDIATE_VALUE_INSTRUCTIONS)
+def test_sanitize_immediate_value_instructions(inst: DisasmLiteInst):
+    """If an operand is just a number, we will substitute the name
+    or placeholder if it passes the address test."""
+    p = ParseAsm()
+    (_, op_str) = p.sanitize(inst)
+    # No address test function provided, should not replace.
+    assert "0x1234" in op_str
+
+    # Assume all values are addresses
+    p.relocate_lookup = lambda _: True
+    (_, op_str) = p.sanitize(inst)
+    assert "0x1234" not in op_str
+    assert "<OFFSET1>" in op_str
+
+
+def test_sanitize_pointer_and_immediate():
+    """Can handle instructions where two replacements are possible."""
+    p = ParseAsm()
+    inst = DisasmLiteInst(0x1000, 10, "mov", "dword ptr [0x1234], 0x5555")
+
+    (_, op_str) = p.sanitize(inst)
+
+    # Should only replace the pointer if we cannot test the address.
+    assert op_str == "dword ptr [<OFFSET1>], 0x5555"
+
+    # Assume all values are addresses
+    p.relocate_lookup = lambda _: True
+    (_, op_str) = p.sanitize(inst)
+    assert op_str == "dword ptr [<OFFSET1>], <OFFSET2>"
 
 
 SMALL_INSTRUCTIONS = (

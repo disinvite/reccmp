@@ -74,7 +74,7 @@ def test_sanitize_displacement_instructions(inst: DisasmLiteInst):
     assert op_str == inst.op_str
 
     # Assume all values are addreses
-    p.relocate_lookup = lambda _: True
+    p.addr_test = lambda _: True
     (_, op_str) = p.sanitize(inst)
     assert "0x1234" not in op_str
     assert "<OFFSET1>" in op_str
@@ -98,7 +98,7 @@ def test_sanitize_immediate_value_instructions(inst: DisasmLiteInst):
     assert "0x1234" in op_str
 
     # Assume all values are addresses
-    p.relocate_lookup = lambda _: True
+    p.addr_test = lambda _: True
     (_, op_str) = p.sanitize(inst)
     assert "0x1234" not in op_str
     assert "<OFFSET1>" in op_str
@@ -115,7 +115,7 @@ def test_sanitize_pointer_and_immediate():
     assert op_str == "dword ptr [<OFFSET1>], 0x5555"
 
     # Assume all values are addresses
-    p.relocate_lookup = lambda _: True
+    p.addr_test = lambda _: True
     (_, op_str) = p.sanitize(inst)
     assert op_str == "dword ptr [<OFFSET1>], <OFFSET2>"
 
@@ -255,16 +255,16 @@ def test_push_replacement():
     assert op_str == "0x2000"
 
     # Set addr test method, should now call lookup and use name.
-    p.relocate_lookup = Mock(spec=AddrTestProtocol, return_value=True)
+    p.addr_test = Mock(spec=AddrTestProtocol, return_value=True)
     (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "push", "0x2000"))
-    p.relocate_lookup.assert_called_with(0x2000)
+    p.addr_test.assert_called_with(0x2000)
     p.name_lookup.assert_called_with(0x2000, exact=False)
     assert op_str == "Hello"
 
     # Simulate failed name lookup. Use placeholder.
     p.name_lookup = Mock(spec=NameReplacementProtocol, return_value=None)
     (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "push", "0x3000"))
-    p.relocate_lookup.assert_called_with(0x3000)
+    p.addr_test.assert_called_with(0x3000)
     p.name_lookup.assert_called_with(0x3000, exact=False)
     assert op_str == "<OFFSET2>"  # Second replacement, 'Hello' cached above
 
@@ -275,7 +275,7 @@ def test_pointer_replacement():
 
     p = ParseAsm()
     # Add address test, but we won't use it
-    p.relocate_lookup = Mock(spec=AddrTestProtocol, return_value=False)
+    p.addr_test = Mock(spec=AddrTestProtocol, return_value=False)
 
     (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x5555]"))
     assert op_str == "dword ptr [<OFFSET1>]"
@@ -294,7 +294,7 @@ def test_pointer_replacement():
     assert op_str == "eax, dword ptr [Hello]"
 
     # We always replace these pointer values, no need to check if it's an address
-    p.relocate_lookup.assert_not_called()
+    p.addr_test.assert_not_called()
 
 
 def test_displace_replacement():
@@ -304,15 +304,15 @@ def test_displace_replacement():
     inst = DisasmLiteInst(0x1000, 3, "mov", "eax, dword ptr [ecx + 0x1000]")
 
     # Should not replace
-    p.relocate_lookup = Mock(spec=AddrTestProtocol, return_value=False)
+    p.addr_test = Mock(spec=AddrTestProtocol, return_value=False)
     (_, op_str) = p.sanitize(inst)
-    p.relocate_lookup.assert_called_with(0x1000)
+    p.addr_test.assert_called_with(0x1000)
     assert op_str == inst.op_str
     assert len(p.replacements) == 0
 
     # Should replace
-    p.relocate_lookup = Mock(spec=AddrTestProtocol, return_value=True)
+    p.addr_test = Mock(spec=AddrTestProtocol, return_value=True)
     (_, op_str) = p.sanitize(inst)
-    p.relocate_lookup.assert_called_with(0x1000)
+    p.addr_test.assert_called_with(0x1000)
     assert op_str == "eax, dword ptr [ecx + <OFFSET1>]"
     assert len(p.replacements) == 1

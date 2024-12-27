@@ -46,11 +46,11 @@ def bytes_to_dword(b: bytes) -> Optional[int]:
 class ParseAsm:
     def __init__(
         self,
-        relocate_lookup: Optional[AddrTestProtocol] = None,
+        addr_test: Optional[AddrTestProtocol] = None,
         name_lookup: Optional[NameReplacementProtocol] = None,
         bin_lookup: Optional[Callable[[int, int], Optional[bytes]]] = None,
     ) -> None:
-        self.relocate_lookup = relocate_lookup
+        self.addr_test = addr_test
         self.name_lookup = name_lookup
         self.bin_lookup = bin_lookup
         self.replacements = {}
@@ -59,9 +59,10 @@ class ParseAsm:
     def reset(self):
         self.replacements = {}
 
-    def is_relocated(self, addr: int) -> bool:
-        if callable(self.relocate_lookup):
-            return self.relocate_lookup(addr)
+    def is_addr(self, value: int) -> bool:
+        """Wrapper for user-provided address test"""
+        if callable(self.addr_test):
+            return self.addr_test(value)
 
         return False
 
@@ -72,16 +73,16 @@ class ParseAsm:
 
         return None
 
-    def replace(self, addr: int, exact: bool = False, test: bool = False) -> str:
+    def replace(self, value: int, exact: bool = False, test: bool = False) -> str:
         """Provide a replacement name for the given address."""
-        if test and not self.is_relocated(addr):
-            return hex(addr)  # TODO.
+        if test and not self.is_addr(value):
+            return hex(value)  # TODO.
 
-        if addr in self.replacements:
-            return self.replacements[addr]
+        if value in self.replacements:
+            return self.replacements[value]
 
-        if (name := self.lookup(addr, exact=exact)) is not None:
-            self.replacements[addr] = name
+        if (name := self.lookup(value, exact=exact)) is not None:
+            self.replacements[value] = name
             return name
 
         # The placeholder number corresponds to the number of addresses we have
@@ -89,7 +90,7 @@ class ParseAsm:
         # if we can replace some symbols with actual names in recomp but not orig.
         idx = len(self.replacements) + 1
         placeholder = f"<OFFSET{idx}>" if self.number_placeholders else "<OFFSET>"
-        self.replacements[addr] = placeholder
+        self.replacements[value] = placeholder
         return placeholder
 
     def hex_replace_always(self, match: re.Match) -> str:

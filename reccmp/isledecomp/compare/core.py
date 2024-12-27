@@ -107,12 +107,12 @@ class Compare:
         self._find_vtordisp()
 
         self.orig_sanitize = ParseAsm(
-            relocate_lookup=create_reloc_lookup(self.orig_bin),
+            addr_test=create_reloc_lookup(self.orig_bin),
             name_lookup=create_name_lookup(self._db.get_by_orig, "orig_addr"),
             bin_lookup=create_bin_lookup(self.orig_bin),
         )
         self.recomp_sanitize = ParseAsm(
-            relocate_lookup=create_reloc_lookup(self.recomp_bin),
+            addr_test=create_reloc_lookup(self.recomp_bin),
             name_lookup=create_name_lookup(self._db.get_by_recomp, "recomp_addr"),
             bin_lookup=create_bin_lookup(self.recomp_bin),
         )

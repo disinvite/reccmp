@@ -95,7 +95,7 @@ def test_jmp_table():
         return addr == 0x5555
 
     # Now add the relocation lookup
-    p = ParseAsm(relocate_lookup=relocate_lookup)
+    p = ParseAsm(addr_test=relocate_lookup)
     (_, op_str) = p.sanitize(inst)
     # Should replace it now
     assert op_str == "dword ptr [eax*4 + <OFFSET1>]"
@@ -157,7 +157,7 @@ def test_relocate_lookup():
     def relocate_lookup(addr: int) -> bool:
         return addr == 0x1234
 
-    p = ParseAsm(relocate_lookup=relocate_lookup)
+    p = ParseAsm(addr_test=relocate_lookup)
     (_, op_str) = p.sanitize(mock_inst("mov", "eax, 0x1234"))
     assert op_str == "eax, <OFFSET1>"
 
@@ -239,7 +239,7 @@ def test_pointer_compare():
     def name_lookup(addr: int, **_) -> Optional[str]:
         return "hello" if addr == 0x5555 else None
 
-    p = ParseAsm(relocate_lookup=relocate_lookup, name_lookup=name_lookup)
+    p = ParseAsm(addr_test=relocate_lookup, name_lookup=name_lookup)
 
     # Will always replace on MOV instruction
     (_, op_str) = p.sanitize(mock_inst("mov", "eax, 0x1234"))

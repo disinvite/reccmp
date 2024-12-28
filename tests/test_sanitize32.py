@@ -1,5 +1,6 @@
 """Tests for asm sanitize, 32-bit pointers."""
 
+from typing import Optional
 from unittest.mock import Mock, patch
 import pytest
 from reccmp.isledecomp.compare.asm.parse import DisasmLiteInst, ParseAsm
@@ -329,3 +330,58 @@ def test_sanitize_call_with_name_lookup():
 
     name_lookup.assert_called_with(0x1234, exact=True)
     assert op_str == "Hello"
+
+
+def test_replacement_numbering():
+    """If we can use the name lookup for the first address but not the second,
+    the second replacement should be <OFFSET2> not <OFFSET1>."""
+
+    def substitute_1234(addr: int, **_) -> Optional[str]:
+        return "Hello" if addr == 0x1234 else None
+
+    p = ParseAsm(name_lookup=substitute_1234)
+
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x1234]"))
+    assert op_str == "dword ptr [Hello]"
+
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 6, "inc", "dword ptr [0x5555]"))
+    assert op_str == "dword ptr [<OFFSET2>]"
+
+
+def test_absolute_indirect():
+    """**** Held over from previous test file. This behavior may change soon. ****
+    The instruction `call dword ptr [0x1234]` means we call the function
+    whose address is at 0x1234. (i.e. absolute indirect addressing mode)
+    It is probably more useful to show the name of the function itself if
+    we have it, but there are some circumstances where we want to replace
+    with the pointer's name (i.e. an import function)."""
+
+    def name_lookup(addr: int, **_) -> Optional[str]:
+        return {
+            0x1234: "Hello",
+            0x4321: "xyz",
+            0x5555: "Test",
+        }.get(addr)
+
+    def bin_lookup(addr: int, _: int) -> Optional[bytes]:
+        return (
+            {
+                0x1234: b"\x55\x55\x00\x00",
+                0x4321: b"\x99\x99\x00\x00",
+            }
+        ).get(addr)
+
+    p = ParseAsm(name_lookup=name_lookup, bin_lookup=bin_lookup)
+
+    # If we know the indirect address (0x5555)
+    # Arrow to indicate this is an indirect replacement
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "dword ptr [0x1234]"))
+    assert op_str == "dword ptr [->Test]"
+
+    # If we do not know the indirect address (0x9999)
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "dword ptr [0x4321]"))
+    assert op_str == "dword ptr [xyz]"
+
+    # If we can't read the indirect address
+    (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "dword ptr [0x5555]"))
+    assert op_str == "dword ptr [Test]"

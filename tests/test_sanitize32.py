@@ -385,3 +385,40 @@ def test_absolute_indirect():
     # If we can't read the indirect address
     (_, op_str) = p.sanitize(DisasmLiteInst(0x1000, 5, "call", "dword ptr [0x5555]"))
     assert op_str == "dword ptr [Test]"
+
+
+def test_consistent_numbering():
+    """In previous versions of reccmp, offset number would vary
+    depending on annotation coverage. The reason is that JMP destinations
+    and CMP immediate values are set only if the name is known, and the
+    placeholder offset number would increase when these were replaced.
+    The number should be consistent regardless of whether we replace
+    a value in these two kinds of instructions."""
+    code = (
+        b"\xe8\xfb\x0f\x00\x00"  #####  call  0x1000
+        b"\xa1\x34\x12\x00\x00"  #####  mov   eax, dword ptr [0x1234]
+        b"\xe9\xf1\x7f\x00\x00"  #####  jmp   0x8000
+        b"\xff\x05\x34\x12\x00\x00"  #  inc   dword ptr [0x1234]
+        b"\x3d\x55\x55\x00\x00"  #####  cmp   eax, 0x5555
+        b"\xff\x0d\x34\x12\x00\x00"  #  dec   dword ptr [0x1234]
+    )
+
+    # Run without name lookup
+    p = ParseAsm()
+    p.parse_asm(code)
+    assert p.replacements[0x1000] == "<OFFSET1>"
+    assert p.replacements[0x1234] == "<OFFSET2>"
+
+    # Assume only the JMP and CMP addresses are known so we can test
+    # the placeholder string for the other values.
+    def name_lookup(addr: int, **_) -> Optional[str]:
+        return {0x5555: "Test", 0x8000: "Hello"}.get(addr)
+
+    # Must be empty before starting
+    p = ParseAsm(name_lookup=name_lookup)
+    assert len(p.replacements) == 0
+
+    # Expect the two addresses to get the same placeholder
+    p.parse_asm(code)
+    assert p.replacements[0x1000] == "<OFFSET1>"
+    assert p.replacements[0x1234] == "<OFFSET2>"

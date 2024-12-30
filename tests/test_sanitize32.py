@@ -396,11 +396,10 @@ def test_consistent_numbering():
     a value in these two kinds of instructions."""
     code = (
         b"\xe8\xfb\x0f\x00\x00"  #####  call  0x1000
+        b"\xe9\xf6\x7f\x00\x00"  #####  jmp   0x8000
         b"\xa1\x34\x12\x00\x00"  #####  mov   eax, dword ptr [0x1234]
-        b"\xe9\xf1\x7f\x00\x00"  #####  jmp   0x8000
-        b"\xff\x05\x34\x12\x00\x00"  #  inc   dword ptr [0x1234]
         b"\x3d\x55\x55\x00\x00"  #####  cmp   eax, 0x5555
-        b"\xff\x0d\x34\x12\x00\x00"  #  dec   dword ptr [0x1234]
+        b"\xff\x05\x00\x20\x00\x00"  #  inc   dword ptr [0x2000]
     )
 
     # Run without name lookup
@@ -408,6 +407,7 @@ def test_consistent_numbering():
     p.parse_asm(code)
     assert p.replacements[0x1000] == "<OFFSET1>"
     assert p.replacements[0x1234] == "<OFFSET2>"
+    assert p.replacements[0x2000] == "<OFFSET3>"
 
     # Assume only the JMP and CMP addresses are known so we can test
     # the placeholder string for the other values.
@@ -422,3 +422,4 @@ def test_consistent_numbering():
     p.parse_asm(code)
     assert p.replacements[0x1000] == "<OFFSET1>"
     assert p.replacements[0x1234] == "<OFFSET2>"
+    assert p.replacements[0x2000] == "<OFFSET3>"

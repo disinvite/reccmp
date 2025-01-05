@@ -109,13 +109,15 @@ class Compare:
 
         self.orig_sanitize = ParseAsm(
             addr_test=create_reloc_lookup(self.orig_bin),
-            name_lookup=create_name_lookup(self._db.get_by_orig, "orig_addr"),
-            bin_lookup=create_bin_lookup(self.orig_bin),
+            name_lookup=create_name_lookup(
+                self._db.get_by_orig, self.orig_bin.read, "orig_addr"
+            ),
         )
         self.recomp_sanitize = ParseAsm(
             addr_test=create_reloc_lookup(self.recomp_bin),
-            name_lookup=create_name_lookup(self._db.get_by_recomp, "recomp_addr"),
-            bin_lookup=create_bin_lookup(self.recomp_bin),
+            name_lookup=create_name_lookup(
+                self._db.get_by_recomp, self.recomp_bin.read, "recomp_addr"
+            ),
         )
 
     def _load_cvdump(self):

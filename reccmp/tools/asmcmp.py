@@ -18,6 +18,12 @@ from reccmp.isledecomp import (
 )
 
 from reccmp.isledecomp.compare import Compare as IsleCompare
+from reccmp.isledecomp.compare.report import (
+    ReccmpStatusReport,
+    ReccmpComparedEntity,
+    deserialize_reccmp_report,
+    serialize_reccmp_report,
+)
 from reccmp.isledecomp.formats.detect import detect_image
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.types import EntityType
@@ -270,7 +276,9 @@ def main():
     function_count = 0
     total_accuracy = 0.0
     total_effective_accuracy = 0.0
-    htmlinsert = []
+
+    report = ReccmpStatusReport()
+    report.filename = target.original_path.name.lower()
 
     for match in isle_compare.compare_all():
         if not args.silent and args.diff is None:
@@ -290,34 +298,27 @@ def main():
             total_effective_accuracy += match.effective_ratio
 
         # If html, record the diffs to an HTML file
-        html_obj = {
-            "address": f"0x{match.orig_addr:x}",
-            "recomp": f"0x{match.recomp_addr:x}",
-            "name": match.name,
-            "matching": match.effective_ratio,
-        }
+        orig_addr = f"0x{match.orig_addr:x}"
+        recomp_addr = f"0x{match.recomp_addr:x}"
 
-        if match.is_effective_match:
-            html_obj["effective"] = True
-
-        if match.udiff is not None:
-            html_obj["diff"] = match.udiff
-
-        if match.is_stub:
-            html_obj["stub"] = True
-
-        htmlinsert.append(html_obj)
+        report.entities[orig_addr] = ReccmpComparedEntity(
+            orig_addr=orig_addr,
+            name=match.name,
+            accuracy=match.effective_ratio,
+            recomp_addr=recomp_addr,
+            is_effective=match.is_effective_match,
+            is_stub=match.is_stub,
+            diff=match.udiff,
+        )
 
     # Compare with saved diff report.
     if args.diff is not None:
         with open(args.diff, "r", encoding="utf-8") as f:
-            saved_data = json.load(f)
-
-        current_data = create_status_report(target.original_path, htmlinsert)
+            saved_data = deserialize_reccmp_report(json.load(f))
 
         diff_json(
             saved_data,
-            current_data,
+            report,
             show_both_addrs=args.print_rec_addr,
             is_plain=args.no_color,
         )
@@ -325,11 +326,11 @@ def main():
     ## Generate files and show summary.
 
     if args.json is not None:
-        report = create_status_report(target.original_path, htmlinsert)
-        gen_json(args.json, report)
+        gen_json(args.json, serialize_reccmp_report(report))
 
     if args.html is not None:
-        gen_html(args.html, json.dumps(htmlinsert))
+        obj = serialize_reccmp_report(report, diff_included=True)
+        gen_html(args.html, json.dumps(obj["data"]))
 
     implemented_funcs = function_count
 

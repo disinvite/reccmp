@@ -5,6 +5,11 @@ import json
 import logging
 from pathlib import Path
 from reccmp.isledecomp.utils import diff_json
+from reccmp.isledecomp.compare.report import (
+    ReccmpStatusReport,
+    ReccmpComparedEntity,
+    deserialize_reccmp_report,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -14,24 +19,16 @@ class InvalidReccmpReportError(Exception):
     """The given file is not a serialized reccmp report file"""
 
 
-def load_report_file(report_path: Path) -> dict:
+def load_report_file(report_path: Path) -> ReccmpStatusReport:
     """Deserialize from JSON at the given filename and return the report."""
-    try:
-        with report_path.open("r", encoding="utf-8") as f:
-            obj = json.load(f)
-    except json.decoder.JSONDecodeError as ex:
-        raise InvalidReccmpReportError from ex
 
-    # Rough estimate of whether this is a valid file
-    if "timestamp" not in obj or "format" not in obj:
-        raise InvalidReccmpReportError
-
-    # Add this key so we can distinguish the files later.
-    obj["report_filename"] = report_path.name
-    return obj
+    with report_path.open("r", encoding="utf-8") as f:
+        return deserialize_reccmp_report(json.load(f))
 
 
-def get_candidate_list(paths: list[Path], start_file: Path | None = None) -> list[dict]:
+def get_candidate_list(
+    paths: list[Path], start_file: Path | None = None
+) -> list[ReccmpStatusReport]:
     """Deserialize all sample files and return the list of reports.
     Exclude the starter file if it was included here by mistake.
     Does not remove duplicates."""
@@ -52,37 +49,28 @@ def get_candidate_list(paths: list[Path], start_file: Path | None = None) -> lis
     return candidates
 
 
-def use_orig_addr_as_key(data: list[dict]) -> dict:
-    """Converts the list of dicts with key "address" into a dict keyed by the address."""
-    # TODO: The file should already be in this format. (Version 2)
-    # The database will ensure that there are no duplicate orig addrs.
+def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
+    if addr in report.entities:
+        return report.entities[addr].accuracy
 
-    return {obj["address"]: obj for obj in data}
-
-
-def get_matching(obj: dict | None) -> float:
-    if obj is None:
-        return 0.0
-
-    return obj["matching"]
+    return 0.0
 
 
-def combine_sample_files(starter: dict, samples: list[dict]) -> dict:
+def combine_sample_files(
+    starter: ReccmpStatusReport, samples: list[ReccmpStatusReport]
+) -> ReccmpStatusReport:
     """Combines the sample reports into a single report for comparison.
     Uses the starter report because we defer to its value if we detect entropy."""
 
-    starter_invert = use_orig_addr_as_key(starter["data"])
-    samples_invert = [use_orig_addr_as_key(sample["data"]) for sample in samples]
+    output = ReccmpStatusReport()
+    output.filename = starter.filename
 
     # Combine every orig addr used in any of the files.
-    orig_addr_set = set(starter_invert.keys())
-    for sample in samples_invert:
-        orig_addr_set = orig_addr_set | sample.keys()
+    orig_addr_set = set(starter.entities.keys())
+    for sample in samples:
+        orig_addr_set = orig_addr_set | sample.entities.keys()
 
     all_orig_addrs = sorted(list(orig_addr_set))
-
-    # Data converted back to the serialized format to be passed into diff_json.
-    data = []
 
     # TODO: use new names from recomp files?
 
@@ -90,49 +78,37 @@ def combine_sample_files(starter: dict, samples: list[dict]) -> dict:
     for addr in all_orig_addrs:
         # TODO: If addr not in starter_invert --> new function
 
-        starter_entry = starter_invert[addr]
+        starter_entry = starter.entities[addr]
 
         # Match percentage for this entry from each sample.
         # Ignore effective match bool: this is the noise we want to eliminate.
-        sample_accuracy = [get_matching(s.get(addr)) for s in samples_invert]
+        sample_accuracy = [get_accuracy(s, addr) for s in samples]
 
         samples_are_alike = all(v == sample_accuracy[0] for v in sample_accuracy)
 
         # If the accuracy is the same for all samples, use the new value.
         if samples_are_alike:
-            new_entry = samples_invert[0][addr]
+            new_entry = samples[0].entities[addr]
 
             # Hack: use starter value here so entropy section (e.g. 100% -> 100%*) is empty in the diff.
             # But don't log an effective match unless the new accuracy is 100%.
-            is_effective = new_entry["matching"] == 1.0 and starter_entry.get(
-                "effective", False
+            is_effective = new_entry.accuracy == 1.0 and starter_entry.is_effective
+
+            output.entities[addr] = ReccmpComparedEntity(
+                orig_addr=addr,
+                name=new_entry.name,
+                accuracy=new_entry.accuracy,
+                is_effective=is_effective,
+                is_stub=new_entry.is_stub,
             )
 
-            output = {
-                "address": addr,
-                "name": new_entry["name"],
-                "matching": new_entry["matching"],
-                "effective": is_effective,
-                "stub": new_entry.get("stub", False),
-            }
-
-            data.append(output)
             continue
 
         # Else: Defer to starter value. No diff registered for this entry.
-        if addr in starter_invert:
-            output = {
-                "address": addr,
-                # "recomp": starter_entry["recomp"],
-                "name": starter_entry["name"],
-                "matching": starter_entry["matching"],
-                "effective": starter_entry.get("effective", False),
-                "stub": starter_entry.get("stub", False),
-            }
+        if addr in starter.entities:
+            output.entities[addr] = starter_entry
 
-            data.append(output)
-
-    return {"file": starter["file"], "format": starter["format"], "data": data}
+    return output
 
 
 def main():
@@ -175,8 +151,7 @@ def main():
         return 0
 
     # hack
-    assert all(saved_data["file"] == c["file"] for c in candidates)
-    assert all(saved_data["format"] == c["format"] for c in candidates)
+    assert all(saved_data.filename == c.filename for c in candidates)
 
     new_data = combine_sample_files(saved_data, candidates)
     diff_json(saved_data, new_data, show_both_addrs=False, is_plain=args.no_color)

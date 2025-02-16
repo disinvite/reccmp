@@ -59,7 +59,7 @@ def _deserialize_reccmp_report_version_1(json_obj: dict) -> ReccmpStatusReport:
             orig_addr=obj["address"],
             name=obj["name"],
             accuracy=obj["matching"],
-            recomp_addr=obj.get("recomp", ""),
+            recomp_addr=obj.get("recomp"),
             is_stub=obj.get("stub", False),
             is_effective=obj.get("effective", False),
         )
@@ -84,10 +84,13 @@ def _serialize_entity(
     """To save space in the JSON file, don't set bool fields when they are false"""
     obj = {
         "address": addr,  # prefer dict key over redundant value in entity
-        "recomp": entity.recomp_addr or "",
         "name": entity.name,
         "matching": entity.accuracy,
     }
+
+    # No recomp addr for aggregate reports.
+    if (entity.recomp_addr or "") != "":
+        obj["recomp"] = entity.recomp_addr
 
     if entity.is_effective:
         obj["effective"] = True

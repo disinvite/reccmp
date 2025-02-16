@@ -7,8 +7,8 @@ from pathlib import Path
 from reccmp.isledecomp.utils import diff_json
 from reccmp.isledecomp.compare.report import (
     ReccmpStatusReport,
-    ReccmpComparedEntity,
     deserialize_reccmp_report,
+    serialize_reccmp_report,
 )
 
 
@@ -19,6 +19,14 @@ class InvalidReccmpReportError(Exception):
     """The given file is not a serialized reccmp report file"""
 
 
+def write_report_file(output_file: Path, report: ReccmpStatusReport):
+    """Convert the status report to JSON and write to a file."""
+    json_obj = serialize_reccmp_report(report)
+
+    with open(output_file, "w+", encoding="utf-8") as f:
+        json.dump(json_obj, f)
+
+
 def load_report_file(report_path: Path) -> ReccmpStatusReport:
     """Deserialize from JSON at the given filename and return the report."""
 
@@ -26,27 +34,20 @@ def load_report_file(report_path: Path) -> ReccmpStatusReport:
         return deserialize_reccmp_report(json.load(f))
 
 
-def get_candidate_list(
-    paths: list[Path], start_file: Path | None = None
-) -> list[ReccmpStatusReport]:
+def deserialize_sample_files(paths: list[Path]) -> list[ReccmpStatusReport]:
     """Deserialize all sample files and return the list of reports.
-    Exclude the starter file if it was included here by mistake.
     Does not remove duplicates."""
-    candidates = []
+    samples = []
 
     for path in paths:
-        if start_file is not None and path == start_file:
-            logger.warning("Not sampling starting file %s", start_file)
-            continue
-
         if path.is_file():
             try:
-                obj = load_report_file(path)
-                candidates.append(obj)
+                report = load_report_file(path)
+                samples.append(report)
             except InvalidReccmpReportError:
                 logger.warning("Skipping '%s' due to import error", path)
 
-    return candidates
+    return samples
 
 
 def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
@@ -56,62 +57,37 @@ def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
     return 0.0
 
 
-def combine_sample_files(
-    starter: ReccmpStatusReport, samples: list[ReccmpStatusReport]
-) -> ReccmpStatusReport:
-    """Combines the sample reports into a single report for comparison.
-    Uses the starter report because we defer to its value if we detect entropy."""
+def combine_sample_files(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
+    """Combines the sample reports into a single report for comparison."""
+    assert len(samples) > 0
 
     output = ReccmpStatusReport()
-    output.filename = starter.filename
+    output.filename = samples[0].filename
 
     # Combine every orig addr used in any of the files.
-    orig_addr_set = set(starter.entities.keys())
+    orig_addr_set: set[str] = set()
     for sample in samples:
         orig_addr_set = orig_addr_set | sample.entities.keys()
 
     all_orig_addrs = sorted(list(orig_addr_set))
 
-    # TODO: use new names from recomp files?
-
-    # Now we make a determination for each orig addr.
     for addr in all_orig_addrs:
-        if addr not in starter.entities:
-            # This is a new entity, which means this diff is not noise.
-            # Use the entry from the first sample that has this addr.
-            for sample in samples:
-                if addr in sample.entities:
-                    output.entities[addr] = sample.entities[addr]
-                    break
-            continue
+        assert any(addr in sample.entities for sample in samples)
 
-        starter_entry = starter.entities[addr]
+        # Find the first sample that used this addr to populate data for the new report.
+        for sample in samples:
+            if addr in sample.entities:
+                # Set up our data
+                output.entities[addr] = sample.entities[addr]
+                break
 
-        # Match percentage for this entry from each sample.
-        # Ignore effective match bool: this is the noise we want to eliminate.
+        # Our aggregate accuracy score is the highest from any report.
         sample_accuracy = [get_accuracy(s, addr) for s in samples]
+        agg_accuracy = max(sample_accuracy)
 
-        samples_are_alike = all(v == sample_accuracy[0] for v in sample_accuracy)
-
-        # If the accuracy is the same for all samples, use the new value.
-        if samples_are_alike:
-            new_entry = samples[0].entities[addr]
-
-            # Hack: use starter value here so entropy section (e.g. 100% -> 100%*) is empty in the diff.
-            # But don't log an effective match unless the new accuracy is 100%.
-            is_effective = new_entry.accuracy == 1.0 and starter_entry.is_effective
-
-            output.entities[addr] = ReccmpComparedEntity(
-                orig_addr=addr,
-                name=new_entry.name,
-                accuracy=new_entry.accuracy,
-                is_effective=is_effective,
-                is_stub=new_entry.is_stub,
-            )
-
-        else:
-            # Defer to starter value. No diff registered for this entry.
-            output.entities[addr] = starter_entry
+        output.entities[addr].accuracy = agg_accuracy
+        output.entities[addr].recomp_addr = None  # ?
+        output.entities[addr].is_effective = False  # ?
 
     return output
 
@@ -119,16 +95,24 @@ def combine_sample_files(
 def main():
     parser = argparse.ArgumentParser(
         allow_abbrev=False,
-        description="Compare saved accuracy reports.",
+        description="Aggregate saved accuracy reports.",
     )
-    parser.add_argument("--A", type=Path, metavar="<file>", help="Starting file.")
     parser.add_argument(
-        "--B",
+        "--diff", type=Path, metavar="<files>", nargs="+", help="Report files to diff."
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        metavar="<file>",
+        help="Where to save the aggregate file.",
+    )
+    parser.add_argument(
+        "--samples",
         type=Path,
         metavar="<files>",
         nargs="+",
-        help="Target file(s).",
-        required=True,
+        help="Report files to aggregate.",
     )
     parser.add_argument(
         "--no-color", "-n", action="store_true", help="Do not color the output"
@@ -136,30 +120,35 @@ def main():
 
     args = parser.parse_args()
 
-    try:
-        saved_data = load_report_file(args.A)
-    except InvalidReccmpReportError:
-        logger.error("Could not load starting file %s", args.A)
-        return 1
+    agg_report: ReccmpStatusReport | None = None
 
-    candidates = get_candidate_list(args.B, args.A)
+    if args.samples is not None:
+        samples = deserialize_sample_files(args.samples)
 
-    if len(candidates) == 0:
-        logger.error("No files to sample!")
-        return 1
+        if len(samples) < 2:
+            logger.error("Not enough samples to aggregate!")
+            return 1
 
-    if len(candidates) == 1:
-        # Standard diff
-        diff_json(
-            saved_data, candidates[0], show_both_addrs=False, is_plain=args.no_color
-        )
-        return 0
+        # hack
+        assert all(samples[0].filename == s.filename for s in samples)
+        agg_report = combine_sample_files(samples)
 
-    # hack
-    assert all(saved_data.filename == c.filename for c in candidates)
+        if args.output is not None:
+            write_report_file(args.output, agg_report)
 
-    new_data = combine_sample_files(saved_data, candidates)
-    diff_json(saved_data, new_data, show_both_addrs=False, is_plain=args.no_color)
+    # If --diff has at least one file and we aggregated some samples this run, diff the first file and the aggregate.
+    # If --diff has two or more files and we did not aggregate this run, diff the first two files in the list.
+    if args.diff is not None:
+        saved_data = load_report_file(args.diff[0])
+
+        if agg_report is None:
+            if len(args.diff) > 1:
+                agg_report = load_report_file(args.diff[1])
+            else:
+                logger.error("Not enough files to diff!")
+                return 1
+
+        diff_json(saved_data, agg_report, show_both_addrs=False, is_plain=args.no_color)
 
     return 0
 

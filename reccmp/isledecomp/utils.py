@@ -1,6 +1,5 @@
 from datetime import datetime
 import logging
-from pathlib import Path
 import colorama
 
 
@@ -178,21 +177,17 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
 def diff_json(
     saved_data,
     new_data,
-    orig_file: Path,
     show_both_addrs: bool = False,
     is_plain: bool = False,
 ):
-    """Using a saved copy of the diff summary and the current data, print a
-    report showing which functions/symbols have changed match percentage."""
+    """Compare two status report files, determine what items changed, and print the result."""
 
     # Don't try to diff a report generated for a different binary file
-    base_file = orig_file.name.lower()
-
-    if saved_data.get("file") != base_file:
+    if saved_data.get("file") != new_data.get("file"):
         logging.getLogger().error(
             "Diff report for '%s' does not match current file '%s'",
             saved_data.get("file"),
-            base_file,
+            new_data.get("file"),
         )
         return
 
@@ -214,7 +209,7 @@ def diff_json(
 
     # Convert to dict, using orig_addr as key
     saved_invert = {obj["address"]: obj for obj in saved_data["data"]}
-    new_invert = {obj["address"]: obj for obj in new_data}
+    new_invert = {obj["address"]: obj for obj in new_data["data"]}
 
     all_addrs = set(saved_invert.keys()).union(new_invert.keys())
 

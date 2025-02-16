@@ -34,8 +34,8 @@ logger = logging.getLogger()
 colorama.just_fix_windows_console()
 
 
-def gen_json(json_file: str, orig_file: Path, data):
-    """Create a JSON file that contains the comparison summary"""
+def create_status_report(orig_file: Path, data):
+    """Create a dict that contains the comparison summary and metadata."""
 
     # If the structure of the JSON file ever changes, we would run into a problem
     # reading an older format file in the CI action. Mark which version we are
@@ -47,16 +47,19 @@ def gen_json(json_file: str, orig_file: Path, data):
         {key: value for (key, value) in obj.items() if key != "diff"} for obj in data
     ]
 
+    return {
+        "file": orig_file.name.lower(),
+        "format": json_format_version,
+        "timestamp": datetime.now().timestamp(),
+        "data": reduced_data,
+    }
+
+
+def gen_json(json_file: str, report):
+    """Convert the status report to JSON and write to a file."""
+
     with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "file": orig_file.name.lower(),
-                "format": json_format_version,
-                "timestamp": datetime.now().timestamp(),
-                "data": reduced_data,
-            },
-            f,
-        )
+        json.dump(report, f, indent=1)
 
 
 def gen_html(html_file, data):
@@ -310,18 +313,20 @@ def main():
         with open(args.diff, "r", encoding="utf-8") as f:
             saved_data = json.load(f)
 
-            diff_json(
-                saved_data,
-                htmlinsert,
-                target.original_path,
-                show_both_addrs=args.print_rec_addr,
-                is_plain=args.no_color,
-            )
+        current_data = create_status_report(target.original_path, htmlinsert)
+
+        diff_json(
+            saved_data,
+            current_data,
+            show_both_addrs=args.print_rec_addr,
+            is_plain=args.no_color,
+        )
 
     ## Generate files and show summary.
 
     if args.json is not None:
-        gen_json(args.json, target.original_path, htmlinsert)
+        report = create_status_report(target.original_path, htmlinsert)
+        gen_json(args.json, report)
 
     if args.html is not None:
         gen_html(args.html, json.dumps(htmlinsert))

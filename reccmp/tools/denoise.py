@@ -61,8 +61,7 @@ def combine_sample_files(samples: list[ReccmpStatusReport]) -> ReccmpStatusRepor
     """Combines the sample reports into a single report for comparison."""
     assert len(samples) > 0
 
-    output = ReccmpStatusReport()
-    output.filename = samples[0].filename
+    output = ReccmpStatusReport(filename=samples[0].filename)
 
     # Combine every orig addr used in any of the files.
     orig_addr_set: set[str] = set()

@@ -1,5 +1,7 @@
 from datetime import datetime
 from dataclasses import dataclass
+from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
 from .diff import CombinedDiffOutput
 
 
@@ -24,84 +26,88 @@ class ReccmpComparedEntity:
 class ReccmpStatusReport:
     # The filename of the original binary. This is here to avoid comparing reports derived from different files.
     # TODO: in the future, we may want to use the hash instead
-    filename: str | None
+    filename: str
 
     # Creation date of the file
-    timestamp: datetime | None
+    timestamp: datetime
 
     # Using orig addr as the key.
     entities: dict[str, ReccmpComparedEntity]
 
-    def __init__(self) -> None:
-        self.filename = None
-        self.timestamp = None
+    def __init__(self, filename: str, timestamp: datetime | None = None) -> None:
+        self.filename = filename
+        if timestamp is not None:
+            self.timestamp = timestamp
+        else:
+            self.timestamp = datetime.now().replace(microsecond=0)
+
         self.entities = {}
 
 
-def _deserialize_reccmp_report_version_1(json_obj: dict) -> ReccmpStatusReport:
-    report = ReccmpStatusReport()
-    report.filename = json_obj.get("file", None)
+class JSONEntityVersion1(BaseModel):
+    address: str
+    name: str
+    matching: float
+    # Optional fields
+    recomp: str | None = Field(default=None)
+    stub: bool = Field(default=False)
+    effective: bool = Field(default=False)
+    diff: CombinedDiffOutput | None = Field(default=None)
 
-    if "timestamp" in json_obj:
-        report.timestamp = datetime.fromtimestamp(json_obj["timestamp"])
 
-    for obj in json_obj.get("data", []):
-        if "address" not in obj or "name" not in obj or "matching" not in obj:
-            # error?
-            continue
+class JSONReportVersion1(BaseModel):
+    file: str
+    format: Literal[1]
+    timestamp: float
+    data: list[JSONEntityVersion1]
 
-        orig_addr = obj["address"]
-        if orig_addr in report.entities:
-            # error?
-            continue
+    @classmethod
+    def from_report(cls, report: ReccmpStatusReport) -> "JSONReportVersion1":
+        entities = [
+            JSONEntityVersion1(
+                address=addr,  # prefer dict key over redundant value in entity
+                name=e.name,
+                matching=e.accuracy,
+                recomp=e.recomp_addr,
+                stub=e.is_stub,
+                effective=e.is_effective,
+                diff=e.diff,
+            )
+            for addr, e in report.entities.items()
+        ]
 
-        report.entities[orig_addr] = ReccmpComparedEntity(
-            orig_addr=obj["address"],
-            name=obj["name"],
-            accuracy=obj["matching"],
-            recomp_addr=obj.get("recomp"),
-            is_stub=obj.get("stub", False),
-            is_effective=obj.get("effective", False),
+        return cls(
+            file=report.filename,
+            format=1,
+            timestamp=report.timestamp.timestamp(),
+            data=entities,
+        )
+
+
+def _deserialize_reccmp_report_version_1(obj: JSONReportVersion1) -> ReccmpStatusReport:
+    report = ReccmpStatusReport(
+        filename=obj.file, timestamp=datetime.fromtimestamp(obj.timestamp)
+    )
+
+    for e in obj.data:
+        report.entities[e.address] = ReccmpComparedEntity(
+            orig_addr=e.address,
+            name=e.name,
+            accuracy=e.matching,
+            recomp_addr=e.recomp,
+            is_stub=e.stub,
+            is_effective=e.effective,
         )
 
     return report
 
 
 def deserialize_reccmp_report(json_obj: dict) -> ReccmpStatusReport:
-    if "timestamp" not in json_obj:
-        raise ReccmpReportDeserializeError
-
-    format_version = json_obj.get("format", 1)
-    if format_version == 1:
-        return _deserialize_reccmp_report_version_1(json_obj)
-
-    raise ReccmpReportDeserializeError
-
-
-def _serialize_entity(
-    addr: str, entity: ReccmpComparedEntity, diff_included: bool = False
-) -> dict:
-    """To save space in the JSON file, don't set bool fields when they are false"""
-    obj = {
-        "address": addr,  # prefer dict key over redundant value in entity
-        "name": entity.name,
-        "matching": entity.accuracy,
-    }
-
-    # No recomp addr for aggregate reports.
-    if (entity.recomp_addr or "") != "":
-        obj["recomp"] = entity.recomp_addr
-
-    if entity.is_effective:
-        obj["effective"] = True
-
-    if entity.diff is not None and diff_included:
-        obj["diff"] = entity.diff
-
-    if entity.is_stub:
-        obj["stub"] = True
-
-    return obj
+    try:
+        obj = JSONReportVersion1(**json_obj)
+        return _deserialize_reccmp_report_version_1(obj)
+    except ValidationError as ex:
+        raise ReccmpReportDeserializeError from ex
 
 
 def serialize_reccmp_report(
@@ -109,14 +115,12 @@ def serialize_reccmp_report(
 ) -> dict:
     """Flatten the report into a dict to be written using json.dump"""
     now = datetime.now().replace(microsecond=0)
-    obj = {
-        "file": report.filename,
-        "format": JSON_FORMAT_VERSION,
-        "timestamp": now.timestamp(),
-        "data": [
-            _serialize_entity(addr, e, diff_included)
-            for addr, e in report.entities.items()
-        ],
-    }
+    report.timestamp = now
+    obj = JSONReportVersion1.from_report(report)
 
-    return obj
+    # Crude but necessary. HTML output needs diff, but it is excluded from the JSON report.
+    if not diff_included:
+        for x in obj.data:
+            x.diff = None
+
+    return obj.model_dump(exclude_defaults=True)

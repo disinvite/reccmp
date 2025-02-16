@@ -277,8 +277,7 @@ def main():
     total_accuracy = 0.0
     total_effective_accuracy = 0.0
 
-    report = ReccmpStatusReport()
-    report.filename = target.original_path.name.lower()
+    report = ReccmpStatusReport(filename=target.original_path.name.lower())
 
     for match in isle_compare.compare_all():
         if not args.silent and args.diff is None:

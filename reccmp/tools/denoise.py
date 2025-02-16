@@ -76,7 +76,14 @@ def combine_sample_files(
 
     # Now we make a determination for each orig addr.
     for addr in all_orig_addrs:
-        # TODO: If addr not in starter_invert --> new function
+        if addr not in starter.entities:
+            # This is a new entity, which means this diff is not noise.
+            # Use the entry from the first sample that has this addr.
+            for sample in samples:
+                if addr in sample.entities:
+                    output.entities[addr] = sample.entities[addr]
+                    break
+            continue
 
         starter_entry = starter.entities[addr]
 
@@ -102,10 +109,8 @@ def combine_sample_files(
                 is_stub=new_entry.is_stub,
             )
 
-            continue
-
-        # Else: Defer to starter value. No diff registered for this entry.
-        if addr in starter.entities:
+        else:
+            # Defer to starter value. No diff registered for this entry.
             output.entities[addr] = starter_entry
 
     return output

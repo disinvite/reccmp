@@ -1,7 +1,7 @@
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Literal
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 from .diff import CombinedDiffOutput
 
 
@@ -44,15 +44,16 @@ class ReccmpStatusReport:
         self.entities = {}
 
 
-class JSONEntityVersion1(BaseModel):
+@dataclass
+class JSONEntityVersion1:
     address: str
     name: str
     matching: float
     # Optional fields
-    recomp: str | None = Field(default=None)
-    stub: bool = Field(default=False)
-    effective: bool = Field(default=False)
-    diff: CombinedDiffOutput | None = Field(default=None)
+    recomp: str | None = None
+    stub: bool = False
+    effective: bool = False
+    diff: CombinedDiffOutput | None = None
 
 
 class JSONReportVersion1(BaseModel):

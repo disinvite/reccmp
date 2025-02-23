@@ -5,8 +5,6 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime
-from pathlib import Path
 
 from pystache import Renderer  # type: ignore[import-untyped]
 import colorama
@@ -38,27 +36,6 @@ from reccmp.project.detect import (
 
 logger = logging.getLogger()
 colorama.just_fix_windows_console()
-
-
-def create_status_report(orig_file: Path, data):
-    """Create a dict that contains the comparison summary and metadata."""
-
-    # If the structure of the JSON file ever changes, we would run into a problem
-    # reading an older format file in the CI action. Mark which version we are
-    # generating so we could potentially address this down the road.
-    json_format_version = 1
-
-    # Remove the diff field
-    reduced_data = [
-        {key: value for (key, value) in obj.items() if key != "diff"} for obj in data
-    ]
-
-    return {
-        "file": orig_file.name.lower(),
-        "format": json_format_version,
-        "timestamp": datetime.now().timestamp(),
-        "data": reduced_data,
-    }
 
 
 def gen_json(json_file: str, report):

@@ -2,6 +2,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Literal
 from pydantic import BaseModel, ValidationError
+from pydantic_core import from_json
 from .diff import CombinedDiffOutput
 
 
@@ -103,9 +104,9 @@ def _deserialize_reccmp_report_version_1(obj: JSONReportVersion1) -> ReccmpStatu
     return report
 
 
-def deserialize_reccmp_report(json_obj: dict) -> ReccmpStatusReport:
+def deserialize_reccmp_report(json_str: str) -> ReccmpStatusReport:
     try:
-        obj = JSONReportVersion1(**json_obj)
+        obj = JSONReportVersion1.model_validate(from_json(json_str))
         return _deserialize_reccmp_report_version_1(obj)
     except ValidationError as ex:
         raise ReccmpReportDeserializeError from ex
@@ -113,7 +114,7 @@ def deserialize_reccmp_report(json_obj: dict) -> ReccmpStatusReport:
 
 def serialize_reccmp_report(
     report: ReccmpStatusReport, diff_included: bool = False
-) -> dict:
+) -> str:
     """Flatten the report into a dict to be written using json.dump"""
     now = datetime.now().replace(microsecond=0)
     report.timestamp = now
@@ -124,4 +125,4 @@ def serialize_reccmp_report(
         for x in obj.data:
             x.diff = None
 
-    return obj.model_dump(exclude_defaults=True)
+    return obj.model_dump_json(exclude_defaults=True)

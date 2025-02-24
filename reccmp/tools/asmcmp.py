@@ -2,7 +2,6 @@
 
 import argparse
 import base64
-import json
 import logging
 import os
 
@@ -38,11 +37,11 @@ logger = logging.getLogger()
 colorama.just_fix_windows_console()
 
 
-def gen_json(json_file: str, report):
+def gen_json(json_file: str, json_str: str):
     """Convert the status report to JSON and write to a file."""
 
     with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=1)
+        f.write(json_str)
 
 
 def gen_html(html_file, data):
@@ -290,7 +289,7 @@ def main():
     # Compare with saved diff report.
     if args.diff is not None:
         with open(args.diff, "r", encoding="utf-8") as f:
-            saved_data = deserialize_reccmp_report(json.load(f))
+            saved_data = deserialize_reccmp_report(f.read())
 
         diff_json(
             saved_data,
@@ -305,8 +304,7 @@ def main():
         gen_json(args.json, serialize_reccmp_report(report))
 
     if args.html is not None:
-        obj = serialize_reccmp_report(report, diff_included=True)
-        gen_html(args.html, json.dumps(obj["data"]))
+        gen_html(args.html, serialize_reccmp_report(report, diff_included=True))
 
     implemented_funcs = function_count
 

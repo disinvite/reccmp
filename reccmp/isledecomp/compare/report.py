@@ -43,6 +43,54 @@ class ReccmpStatusReport:
         self.entities = {}
 
 
+def combine_reports(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
+    """Combines the sample reports into a single report for comparison.
+    Currently, the only method of aggregating the data is to use the highest
+    accuracy score for each address from any report."""
+    assert len(samples) > 0
+
+    def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
+        """Helper to return the accuracy score of the entity at the given address.
+        If the report doesn't have an entity there, return zero.
+        This is fine because the goal is to get the max accuracy value."""
+        if addr in report.entities:
+            return report.entities[addr].accuracy
+
+        return 0.0
+
+    output = ReccmpStatusReport(filename=samples[0].filename)
+
+    # Combine every orig addr used in any of the files.
+    orig_addr_set: set[str] = set()
+    for sample in samples:
+        orig_addr_set = orig_addr_set | sample.entities.keys()
+
+    all_orig_addrs = sorted(list(orig_addr_set))
+
+    for addr in all_orig_addrs:
+        assert any(addr in sample.entities for sample in samples)
+
+        # Find the first sample that used this addr to populate data for the new report.
+        for sample in samples:
+            if addr in sample.entities:
+                # Set up our data
+                output.entities[addr] = sample.entities[addr]
+                break
+
+        # Our aggregate accuracy score is the highest from any report.
+        sample_accuracy = [get_accuracy(s, addr) for s in samples]
+        agg_accuracy = max(sample_accuracy)
+
+        output.entities[addr].accuracy = agg_accuracy
+        output.entities[addr].recomp_addr = None  # ?
+        output.entities[addr].is_effective_match = False  # ?
+
+    return output
+
+
+#### JSON schemas and conversion functions ####
+
+
 @dataclass
 class JSONEntityVersion1:
     address: str

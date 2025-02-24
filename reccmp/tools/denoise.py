@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import logging
 from pathlib import Path
 from reccmp.isledecomp.utils import diff_json
 from reccmp.isledecomp.compare.report import (
     ReccmpStatusReport,
+    combine_reports,
+    ReccmpReportDeserializeError,
     deserialize_reccmp_report,
     serialize_reccmp_report,
 )
@@ -15,23 +16,19 @@ from reccmp.isledecomp.compare.report import (
 logger = logging.getLogger(__name__)
 
 
-class InvalidReccmpReportError(Exception):
-    """The given file is not a serialized reccmp report file"""
-
-
 def write_report_file(output_file: Path, report: ReccmpStatusReport):
     """Convert the status report to JSON and write to a file."""
-    json_obj = serialize_reccmp_report(report)
+    json_str = serialize_reccmp_report(report)
 
     with open(output_file, "w+", encoding="utf-8") as f:
-        json.dump(json_obj, f)
+        f.write(json_str)
 
 
 def load_report_file(report_path: Path) -> ReccmpStatusReport:
     """Deserialize from JSON at the given filename and return the report."""
 
     with report_path.open("r", encoding="utf-8") as f:
-        return deserialize_reccmp_report(json.load(f))
+        return deserialize_reccmp_report(f.read())
 
 
 def deserialize_sample_files(paths: list[Path]) -> list[ReccmpStatusReport]:
@@ -44,51 +41,10 @@ def deserialize_sample_files(paths: list[Path]) -> list[ReccmpStatusReport]:
             try:
                 report = load_report_file(path)
                 samples.append(report)
-            except InvalidReccmpReportError:
+            except ReccmpReportDeserializeError:
                 logger.warning("Skipping '%s' due to import error", path)
 
     return samples
-
-
-def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
-    if addr in report.entities:
-        return report.entities[addr].accuracy
-
-    return 0.0
-
-
-def combine_sample_files(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
-    """Combines the sample reports into a single report for comparison."""
-    assert len(samples) > 0
-
-    output = ReccmpStatusReport(filename=samples[0].filename)
-
-    # Combine every orig addr used in any of the files.
-    orig_addr_set: set[str] = set()
-    for sample in samples:
-        orig_addr_set = orig_addr_set | sample.entities.keys()
-
-    all_orig_addrs = sorted(list(orig_addr_set))
-
-    for addr in all_orig_addrs:
-        assert any(addr in sample.entities for sample in samples)
-
-        # Find the first sample that used this addr to populate data for the new report.
-        for sample in samples:
-            if addr in sample.entities:
-                # Set up our data
-                output.entities[addr] = sample.entities[addr]
-                break
-
-        # Our aggregate accuracy score is the highest from any report.
-        sample_accuracy = [get_accuracy(s, addr) for s in samples]
-        agg_accuracy = max(sample_accuracy)
-
-        output.entities[addr].accuracy = agg_accuracy
-        output.entities[addr].recomp_addr = None  # ?
-        output.entities[addr].is_effective_match = False  # ?
-
-    return output
 
 
 def main():
@@ -130,7 +86,7 @@ def main():
 
         # hack
         assert all(samples[0].filename == s.filename for s in samples)
-        agg_report = combine_sample_files(samples)
+        agg_report = combine_reports(samples)
 
         if args.output is not None:
             write_report_file(args.output, agg_report)

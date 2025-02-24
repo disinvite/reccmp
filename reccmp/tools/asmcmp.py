@@ -44,14 +44,14 @@ def gen_json(json_file: str, json_str: str):
         f.write(json_str)
 
 
-def gen_html(html_file, data):
+def gen_html(html_file: str, report: str):
     js_path = get_asset_file("../assets/reccmp.js")
     with open(js_path, "r", encoding="utf-8") as f:
         reccmp_js = f.read()
 
     output_data = Renderer().render_path(
         get_asset_file("../assets/template.html"),
-        {"data": data, "reccmp_js": reccmp_js},
+        {"report": report, "reccmp_js": reccmp_js},
     )
 
     with open(html_file, "w", encoding="utf-8") as htmlfile:

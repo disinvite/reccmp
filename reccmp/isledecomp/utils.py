@@ -141,7 +141,7 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
             new_pct = (
                 "stub"
                 if new.is_stub
-                else percent_string(new.accuracy, new.is_effective, is_plain)
+                else percent_string(new.accuracy, new.is_effective_match, is_plain)
             )
 
             # Prefer the current name of this function if we have it.
@@ -154,7 +154,7 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
             old_pct = (
                 "stub"
                 if saved.is_stub
-                else percent_string(saved.accuracy, saved.is_effective, is_plain)
+                else percent_string(saved.accuracy, saved.is_effective_match, is_plain)
             )
 
             if name == "":
@@ -270,7 +270,7 @@ def diff_json(
         and new is not None
         and new.accuracy == 1.0
         and saved.accuracy == 1.0
-        and new.is_effective != saved.is_effective
+        and new.is_effective_match != saved.is_effective_match
     }
 
     get_diff_str = diff_json_display(show_both_addrs, is_plain)

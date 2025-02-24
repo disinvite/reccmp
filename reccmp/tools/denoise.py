@@ -86,7 +86,7 @@ def combine_sample_files(samples: list[ReccmpStatusReport]) -> ReccmpStatusRepor
 
         output.entities[addr].accuracy = agg_accuracy
         output.entities[addr].recomp_addr = None  # ?
-        output.entities[addr].is_effective = False  # ?
+        output.entities[addr].is_effective_match = False  # ?
 
     return output
 

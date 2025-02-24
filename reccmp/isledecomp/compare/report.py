@@ -6,9 +6,6 @@ from pydantic_core import from_json
 from .diff import CombinedDiffOutput
 
 
-JSON_FORMAT_VERSION = 1
-
-
 class ReccmpReportDeserializeError(Exception):
     """The given file is not a serialized reccmp report file"""
 
@@ -19,17 +16,18 @@ class ReccmpComparedEntity:
     name: str
     accuracy: float
     recomp_addr: str | None = None
-    is_effective: bool = False
+    is_effective_match: bool = False
     is_stub: bool = False
     diff: CombinedDiffOutput | None = None
 
 
 class ReccmpStatusReport:
-    # The filename of the original binary. This is here to avoid comparing reports derived from different files.
+    # The filename of the original binary.
+    # This is here to avoid comparing reports derived from different files.
     # TODO: in the future, we may want to use the hash instead
     filename: str
 
-    # Creation date of the file
+    # Creation date of the report file.
     timestamp: datetime
 
     # Using orig addr as the key.
@@ -63,30 +61,33 @@ class JSONReportVersion1(BaseModel):
     timestamp: float
     data: list[JSONEntityVersion1]
 
-    @classmethod
-    def from_report(cls, report: ReccmpStatusReport) -> "JSONReportVersion1":
-        entities = [
-            JSONEntityVersion1(
-                address=addr,  # prefer dict key over redundant value in entity
-                name=e.name,
-                matching=e.accuracy,
-                recomp=e.recomp_addr,
-                stub=e.is_stub,
-                effective=e.is_effective,
-                diff=e.diff,
-            )
-            for addr, e in report.entities.items()
-        ]
 
-        return cls(
-            file=report.filename,
-            format=1,
-            timestamp=report.timestamp.timestamp(),
-            data=entities,
+def _serialize_version_1(
+    report: ReccmpStatusReport, diff_included: bool = False
+) -> JSONReportVersion1:
+    """The HTML file needs the diff data, but it is omitted from the JSON report."""
+    entities = [
+        JSONEntityVersion1(
+            address=addr,  # prefer dict key over redundant value in entity
+            name=e.name,
+            matching=e.accuracy,
+            recomp=e.recomp_addr,
+            stub=e.is_stub,
+            effective=e.is_effective_match,
+            diff=e.diff if diff_included else None,
         )
+        for addr, e in report.entities.items()
+    ]
+
+    return JSONReportVersion1(
+        file=report.filename,
+        format=1,
+        timestamp=report.timestamp.timestamp(),
+        data=entities,
+    )
 
 
-def _deserialize_reccmp_report_version_1(obj: JSONReportVersion1) -> ReccmpStatusReport:
+def _deserialize_version_1(obj: JSONReportVersion1) -> ReccmpStatusReport:
     report = ReccmpStatusReport(
         filename=obj.file, timestamp=datetime.fromtimestamp(obj.timestamp)
     )
@@ -98,7 +99,7 @@ def _deserialize_reccmp_report_version_1(obj: JSONReportVersion1) -> ReccmpStatu
             accuracy=e.matching,
             recomp_addr=e.recomp,
             is_stub=e.stub,
-            is_effective=e.effective,
+            is_effective_match=e.effective,
         )
 
     return report
@@ -107,7 +108,7 @@ def _deserialize_reccmp_report_version_1(obj: JSONReportVersion1) -> ReccmpStatu
 def deserialize_reccmp_report(json_str: str) -> ReccmpStatusReport:
     try:
         obj = JSONReportVersion1.model_validate(from_json(json_str))
-        return _deserialize_reccmp_report_version_1(obj)
+        return _deserialize_version_1(obj)
     except ValidationError as ex:
         raise ReccmpReportDeserializeError from ex
 
@@ -115,14 +116,9 @@ def deserialize_reccmp_report(json_str: str) -> ReccmpStatusReport:
 def serialize_reccmp_report(
     report: ReccmpStatusReport, diff_included: bool = False
 ) -> str:
-    """Flatten the report into a dict to be written using json.dump"""
+    """Create a JSON string for the report so it can be written to a file."""
     now = datetime.now().replace(microsecond=0)
     report.timestamp = now
-    obj = JSONReportVersion1.from_report(report)
-
-    # Crude but necessary. HTML output needs diff, but it is excluded from the JSON report.
-    if not diff_included:
-        for x in obj.data:
-            x.diff = None
+    obj = _serialize_version_1(report, diff_included=diff_included)
 
     return obj.model_dump_json(exclude_defaults=True)

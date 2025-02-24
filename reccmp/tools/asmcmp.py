@@ -281,7 +281,7 @@ def main():
             name=match.name,
             accuracy=match.effective_ratio,
             recomp_addr=recomp_addr,
-            is_effective=match.is_effective_match,
+            is_effective_match=match.is_effective_match,
             is_stub=match.is_stub,
             diff=match.udiff,
         )

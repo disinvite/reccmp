@@ -1,6 +1,6 @@
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Iterable, Iterator
 from pydantic import BaseModel, ValidationError
 from pydantic_core import from_json
 from .diff import CombinedDiffOutput
@@ -43,47 +43,60 @@ class ReccmpStatusReport:
         self.entities = {}
 
 
+def _get_entity_for_addr(
+    samples: Iterable[ReccmpStatusReport], addr: str
+) -> Iterator[ReccmpComparedEntity]:
+    """Helper to return entities from xreports that have the given address."""
+    for sample in samples:
+        if addr in sample.entities:
+            yield sample.entities[addr]
+
+
+def _accuracy_sort_key(entity: ReccmpComparedEntity) -> float:
+    """Helper to sort entity samples by accuracy score.
+    100% match is preferred over effective match.
+    Effective match is preferred over any accuracy.
+    Stubs rank lower than any accuracy score."""
+    if entity.is_stub:
+        return -1.0
+
+    if entity.accuracy == 1.0:
+        if not entity.is_effective_match:
+            return 1000.0
+
+    if entity.is_effective_match:
+        return 1.0
+
+    return entity.accuracy
+
+
 def combine_reports(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
-    """Combines the sample reports into a single report for comparison.
-    Currently, the only method of aggregating the data is to use the highest
-    accuracy score for each address from any report."""
+    """Combines the sample reports into a single report.
+    The current strategy is to use the entity with the highest
+    accuracy score from any report."""
     assert len(samples) > 0
 
-    def get_accuracy(report: ReccmpStatusReport, addr: str) -> float:
-        """Helper to return the accuracy score of the entity at the given address.
-        If the report doesn't have an entity there, return zero.
-        This is fine because the goal is to get the max accuracy value."""
-        if addr in report.entities:
-            return report.entities[addr].accuracy
-
-        return 0.0
+    # TODO: hack
+    assert all(samples[0].filename == s.filename for s in samples)
 
     output = ReccmpStatusReport(filename=samples[0].filename)
 
-    # Combine every orig addr used in any of the files.
-    orig_addr_set: set[str] = set()
-    for sample in samples:
-        orig_addr_set = orig_addr_set | sample.entities.keys()
+    # Combine every orig addr used in any of the reports.
+    orig_addr_set = {key for sample in samples for key in sample.entities.keys()}
 
     all_orig_addrs = sorted(list(orig_addr_set))
 
     for addr in all_orig_addrs:
-        assert any(addr in sample.entities for sample in samples)
-
-        # Find the first sample that used this addr to populate data for the new report.
-        for sample in samples:
-            if addr in sample.entities:
-                # Set up our data
-                output.entities[addr] = sample.entities[addr]
-                break
+        e_list = list(_get_entity_for_addr(samples, addr))
+        assert len(e_list) > 0
 
         # Our aggregate accuracy score is the highest from any report.
-        sample_accuracy = [get_accuracy(s, addr) for s in samples]
-        agg_accuracy = max(sample_accuracy)
+        e_list.sort(key=_accuracy_sort_key, reverse=True)
 
-        output.entities[addr].accuracy = agg_accuracy
-        output.entities[addr].recomp_addr = None  # ?
-        output.entities[addr].is_effective_match = False  # ?
+        output.entities[addr] = e_list[0]
+
+        # Recomp addr will most likely vary between samples, so clear it
+        output.entities[addr].recomp_addr = None
 
     return output
 

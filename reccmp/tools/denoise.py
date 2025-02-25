@@ -84,8 +84,6 @@ def main():
             logger.error("Not enough samples to aggregate!")
             return 1
 
-        # hack
-        assert all(samples[0].filename == s.filename for s in samples)
         agg_report = combine_reports(samples)
 
         if args.output is not None:

@@ -9,12 +9,20 @@ jobs:
     steps:
 
     - uses: ./.github/workflows/deps/binfile-lego.yml
+    - uses: ./.github/workflows/deps/binfile-ski.yml
 
-    - name: Restore original binaries
+    - name: Restore lego binaries
       uses: actions/cache/restore@v3
       with:
         path: '*'
         key: legobin2
+        fail-on-cache-miss: true
+
+    - name: Restore ski binaries
+      uses: actions/cache/restore@v3
+      with:
+        path: '*'
+        key: skibin2
         fail-on-cache-miss: true
 
     - name: Merge binfile cache

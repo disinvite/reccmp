@@ -20,14 +20,14 @@ jobs:
     - name: Restore LEGO
       uses: actions/cache/restore@v3
       with:
-        path: '*'
+        path: 'LEGO1.DLL'
         key: legobin2
         fail-on-cache-miss: true
 
     - name: Restore SKI
       uses: actions/cache/restore@v3
       with:
-        path: '*'
+        path: 'SKI.EXE'
         key: skibin2
         fail-on-cache-miss: true
 

@@ -1,0 +1,28 @@
+name: Prepare sample binaries
+
+on:
+  workflow_call:
+
+jobs:
+  lego:
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: ./.github/workflows/deps/binfile-lego.yml
+
+    - name: Restore original binaries
+      uses: actions/cache/restore@v3
+      with:
+        path: *
+        key: legobin2
+        fail-on-cache-miss: true
+
+    - name: Merge binfile cache
+      uses: actions/cache@v3
+      with:
+        enableCrossOsArchive: true
+        path: |
+          *.exe
+          *.dll
+        key: binfiles-${{ hashFiles('*.exe', '*.dll') }}
+        restore-keys: binfiles

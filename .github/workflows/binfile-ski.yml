@@ -23,4 +23,4 @@ jobs:
 
     - name: Verify files
       run: |
-        echo "0b97b99fcf34af5f5d624080417c79c7d36ae11351a7870ce6e0a476f03515c2 SKI.EXE" | sha256sum --check
+        echo "0b97b99fcf34af5f5d624080417c79c7d36ae11351a7870ce6e0a476f03515c2 binfiles/SKI.EXE" | sha256sum --check

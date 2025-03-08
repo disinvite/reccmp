@@ -10,7 +10,7 @@ jobs:
 
     # Lego
     - name: Restore original binaries
-      id: cache
+      id: cache-lego
       uses: actions/cache@v3
       with:
         path: |
@@ -20,7 +20,7 @@ jobs:
         key: legobin2
 
     - name: Download original island binaries
-      if: ${{ !steps.cache.outputs.cache-hit }}
+      if: ${{ !steps.cache-lego.outputs.cache-hit }}
       run: |
         wget https://legoisland.org/download/CONFIG.EXE
         wget https://legoisland.org/download/ISLE.EXE
@@ -34,7 +34,7 @@ jobs:
 
     # Ski
     - name: Restore original binaries
-      id: cache
+      id: cache-ski
       uses: actions/cache@v3
       with:
         path: |
@@ -42,7 +42,7 @@ jobs:
         key: skibin2
 
     - name: Download original ski binaries
-      if: ${{ !steps.cache.outputs.cache-hit }}
+      if: ${{ !steps.cache-ski.outputs.cache-hit }}
       run: |
         wget https://archive.org/download/win3_SKIFREE/SKIFREE.ZIP
         unzip -d skifree SKIFREE.ZIP

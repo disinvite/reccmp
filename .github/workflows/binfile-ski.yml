@@ -12,15 +12,14 @@ jobs:
       id: cache
       uses: actions/cache@v3
       with:
-        path: |
-          SKI.EXE
+        path: binfiles
         key: skibin2
 
     - name: Download original ski binaries
       if: ${{ !steps.cache.outputs.cache-hit }}
       run: |
         wget https://archive.org/download/win3_SKIFREE/SKIFREE.ZIP
-        unzip SKIFREE.ZIP
+        unzip -d binfiles SKIFREE.ZIP SKI.EXE
 
     - name: Verify files
       run: |

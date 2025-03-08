@@ -33,9 +33,7 @@ jobs:
       uses: actions/cache/restore@v3
       with:
         enableCrossOsArchive: true
-        path: |
-          LEGO1.DLL
-          SKI.EXE
+        path: binfiles
         key: binfiles
 
     - name: Install python libraries
@@ -46,4 +44,4 @@ jobs:
     - name: Run unit tests
       shell: bash
       run: |
-        pytest . --lego1=LEGO1.DLL --ski=SKI.EXE
+        pytest . --lego1=binfiles/LEGO1.DLL --ski=binfiles/SKI.EXE

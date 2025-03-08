@@ -20,18 +20,14 @@ jobs:
     - name: Restore LEGO
       uses: actions/cache/restore@v3
       with:
-        path: |
-          CONFIG.EXE
-          ISLE.EXE
-          LEGO1.DLL
+        path: binfiles
         key: legobin2
         fail-on-cache-miss: true
 
     - name: Restore SKI
       uses: actions/cache/restore@v3
       with:
-        path: |
-          SKI.EXE
+        path: binfiles
         key: skibin2
         fail-on-cache-miss: true
 
@@ -39,8 +35,6 @@ jobs:
       uses: actions/cache@v3
       with:
         enableCrossOsArchive: true
-        path: |
-          LEGO1.DLL
-          SKI.EXE
-        key: binfiles-${{ hashFiles('LEGO1.DLL', 'SKI.EXE') }}
+        path: binfiles
+        key: binfiles-${{ hashFiles('binfiles/*') }}
         restore-keys: binfiles

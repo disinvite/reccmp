@@ -12,18 +12,15 @@ jobs:
       id: cache
       uses: actions/cache@v3
       with:
-        path: |
-          CONFIG.EXE
-          ISLE.EXE
-          LEGO1.DLL
+        path: binfiles
         key: legobin2
 
     - name: Download original island binaries
       if: ${{ !steps.cache.outputs.cache-hit }}
       run: |
-        wget https://legoisland.org/download/CONFIG.EXE
-        wget https://legoisland.org/download/ISLE.EXE
-        wget https://legoisland.org/download/LEGO1.DLL
+        wget https://legoisland.org/download/CONFIG.EXE --directory-prefix=binfiles
+        wget https://legoisland.org/download/ISLE.EXE --directory-prefix=binfiles
+        wget https://legoisland.org/download/LEGO1.DLL --directory-prefix=binfiles
 
     - name: Verify files
       run: |

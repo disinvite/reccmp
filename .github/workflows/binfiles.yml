@@ -5,11 +5,11 @@ on:
 
 jobs:
   lego:
-    - name: Lego
-      uses: ./.github/workflows/deps/binfile-lego.yml
+    name: Lego
+    uses: ./.github/workflows/deps/binfile-lego.yml
   ski:
-    - name: Ski
-      uses: ./.github/workflows/deps/binfile-ski.yml
+    name: Ski
+    uses: ./.github/workflows/deps/binfile-ski.yml
   merge:
     runs-on: ubuntu-latest
     steps:

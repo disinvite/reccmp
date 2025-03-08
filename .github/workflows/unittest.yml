@@ -33,13 +33,10 @@ jobs:
       uses: actions/cache/restore@v3
       with:
         enableCrossOsArchive: true
-        path: 'binfiles.zip'
+        path: |
+          LEGO1.DLL
+          SKI.EXE
         key: binfiles
-
-    - name: Unzip archive
-      shell: bash
-      run: |
-        unzip binfiles.zip
 
     - name: Install python libraries
       shell: bash

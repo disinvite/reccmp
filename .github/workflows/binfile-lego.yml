@@ -1,10 +1,10 @@
-name: Download ISLE binaries
+name: Download LEGO binaries
 
 on:
   workflow_call:
 
 jobs:
-  isle:
+  lego:
     runs-on: ubuntu-latest
     steps:
 

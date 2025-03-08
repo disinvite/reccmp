@@ -1,4 +1,4 @@
-name: Download SKI binaries
+name: Download SKI binary
 
 on:
   workflow_call:

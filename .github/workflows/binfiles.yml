@@ -13,7 +13,7 @@ jobs:
     - name: Restore original binaries
       uses: actions/cache/restore@v3
       with:
-        path: *
+        path: '*'
         key: legobin2
         fail-on-cache-miss: true
 

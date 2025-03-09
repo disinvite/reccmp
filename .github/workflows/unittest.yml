@@ -44,4 +44,4 @@ jobs:
     - name: Run unit tests
       shell: bash
       run: |
-        pytest . --lego1=binfiles/LEGO1.DLL --ski=binfiles/SKI.EXE
+        pytest . --binfiles=binfiles --require-binfiles

@@ -16,16 +16,6 @@ def pytest_addoption(parser):
     )
 
 
-@pytest.fixture(name="binfile_path", scope="session")
-def fixture_binfile_path(pytestconfig) -> Iterator[Path | None]:
-    path = pytestconfig.getoption("--binfiles")
-    if path is not None:
-        yield Path(path).resolve()
-        return
-
-    yield None
-
-
 def check_hash(path: Path, hash_str: str) -> bool:
     with path.open("rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
@@ -33,21 +23,27 @@ def check_hash(path: Path, hash_str: str) -> bool:
 
 
 @pytest.fixture(name="bin_loader", scope="session")
-def fixture_loader(
-    pytestconfig, binfile_path
-) -> Iterator[Callable[[str, str], Image | None]]:
-    def loader(filename: str, hash_str: str) -> Image | None:
-        if binfile_path is not None:
-            file = binfile_path / filename
-            if file.exists():
-                if not check_hash(file, hash_str):
-                    pytest.fail(reason="Did not match expected " + filename.upper())
+def fixture_loader(pytestconfig) -> Iterator[Callable[[str, str], Image | None]]:
+    # Search path is ./tests/binfiles unless the user provided an alternate location.
+    binfiles_arg = pytestconfig.getoption("--binfiles")
+    if binfiles_arg is not None:
+        binfile_path = Path(binfiles_arg).resolve()
+    else:
+        binfile_path = Path(__file__).resolve().parent / "binfiles"
 
-                return detect_image(file)
+    def loader(filename: str, hash_str: str) -> Image | None:
+        file = binfile_path / filename
+        if file.exists():
+            if not check_hash(file, hash_str):
+                pytest.fail(
+                    pytrace=False, reason="Did not match expected " + filename.upper()
+                )
+
+            return detect_image(file)
 
         not_found_reason = "No path to " + filename.upper()
         if pytestconfig.getoption("--require-binfiles"):
-            pytest.fail(reason=not_found_reason)
+            pytest.fail(pytrace=False, reason=not_found_reason)
 
         pytest.skip(allow_module_level=True, reason=not_found_reason)
 

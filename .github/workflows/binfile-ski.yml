@@ -13,7 +13,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: binfiles
-        key: skibin2
+        key: skibin
 
     - name: Download original ski binaries
       if: ${{ !steps.cache.outputs.cache-hit }}

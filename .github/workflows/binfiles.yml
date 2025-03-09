@@ -21,14 +21,14 @@ jobs:
       uses: actions/cache/restore@v3
       with:
         path: binfiles
-        key: legobin2
+        key: legobin
         fail-on-cache-miss: true
 
     - name: Restore SKI
       uses: actions/cache/restore@v3
       with:
         path: binfiles
-        key: skibin2
+        key: skibin
         fail-on-cache-miss: true
 
     - name: Cache binfiles

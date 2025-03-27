@@ -48,6 +48,8 @@ class LinesDb:
 
         self.functions: set[int] = set()
 
+        self.functions_map: dict[Path, list[tuple[int, int]]] | None = None
+
     def add_lines(self, filename: str, lines: Iterable[tuple[int, int]]):
         """To be added from the LINES section of cvdump."""
         purepath = PureWindowsPath(filename)
@@ -73,20 +75,29 @@ class LinesDb:
         We want to know if exactly one function exists between line start and line end
         in the given file."""
 
+        if self.functions_map is None:
+            self.functions_map = {
+                filename: [
+                    (line, addr) for line, addr in pairs if addr in self.functions
+                ]
+                for filename, pairs in self.map.items()
+            }
+
+        # TODO: hack
+        assert self.functions_map is not None
+
         # We might not capture the end line of a function. If not, search for the start line only.
         if line_end is None:
             line_end = line_start
 
-        lines = self.map.get(Path(path))
+        lines = self.functions_map.get(Path(path))
         if lines is None:
             return None
 
         lines.sort()
 
         possible_functions = [
-            addr
-            for (line_no, addr) in lines
-            if addr in self.functions and line_start <= line_no <= line_end
+            addr for (line_no, addr) in lines if line_start <= line_no <= line_end
         ]
 
         if len(possible_functions) == 1:

@@ -2,6 +2,7 @@
 between FUNCTION markers and PDB analysis."""
 
 import logging
+from typing import Iterable
 from functools import cache
 from pathlib import Path, PurePath, PureWindowsPath
 
@@ -43,11 +44,13 @@ class LinesDb:
         for path in self.code_files:
             self.filenames.setdefault(path.name.lower(), []).append(path)
 
-        self.map: dict[Path, dict[int, int]] = {}
+        self.map: dict[Path, list[tuple[int, int]]] = {}
 
-    def add_line(self, cvdump_path: str, line_no: int, addr: int):
+        self.functions: set[int] = set()
+
+    def add_lines(self, filename: str, lines: Iterable[tuple[int, int]]):
         """To be added from the LINES section of cvdump."""
-        purepath = PureWindowsPath(cvdump_path)
+        purepath = PureWindowsPath(filename)
         candidates = self.filenames.get(purepath.name.lower())
         if candidates is None:
             return
@@ -57,7 +60,10 @@ class LinesDb:
         if sourcepath is None:
             return
 
-        self.map.setdefault(sourcepath, {})[line_no] = addr
+        self.map.setdefault(sourcepath, []).extend(lines)
+
+    def add_function_starts(self, addrs: Iterable[int]):
+        self.functions.update(addrs)
 
     def search_line(
         self, path: str, line_start: int, line_end: int | None = None
@@ -71,16 +77,18 @@ class LinesDb:
         if line_end is None:
             line_end = line_start
 
-        bucket = self.map.get(Path(path))
-        if bucket is None:
+        lines = self.map.get(Path(path))
+        if lines is None:
             return None
 
-        lines = [*bucket.items()]
         lines.sort()
 
         possible_functions = [
-            addr for (line, addr) in lines if line_start <= line <= line_end
+            addr
+            for (line_no, addr) in lines
+            if addr in self.functions and line_start <= line_no <= line_end
         ]
+
         if len(possible_functions) == 1:
             return possible_functions[0]
 

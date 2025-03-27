@@ -118,7 +118,7 @@ class Compare:
         self.debug: bool = False
         self.runid: str = uuid.uuid4().hex[:8]
 
-        self._lines_db = LinesDb(code_dir)
+        self._lines_db = LinesDb(list(walk_source_dir(self.code_dir)))
         self._db = EntityDb()
 
         # For now, just redirect match alerts to the logger.

@@ -1,52 +1,63 @@
 """Database used to match (filename, line_number) pairs
 between FUNCTION markers and PDB analysis."""
 
-import sqlite3
 import logging
 from functools import cache
-from pathlib import Path
-from reccmp.isledecomp.dir import PathResolver
-
-
-_SETUP_SQL = """
-    CREATE TABLE lineref (
-        path text not null,
-        filename text not null,
-        line int not null,
-        addr int not null
-    );
-    CREATE INDEX file_line ON lineref (filename, line);
-"""
+from pathlib import Path, PurePath, PureWindowsPath
 
 
 logger = logging.getLogger(__name__)
 
 
-@cache
-def my_samefile(path: str, source_path: str) -> bool:
-    return Path(path).samefile(source_path)
+def path_to_reverse_parts(path: PurePath) -> tuple[str, ...]:
+    return tuple(p.lower() for p in path.parts)[::-1]
+
+
+def score_match(purepath: PureWindowsPath, path: Path) -> tuple[int, Path]:
+    score = 0
+    for wp, rp in zip(path_to_reverse_parts(purepath), path_to_reverse_parts(path)):
+        if wp != rp or wp == ".." or rp == "..":
+            break
+
+        score += 1
+
+    return (score, path)
 
 
 @cache
-def my_basename_lower(path: str) -> str:
-    return Path(path).name.lower()
+def purepath_to_path(purepath: PureWindowsPath, paths: tuple[Path]) -> Path | None:
+    if not purepath.is_absolute():
+        return None
+
+    scored = [score_match(purepath, p) for p in paths]
+    scored.sort(reverse=True)
+
+    (_, path) = scored[0]
+    return path
 
 
 class LinesDb:
-    def __init__(self, code_dir) -> None:
-        self._db = sqlite3.connect(":memory:")
-        self._db.executescript(_SETUP_SQL)
-        self._path_resolver = PathResolver(code_dir)
+    def __init__(self, code_files: list[str | Path]) -> None:
+        self.code_files = tuple(map(Path, code_files))
+        self.filenames: dict[str, list[Path]] = {}
+        for path in self.code_files:
+            self.filenames.setdefault(path.name.lower(), []).append(path)
 
-    def add_line(self, path: str, line_no: int, addr: int):
+        self.map: dict[Path, dict[int, int]] = {}
+
+    def add_line(self, cvdump_path: str, line_no: int, addr: int):
         """To be added from the LINES section of cvdump."""
-        sourcepath = self._path_resolver.resolve_cvdump(path)
-        filename = my_basename_lower(sourcepath)
+        purepath = PureWindowsPath(cvdump_path)
+        candidates = self.filenames.get(purepath.name.lower())
+        if candidates is None:
+            return
 
-        self._db.execute(
-            "INSERT INTO lineref (path, filename, line, addr) VALUES (?,?,?,?)",
-            (sourcepath, filename, line_no, addr),
-        )
+        # Convert to hashable type for caching
+        sourcepath = purepath_to_path(purepath, tuple(candidates))
+        if sourcepath is None:
+            return
+
+        self.map.setdefault(sourcepath, {})[line_no] = addr
 
     def search_line(
         self, path: str, line_start: int, line_end: int | None = None
@@ -60,17 +71,15 @@ class LinesDb:
         if line_end is None:
             line_end = line_start
 
-        # Search using the filename from the path to limit calls to Path.samefile.
-        # TODO: This should be refactored. Maybe sqlite isn't suited for this and we
-        # should store Path objects as dict keys instead.
-        filename = my_basename_lower(path)
-        cur = self._db.execute(
-            "SELECT path, addr FROM lineref WHERE filename = ? AND line >= ? AND line <= ?",
-            (filename, line_start, line_end),
-        )
+        bucket = self.map.get(Path(path))
+        if bucket is None:
+            return None
+
+        lines = [*bucket.items()]
+        lines.sort()
 
         possible_functions = [
-            addr for source_path, addr in cur if my_samefile(path, source_path)
+            addr for (line, addr) in lines if line_start <= line <= line_end
         ]
         if len(possible_functions) == 1:
             return possible_functions[0]

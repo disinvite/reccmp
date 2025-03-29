@@ -439,6 +439,8 @@ def detect_project(
             for search_path_folder in search_path:
                 p = search_path_folder / filename
                 pdb = p.with_suffix(".pdb")
+                logger.info("Searching for %s -> %s, %s", p, p.resolve(), p.exists())
+                logger.info("Searching for %s -> %s, %s", pdb, pdb.resolve(), pdb.exists())
                 if p.is_file() and pdb.is_file():
                     build_data.targets.setdefault(
                         target_id, BuildFileTarget(path=p, pdb=pdb)

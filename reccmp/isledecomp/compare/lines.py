@@ -14,27 +14,39 @@ def path_to_reverse_parts(path: PurePath) -> tuple[str, ...]:
     return tuple(p.lower() for p in path.parts)[::-1]
 
 
-def score_match(purepath: PureWindowsPath, path: Path) -> tuple[int, Path]:
+def score_match(remote_path: PurePath, local_path: PurePath) -> tuple[int, PurePath]:
     score = 0
-    for wp, rp in zip(path_to_reverse_parts(purepath), path_to_reverse_parts(path)):
-        if wp != rp or wp == ".." or rp == "..":
+    for rp, lp in zip(
+        path_to_reverse_parts(remote_path), path_to_reverse_parts(local_path)
+    ):
+        if rp != lp or rp in (".", "..") or lp in (".", ".."):
             break
 
         score += 1
 
-    return (score, path)
+    return (score, local_path)
 
 
 @cache
-def purepath_to_path(purepath: PureWindowsPath, paths: tuple[Path]) -> Path | None:
-    if not purepath.is_absolute():
-        return None
-
-    scored = [score_match(purepath, p) for p in paths]
+def purepath_to_path(
+    remote_path: PurePath, local_paths: tuple[PurePath]
+) -> PurePath | None:
+    scored = [score_match(remote_path, p) for p in local_paths]
     scored.sort(reverse=True)
 
-    (_, path) = scored[0]
-    return path
+    if len(scored) >= 2:
+        [(top_score, top_path), (next_score, _)] = scored[:2]
+        # Return if this is the best match above all others
+        if top_score > next_score:
+            return top_path
+
+    elif len(scored) == 1:
+        (top_score, top_path) = scored[0]
+        # Return only if we matched at least one part
+        if top_score > 0:
+            return top_path
+
+    return None
 
 
 class LinesDb:
@@ -61,6 +73,8 @@ class LinesDb:
         sourcepath = purepath_to_path(purepath, tuple(candidates))
         if sourcepath is None:
             return
+
+        assert isinstance(sourcepath, Path)
 
         self.map.setdefault(sourcepath, []).extend(lines)
 

@@ -8,28 +8,29 @@ from reccmp.isledecomp.formats import NEImage
 class WinResourceType(Enum):
     """See WINUSER.H"""
 
-    RT_CURSOR = 0x8001
-    RT_BITMAP = 0x8002
-    RT_ICON = 0x8003
-    RT_MENU = 0x8004
-    RT_DIALOG = 0x8005
-    RT_STRING = 0x8006
-    RT_FONTDIR = 0x8007
-    RT_FONT = 0x8008
-    RT_ACCELERATOR = 0x8009
-    RT_RCDATA = 0x800A
-    RT_MESSAGETABLE = 0x800B
-    RT_GROUP_CURSOR = 0x800C
-    RT_GROUP_ICON = 0x800E
-    RT_NAMETABLE = 0x800F
-    RT_VERSION = 0x8010
-    RT_DLGINCLUDE = 0x8011
+    RT_CURSOR = 1
+    RT_BITMAP = 2
+    RT_ICON = 3
+    RT_MENU = 4
+    RT_DIALOG = 5
+    RT_STRING = 6
+    RT_FONTDIR = 7
+    RT_FONT = 8
+    RT_ACCELERATOR = 9
+    RT_RCDATA = 10
+    RT_MESSAGETABLE = 11
+    RT_GROUP_CURSOR = 12
+    RT_GROUP_ICON = 14
+    RT_NAMETABLE = 15
+    RT_VERSION = 16
+    RT_DLGINCLUDE = 17
 
 
 class WinResourceFlags(IntFlag):
     MOVEABLE = 0x10
     PURE = 0x20
     PRELOAD = 0x40
+    DISCARDABLE = 0x1000
 
 
 class WinResource(NamedTuple):
@@ -66,7 +67,7 @@ def ne_resource_table(img: NEImage) -> Iterator[WinResource]:
             offset += 8  # Skip reserved dword
 
             if type_id & 0x8000:
-                type_id = WinResourceType(type_id)
+                type_id = WinResourceType(type_id & 0x7FFF)
             else:
                 type_id = pascal_string(view, type_id)
 

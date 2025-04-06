@@ -264,12 +264,16 @@ class Compare:
 
         batch.commit()
 
-        for (section, offset), (
-            filename,
-            line_no,
-        ) in self.cvdump_analysis.verified_lines.items():
-            addr = self.recomp_bin.get_abs_addr(section, offset)
-            self._lines_db.add_line(filename, line_no, addr)
+        for filename, lines in self.cv.lines.items():
+            addr_iter = (
+                (line_no, self.recomp_bin.get_abs_addr(section, offset))
+                for line_no, section, offset in lines
+            )
+            # TODO: seen_addrs as rough approxmiation for which things are functions
+            pairs_iter = (
+                (line_no, addr) for line_no, addr in addr_iter if addr in seen_addrs
+            )
+            self._lines_db.add_lines(filename, pairs_iter)
 
         # The _entry symbol is referenced in the PE header so we get this match for free.
         with self._db.batch() as batch:

@@ -93,8 +93,6 @@ class CvdumpAnalysis:
     """Collects the results from CvdumpParser into a list of nodes (i.e. symbols).
     These can then be analyzed by a downstream tool."""
 
-    verified_lines: dict[tuple[int, int], tuple[str, int]]
-
     def __init__(self, parser: CvdumpParser):
         """Read in as much information as we have from the parser.
         The more sections we have, the better our information will be."""
@@ -140,20 +138,13 @@ class CvdumpAnalysis:
                 # No big deal if we don't have complete type information.
                 pass
 
-        for key, _ in parser.lines.items():
-            # Here we only set if the section:offset already exists
-            # because our values include offsets inside of the function.
-            if key in node_dict:
-                node_dict[key].node_type = EntityType.FUNCTION
-
-        # The LINES section contains every code line in the file, naturally.
-        # There isn't an obvious separation between functions, so we have to
-        # read everything. However, any function that would be in LINES
-        # has to be somewhere else in the PDB (probably PUBLICS).
-        # Isolate the lines that we actually care about for matching.
-        self.verified_lines = {
-            key: value for (key, value) in parser.lines.items() if key in node_dict
-        }
+        for _, lines in parser.lines.items():
+            for __, section, offset in lines:
+                # Here we only set if the section:offset already exists
+                # because our values include offsets inside of the function.
+                key = (section, offset)
+                if key in node_dict:
+                    node_dict[key].node_type = EntityType.FUNCTION
 
         for sym in parser.symbols:
             key = (sym.section, sym.offset)

@@ -5,6 +5,7 @@ import logging
 from functools import cache
 from pathlib import Path, PurePath, PureWindowsPath
 from collections.abc import Sequence
+from typing import Iterable
 from reccmp.isledecomp.dir import convert_foreign_path
 
 
@@ -45,6 +46,24 @@ class LinesDb:
             return
 
         self._map.setdefault(sourcepath, []).append((line_no, addr))
+
+    def add_lines(
+        self, foreign_path: PureWindowsPath, pairs: Iterable[tuple[int, int]]
+    ):
+        pdb_path = PureWindowsPath(foreign_path)
+        filename = pdb_path.name.lower()
+
+        candidates = self._filenames.get(filename)
+        if candidates is None:
+            return
+
+        # Must convert to tuple (hashable type) so we can use functools.cache
+        sourcepath = self._path_resolver(pdb_path, tuple(candidates))
+        if sourcepath is None:
+            return
+
+        for line_no, addr in pairs:
+            self._map.setdefault(sourcepath, []).append((line_no, addr))
 
     def search_line(
         self,

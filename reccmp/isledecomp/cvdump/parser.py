@@ -93,8 +93,9 @@ class NodeKey(NamedTuple):
 
 
 class LineValue(NamedTuple):
-    filename: str
     line_number: int
+    section: int
+    offset: int
 
 
 class LinesFunction(NamedTuple):
@@ -108,7 +109,7 @@ class CvdumpParser:
         self._section: str = ""
         self._lines_function = LinesFunction("", 0)
 
-        self.lines: dict[NodeKey, LineValue] = {}
+        self.lines: dict[str, list[LineValue]] = {}
         self.publics: list[PublicsEntry] = []
         self.sizerefs: list[SizeRefEntry] = []
         self.globals: list[GdataEntry] = []
@@ -137,8 +138,9 @@ class CvdumpParser:
 
         # Match any pairs as we find them
         for line_no, offset in _line_addr_pairs_findall.findall(line):
-            key = NodeKey(self._lines_function.section, int(offset, 16))
-            self.lines[key] = LineValue(self._lines_function.filename, int(line_no))
+            self.lines.setdefault(self._lines_function.filename, []).append(
+                LineValue(int(line_no), self._lines_function.section, int(offset, 16))
+            )
 
     def _publics_section(self, line: str):
         """Match each line from PUBLICS and pull out the symbol information.

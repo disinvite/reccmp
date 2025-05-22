@@ -29,14 +29,6 @@ class LinesDb:
     ) -> None:
         self._path_resolver = cache(convert_foreign_path)
 
-        # Set up memoized map of filenames to their paths
-        self._filenames: dict[str, list[PurePath]] = {}
-        for path in files:
-            if not isinstance(path, PurePath):
-                path = PurePath(path)
-
-            self._filenames.setdefault(path.name.lower(), []).append(path)
-
         self._db = sqlite3.connect(":memory:")
         self._db.executescript(
             """
@@ -53,7 +45,21 @@ class LinesDb:
             ) without rowid;
         """
         )
+
         self._indexed = False
+
+        # Set up memoized map of filenames to their paths
+        self._filenames: dict[str, list[PurePath]] = {}
+        for path in files:
+            if not isinstance(path, PurePath):
+                path = PurePath(path)
+
+            self._db.execute(
+                "INSERT INTO filenames (hash, file) values (?,?)",
+                (hash(path), str(path)),
+            )
+
+            self._filenames.setdefault(path.name.lower(), []).append(path)
 
     def add_line(self, foreign_path: str, line_no: int, addr: int):
         """Connect the remote path to a line number and address pair."""
@@ -75,10 +81,6 @@ class LinesDb:
 
         path_hash = hash(sourcepath)
 
-        self._db.execute(
-            "INSERT or ignore INTO filenames (hash, file) values (?,?)",
-            (hash(path_hash), str(sourcepath)),
-        )
         self._db.executemany(
             "INSERT into lines (addr, file, lineno) values (?,?,?)",
             ((addr, path_hash, line_no) for (line_no, addr) in lines),
@@ -89,11 +91,16 @@ class LinesDb:
             "UPDATE lines SET start = 1 WHERE addr = ?", ((addr,) for addr in addrs)
         )
 
-    def search_addr(self, addr_start: int, addr_end: int | None):
+    def search_addr(
+        self, addr_start: int, addr_end: int | None
+    ) -> Iterator[tuple[int, str, int]]:
         # TODO
-        self._db.execute(
+        if addr_end is None:
+            addr_end = addr_start
+
+        yield from self._db.execute(
             """
-            SELECT lines.addr, filenames.name, lines.lineno from lines
+            SELECT lines.addr, filenames.file, lines.lineno from lines
             inner join filenames on lines.file = filenames.hash
             where lines.addr >= ? and lines.addr <= ?""",
             (addr_start, addr_end),

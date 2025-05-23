@@ -1,5 +1,6 @@
 """For collating the results from parsing cvdump.exe into a more directly useful format."""
 
+from pathlib import PureWindowsPath
 from reccmp.isledecomp.types import EntityType
 from .demangler import demangle_string_const, demangle_vtable
 from .parser import CvdumpParser, LineValue, NodeKey
@@ -93,7 +94,7 @@ class CvdumpAnalysis:
     """Collects the results from CvdumpParser into a list of nodes (i.e. symbols).
     These can then be analyzed by a downstream tool."""
 
-    verified_lines: dict[str, list[LineValue]]
+    verified_lines: dict[PureWindowsPath, list[LineValue]]
 
     def __init__(self, parser: CvdumpParser):
         """Read in as much information as we have from the parser.

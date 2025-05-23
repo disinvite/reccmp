@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 @cache
 def get_file_hash(filepath: str | Path | PurePath) -> int:
-    # Needed for cross-platform tests.
-    # e.g. Don't convert a PurePosixPath back to PureWindowsPath if we are testing on a Windows host.
+    # This check is required for cross-platform tests.
+    # Don't convert a PurePosixPath back to PureWindowsPath if we are testing on a Windows host.
     if isinstance(filepath, PurePath):
         return hash(filepath)
 
@@ -61,21 +61,22 @@ class LinesDb:
 
             self._filenames.setdefault(path.name.lower(), []).append(path)
 
-    def add_line(self, foreign_path: str, line_no: int, addr: int):
+    def add_line(self, foreign_path: PureWindowsPath, line_no: int, addr: int):
         """Connect the remote path to a line number and address pair."""
         return self.add_lines(foreign_path, ((line_no, addr),))
 
-    def add_lines(self, foreign_path: str, lines: Sequence[tuple[int, int]]):
+    def add_lines(
+        self, foreign_path: PureWindowsPath, lines: Sequence[tuple[int, int]]
+    ):
         """Connect the remote path to a line number and address pair."""
-        pdb_path = PureWindowsPath(foreign_path)
-        filename = pdb_path.name.lower()
+        filename = foreign_path.name.lower()
 
         candidates = self._filenames.get(filename)
         if candidates is None:
             return
 
         # Must convert to tuple (hashable type) so we can use functools.cache
-        sourcepath = self._path_resolver(pdb_path, tuple(candidates))
+        sourcepath = self._path_resolver(foreign_path, tuple(candidates))
         if sourcepath is None:
             return
 

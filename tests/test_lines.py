@@ -15,8 +15,12 @@ def test_lines():
 
     # Test search on line 2 only
     lines.add_line(TEST_PATH, 2, 0x1234)
-    lines.mark_function_starts((0x1234,))
 
+    # Should return nothing: we have not marked this addr as the start of a function
+    assert lines.find_function(TEST_PATH, 2) is None
+
+    # Now we get the function
+    lines.mark_function_starts((0x1234,))
     assert lines.find_function(TEST_PATH, 2) == 0x1234
 
     # Search window
@@ -87,3 +91,31 @@ def test_db_hash_posix():
     assert lines.find_function(path, 2) == 0x1234
     assert lines.find_function(PurePosixPath("Test.cpp"), 2) is None
     assert lines.find_function(PurePosixPath("TEST.CPP"), 2) is None
+
+
+def test_db_search_line():
+    """search_line() will return any line in the given range
+    unless you restrict to function starts only."""
+
+    lines = LinesDb([TEST_PATH])
+
+    # We haven't added any addresses yet.
+    assert [*lines.search_line(TEST_PATH, 1, 10)] == []
+
+    lines.add_line(TEST_PATH, 2, 0x1234)
+    lines.add_line(TEST_PATH, 5, 0x2000)
+
+    # Return single line if no end range specified
+    assert [*lines.search_line(TEST_PATH, 2)] == [0x1234]
+    assert [*lines.search_line(TEST_PATH, 5)] == [0x2000]
+
+    # Test line range
+    assert [*lines.search_line(TEST_PATH, 2, 4)] == [0x1234]
+    assert [*lines.search_line(TEST_PATH, 2, 5)] == [0x1234, 0x2000]
+    assert [*lines.search_line(TEST_PATH, 3, 5)] == [0x2000]
+
+    # No lines marked as function starts
+    assert [*lines.search_line(TEST_PATH, 2, 5, start_only=True)] == []
+
+    lines.mark_function_starts((0x1234,))
+    assert [*lines.search_line(TEST_PATH, 2, 5, start_only=True)] == [0x1234]

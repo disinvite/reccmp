@@ -1,4 +1,5 @@
 import re
+from pathlib import PureWindowsPath
 from typing import Iterable, NamedTuple
 from .types import CvdumpTypesParser
 from .symbols import CvdumpSymbolsParser
@@ -99,7 +100,7 @@ class LineValue(NamedTuple):
 
 
 class LinesFunction(NamedTuple):
-    filename: str
+    filename: PureWindowsPath
     section: int
 
 
@@ -107,9 +108,9 @@ class CvdumpParser:
     # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
         self._section: str = ""
-        self._lines_function = LinesFunction("", 0)
+        self._lines_function = LinesFunction(PureWindowsPath(), 0)
 
-        self.lines: dict[str, list[LineValue]] = {}
+        self.lines: dict[PureWindowsPath, list[LineValue]] = {}
         self.publics: list[PublicsEntry] = []
         self.sizerefs: list[SizeRefEntry] = []
         self.globals: list[GdataEntry] = []
@@ -131,7 +132,7 @@ class CvdumpParser:
         # Save the section here because it is not given on the lines that follow.
         if (match := _lines_subsection_header.match(line)) is not None:
             self._lines_function = LinesFunction(
-                match.group("filename"),
+                PureWindowsPath(match.group("filename")),
                 int(match.group("section"), 16),
             )
             return

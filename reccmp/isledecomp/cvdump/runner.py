@@ -78,14 +78,14 @@ class Cvdump:
         parser = CvdumpParser()
         sections = {}
         call = self.cmd_line()
-        with subprocess.Popen(
-            call, stdout=subprocess.PIPE, encoding="utf-8", errors="ignore"
-        ) as proc:
+        with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
+            assert proc.stdout is not None
             section = None
             shit = io.StringIO()
 
-            assert proc.stdout is not None
-            for line in proc.stdout:
+            for line in io.TextIOWrapper(
+                proc.stdout, encoding="utf-8", errors="ignore"
+            ):
                 if line[0] == "*" and (match := r_section.match(line)) is not None:
                     if section is not None:
                         shit.seek(0, 0)

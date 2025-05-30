@@ -18,6 +18,9 @@ colorama.just_fix_windows_console()
 def display_errors(alerts, filename):
     sorted_alerts = sorted(alerts, key=lambda a: a.line_number)
 
+    print(colorama.Fore.LIGHTWHITE_EX, end="")
+    print(filename)
+
     for alert in sorted_alerts:
         error_type = (
             f"{colorama.Fore.RED}error: "
@@ -25,19 +28,21 @@ def display_errors(alerts, filename):
             else f"{colorama.Fore.YELLOW}warning: "
         )
         components = [
+            "  ",
             colorama.Fore.LIGHTWHITE_EX,
-            filename,
-            ":",
-            str(alert.line_number),
+            f"{alert.line_number:4}",
             " : ",
+            alert.module if alert.module is not None else "",
+            " ",
             error_type,
             colorama.Fore.LIGHTWHITE_EX,
             alert.code.name.lower(),
         ]
-        print("".join(components))
+        print("".join(components), end="")
 
         if alert.line is not None:
-            print(f"{colorama.Fore.WHITE}  {alert.line}")
+            print(f"{colorama.Fore.WHITE}  {alert.line}", end="")
+        print()
 
 
 def parse_args() -> argparse.Namespace:

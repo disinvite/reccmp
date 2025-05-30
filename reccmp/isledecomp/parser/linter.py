@@ -55,6 +55,7 @@ class DecompLinter:
                                 code=ParserError.WRONG_STRING,
                                 line_number=marker.line_number,
                                 line=f"0x{marker.offset:08x}, {repr(self._strings[value])} vs. {repr(marker.name)}",
+                                module=marker.module,
                             )
                         )
                 else:
@@ -63,6 +64,7 @@ class DecompLinter:
                             code=ParserError.DUPLICATE_OFFSET,
                             line_number=marker.line_number,
                             line=f"0x{marker.offset:08x}",
+                            module=marker.module,
                         )
                     )
             else:
@@ -95,6 +97,7 @@ class DecompLinter:
                         ParserAlert(
                             code=ParserError.FUNCTION_OUT_OF_ORDER,
                             line_number=fun.line_number,
+                            module=self._module,
                         )
                     )
 

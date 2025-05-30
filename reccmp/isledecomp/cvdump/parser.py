@@ -1,6 +1,6 @@
 import re
 from pathlib import PureWindowsPath
-from typing import Iterable, NamedTuple
+from typing import NamedTuple
 from .types import CvdumpTypesParser
 from .symbols import CvdumpSymbolsParser
 
@@ -199,32 +199,30 @@ class CvdumpParser:
                 )
             )
 
-    def read_line(self, line: str):
-        if (match := _section_change_regex.match(line)) is not None:
-            self._section = match.group(1)
-            return
-
-        if self._section == "TYPES":
+    def parse_types(self, stream: str):
+        for line in stream.splitlines():
             self.types.read_line(line)
 
-        elif self._section == "SYMBOLS":
+    def parse_symbols(self, stream: str):
+        for line in stream.splitlines():
             self.symbols_parser.read_line(line)
 
-        elif self._section == "LINES":
+    def parse_lines(self, stream: str):
+        for line in stream.splitlines():
             self._lines_section(line)
 
-        elif self._section == "PUBLICS":
+    def parse_publics(self, stream: str):
+        for line in stream.splitlines():
             self._publics_section(line)
 
-        elif self._section == "SECTION CONTRIBUTIONS":
+    def parse_contrib(self, stream: str):
+        for line in stream.splitlines():
             self._section_contributions(line)
 
-        elif self._section == "GLOBALS":
+    def parse_globals(self, stream: str):
+        for line in stream.splitlines():
             self._globals_section(line)
 
-        elif self._section == "MODULES":
+    def parse_modules(self, stream: str):
+        for line in stream.splitlines():
             self._modules_section(line)
-
-    def read_lines(self, lines: Iterable[str]):
-        for line in lines:
-            self.read_line(line)

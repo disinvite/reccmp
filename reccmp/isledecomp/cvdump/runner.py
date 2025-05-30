@@ -1,3 +1,4 @@
+import re
 import io
 from os import name as os_name
 from enum import Enum
@@ -26,6 +27,9 @@ cvdump_opt_map = {
     DumpOpt.MODULES: "-m",
     DumpOpt.TYPES: "-t",
 }
+
+
+r_section = re.compile(r"\*{3} ([A-Z]{2,}.+)\n")
 
 
 class Cvdump:
@@ -72,14 +76,48 @@ class Cvdump:
 
     def run(self) -> CvdumpParser:
         parser = CvdumpParser()
+        sections = {}
         call = self.cmd_line()
-        with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
+        with subprocess.Popen(
+            call, stdout=subprocess.PIPE, encoding="utf-8", errors="ignore"
+        ) as proc:
+            section = None
+            shit = io.StringIO()
+
             assert proc.stdout is not None
-            for line in io.TextIOWrapper(
-                proc.stdout, encoding="utf-8", errors="ignore"
-            ):
-                # Blank lines are there to help the reader; they have no context significance
-                if line != "\n":
-                    parser.read_line(line)
+            for line in proc.stdout:
+                if line[0] == "*" and (match := r_section.match(line)) is not None:
+                    if section is not None:
+                        shit.seek(0, 0)
+                        sections[section] = shit.getvalue()
+
+                    shit = io.StringIO()
+                    section = match.group(1)
+                else:
+                    shit.write(line)
+
+            # Save the final section from stdout
+            sections[section] = shit.getvalue()
+
+        if "TYPES" in sections:
+            parser.parse_types(sections["TYPES"])
+
+        if "SYMBOLS" in sections:
+            parser.parse_symbols(sections["SYMBOLS"])
+
+        if "LINES" in sections:
+            parser.parse_lines(sections["LINES"])
+
+        if "PUBLICS" in sections:
+            parser.parse_publics(sections["PUBLICS"])
+
+        if "SECTION CONTRIBUTIONS" in sections:
+            parser.parse_contrib(sections["SECTION CONTRIBUTIONS"])
+
+        if "GLOBALS" in sections:
+            parser.parse_globals(sections["GLOBALS"])
+
+        if "MODULES" in sections:
+            parser.parse_modules(sections["MODULES"])
 
         return parser

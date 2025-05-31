@@ -13,7 +13,7 @@ _line_addr_pairs_findall = re.compile(r"\s+(?P<line_no>\d+) (?P<addr>[A-F0-9]{8}
 # We assume no spaces in the file name
 # e.g. `  Z:\lego-island\isle\LEGO1\viewmanager\viewroi.cpp (None), 0001:00034E90-00034E97, line/addr pairs = 2`
 _lines_subsection_header = re.compile(
-    r"^\s*(?P<filename>\S+).*?, (?P<section>[A-F0-9]{4}):(?P<start>[A-F0-9]{8})-(?P<end>[A-F0-9]{8}), line/addr pairs = (?P<len>\d+)"
+    r"^\s*(?P<filename>\S+).*?, (?P<segment>[A-F0-9]{4}):(?P<start>[A-F0-9]{8})-(?P<end>[A-F0-9]{8}), line/addr pairs = (?P<len>\d+)"
 )
 
 # e.g. `S_PUB32: [0001:0003FF60], Flags: 00000000, __read`
@@ -99,17 +99,9 @@ class LineValue(NamedTuple):
     offset: int
 
 
-class LinesFunction(NamedTuple):
-    filename: PureWindowsPath
-    section: int
-
-
 class CvdumpParser:
     # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
-        self._section: str = ""
-        self._lines_function = LinesFunction(PureWindowsPath(), 0)
-
         self.lines: dict[PureWindowsPath, list[LineValue]] = {}
         self.publics: list[PublicsEntry] = []
         self.sizerefs: list[SizeRefEntry] = []
@@ -123,25 +115,28 @@ class CvdumpParser:
     def symbols(self):
         return self.symbols_parser.symbols
 
-    def _lines_section(self, line: str):
+    def _lines_section(self, stream: str):
         """Parsing entries from the LINES section. We only care about the pairs of
         line_number and address and the subsection header to indicate which code file
         we are in."""
 
-        # Subheader indicates a new function and possibly a new code filename.
-        # Save the section here because it is not given on the lines that follow.
-        if (match := _lines_subsection_header.match(line)) is not None:
-            self._lines_function = LinesFunction(
-                PureWindowsPath(match.group("filename")),
-                int(match.group("section"), 16),
-            )
-            return
+        for module in re.split(r"(?=\*\* Module)", stream):
+            for subsection in re.split(r"(?<=\n{2}\s{2})(?=\S)", module):
+                match = _lines_subsection_header.match(subsection)
+                if match is None:
+                    continue
 
-        # Match any pairs as we find them
-        for line_no, offset in _line_addr_pairs_findall.findall(line):
-            self.lines.setdefault(self._lines_function.filename, []).append(
-                LineValue(int(line_no), self._lines_function.section, int(offset, 16))
-            )
+                filename = PureWindowsPath(match.group("filename"))
+                segment = int(match.group("segment"), 16)
+
+                self.lines.setdefault(filename, []).extend(
+                    [
+                        LineValue(int(line_no), segment, int(offset, 16))
+                        for line_no, offset in _line_addr_pairs_findall.findall(
+                            subsection
+                        )
+                    ]
+                )
 
     def _publics_section(self, line: str):
         """Match each line from PUBLICS and pull out the symbol information.
@@ -207,8 +202,7 @@ class CvdumpParser:
             self.symbols_parser.read_line(line)
 
     def parse_lines(self, stream: str):
-        for line in stream.splitlines():
-            self._lines_section(line)
+        self._lines_section(stream)
 
     def parse_publics(self, stream: str):
         for line in stream.splitlines():

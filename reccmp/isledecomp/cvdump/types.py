@@ -213,20 +213,20 @@ class CvdumpTypesParser:
     LF_POINTER_ELEMENT = re.compile(r"^\s+Element type : (?P<element_type>.+)$")
 
     # LF_MFUNCTION attribute key-value pairs
-    LF_MFUNCTION_ATTRIBUTES = [
-        re.compile(r"\s*Return type = (?P<return_type>[^,]+)$"),
-        re.compile(r"\s*Class type = (?P<class_type>[\w()]+)$"),
-        re.compile(r"\s*This type = (?P<this_type>[\w()]+)$"),
-        # Call type may contain whitespace
-        re.compile(r"\s*Call type = (?P<call_type>[\w()\s]+)$"),
-        re.compile(r"\s*Parms = (?P<num_params>[\w()]+)$"),  # LF_MFUNCTION only
-        re.compile(r"\s*# Parms = (?P<num_params>[\w()]+)$"),  # LF_PROCEDURE only
-        re.compile(r"\s*Arg list type = (?P<arg_list_type>[\w()]+)$"),
-        re.compile(
-            r"\s*This adjust = (?P<this_adjust>[\w()]+)$"
-        ),  # By how much the incoming pointers are shifted in virtual inheritance; hex value without `0x` prefix
-        re.compile(r"\s*Func attr = (?P<func_attr>.+)$"),
-    ]
+    LF_MFUNCTION_TRANSLATE = {
+        "Return type": "return_type",
+        "Class type": "class_type",
+        "This type": "this_type",
+        "Call type": "call_type",
+        "Parms": "num_params",  # LF_MFUNCTION only
+        "# Parms": "num_params",  # LF_PROCEDURE only
+        "Arg list type": "arg_list_type",
+        "This adjust": "this_adjust",
+        # By how much the incoming pointers are shifted in virtual inheritance; hex value without `0x` prefix
+        "Func attr": "func_attr",
+    }
+
+    LF_MFUNCTION_PAIR = re.compile(r"\s*([\w\s]+) = ([^\n,]+),?")
 
     LF_ENUM_ATTRIBUTES = [
         re.compile(r"^\s*# members = (?P<num_members>\d+)$"),
@@ -693,18 +693,9 @@ class CvdumpTypesParser:
 
         obj = self.keys[self.last_key]
 
-        key_value_pairs = line.split(",")
-        for pair in key_value_pairs:
-            if pair.isspace():
-                continue
-            obj |= self.parse_function_attribute(pair)
-
-    def parse_function_attribute(self, pair: str) -> dict[str, str]:
-        for attribute_regex in self.LF_MFUNCTION_ATTRIBUTES:
-            if (match := attribute_regex.match(pair)) is not None:
-                return match.groupdict()
-        logger.error("Unknown attribute in function: %s", pair)
-        return {}
+        for key, value in self.LF_MFUNCTION_PAIR.findall(line):
+            if key in self.LF_MFUNCTION_TRANSLATE:
+                obj[self.LF_MFUNCTION_TRANSLATE[key]] = value
 
     def read_enum_line(self, line: str):
         obj = self.keys[self.last_key]

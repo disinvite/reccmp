@@ -81,23 +81,22 @@ class Cvdump:
         with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
             assert proc.stdout is not None
             section = None
-            shit = io.StringIO()
+            lines = []
 
             for line in io.TextIOWrapper(
                 proc.stdout, encoding="utf-8", errors="ignore"
             ):
                 if line[0] == "*" and (match := r_section.match(line)) is not None:
                     if section is not None:
-                        shit.seek(0, 0)
-                        sections[section] = shit.getvalue()
+                        sections[section] = "".join(lines)
+                        lines.clear()
 
-                    shit = io.StringIO()
                     section = match.group(1)
                 else:
-                    shit.write(line)
+                    lines.append(line)
 
             # Save the final section from stdout
-            sections[section] = shit.getvalue()
+            sections[section] = "".join(lines)
 
         if "TYPES" in sections:
             parser.parse_types(sections["TYPES"])

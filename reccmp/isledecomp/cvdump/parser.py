@@ -200,8 +200,7 @@ class CvdumpParser:
             )
 
     def parse_types(self, stream: str):
-        for line in stream.splitlines():
-            self.types.read_line(line)
+        self.types.read_all(stream)
 
     def parse_symbols(self, stream: str):
         for line in stream.splitlines():

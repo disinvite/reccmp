@@ -475,71 +475,91 @@ class CvdumpTypesParser:
         members = self.get_scalars_gapless(type_key)
         return member_list_to_struct_string(members)
 
-    def read_line(self, line: str):
-        if line.endswith("\n"):
-            line = line[:-1]
-        if len(line) == 0:
-            return
+    def read_all(self, section: str):
+        r_leafsplit = re.compile(r"(?=0x\w{4} : )")
+        for leaf in r_leafsplit.split(section):
+            all_lines = [
+                line for line in leaf.splitlines() if line
+            ]  # Remove blank lines
+            if not all_lines:
+                # TODO: ???
+                continue
 
-        if (match := self.INDEX_RE.match(line)) is not None:
-            type_ = match.group(2)
-            if type_ not in self.MODES_OF_INTEREST:
+            if (match := self.INDEX_RE.match(all_lines[0])) is None:
+                continue
+
+            (leaf_id, leaf_type) = match.groups()
+            if leaf_type not in self.MODES_OF_INTEREST:
                 self.mode = None
-                return
+                continue
 
-            # Don't need to normalize, it's already in the format we want
-            self.last_key = match.group(1)
-            self.mode = type_
+            # TODO: refactor
+            self.last_key = leaf_id
+            self.mode = leaf_type
             self._new_type()
 
-            if type_ == "LF_ARGLIST":
-                submatch = self.LF_ARGLIST_ARGCOUNT.match(line)
+            if leaf_type == "LF_ARGLIST":
+                submatch = self.LF_ARGLIST_ARGCOUNT.match(all_lines[0])
                 assert submatch is not None
                 self.keys[self.last_key]["argcount"] = int(submatch.group("argcount"))
                 # TODO: This should be validated in another pass
-            return
 
-        if self.mode is None:
-            return
+            # skip top line
+            lines = all_lines[1:]
 
-        if self.mode == "LF_MODIFIER":
-            if (match := self.MODIFIES_RE.match(line)) is not None:
-                # For convenience, because this is essentially the same thing
-                # as an LF_CLASS forward ref.
-                self._set("is_forward_ref", True)
-                self._set("modifies", normalize_type_id(match.group("type")))
+            if self.mode == "LF_MODIFIER":
+                for line in lines:
+                    self.read_modifier_line(line)
 
-        elif self.mode == "LF_ARRAY":
-            if (match := self.ARRAY_ELEMENT_RE.match(line)) is not None:
-                self._set("array_type", normalize_type_id(match.group("type")))
+            elif self.mode == "LF_ARRAY":
+                for line in lines:
+                    self.read_array_line(line)
 
-            elif (match := self.ARRAY_LENGTH_RE.match(line)) is not None:
-                self._set("size", int(match.group("length")))
+            elif self.mode == "LF_FIELDLIST":
+                for line in lines:
+                    self.read_fieldlist_line(line)
 
-        elif self.mode == "LF_FIELDLIST":
-            self.read_fieldlist_line(line)
+            elif self.mode == "LF_ARGLIST":
+                for line in lines:
+                    self.read_arglist_line(line)
 
-        elif self.mode == "LF_ARGLIST":
-            self.read_arglist_line(line)
+            elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
+                for line in lines:
+                    self.read_mfunction_line(line)
 
-        elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
-            self.read_mfunction_line(line)
+            elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
+                for line in lines:
+                    self.read_class_or_struct_line(line)
 
-        elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
-            self.read_class_or_struct_line(line)
+            elif self.mode == "LF_POINTER":
+                for line in lines:
+                    self.read_pointer_line(line)
 
-        elif self.mode == "LF_POINTER":
-            self.read_pointer_line(line)
+            elif self.mode == "LF_ENUM":
+                for line in lines:
+                    self.read_enum_line(line)
 
-        elif self.mode == "LF_ENUM":
-            self.read_enum_line(line)
+            elif self.mode == "LF_UNION":
+                for line in lines:
+                    self.read_union_line(line)
 
-        elif self.mode == "LF_UNION":
-            self.read_union_line(line)
+            else:
+                # Check for exhaustiveness
+                logger.error("Unhandled data in mode: %s", self.mode)
 
-        else:
-            # Check for exhaustiveness
-            logger.error("Unhandled data in mode: %s", self.mode)
+    def read_modifier_line(self, line: str):
+        if (match := self.MODIFIES_RE.match(line)) is not None:
+            # For convenience, because this is essentially the same thing
+            # as an LF_CLASS forward ref.
+            self._set("is_forward_ref", True)
+            self._set("modifies", normalize_type_id(match.group("type")))
+
+    def read_array_line(self, line: str):
+        if (match := self.ARRAY_ELEMENT_RE.match(line)) is not None:
+            self._set("array_type", normalize_type_id(match.group("type")))
+
+        elif (match := self.ARRAY_LENGTH_RE.match(line)) is not None:
+            self._set("size", int(match.group("length")))
 
     def read_fieldlist_line(self, line: str):
         # If this class has a vtable, create a mock member at offset 0

@@ -158,34 +158,26 @@ class CvdumpTypesParser:
     # Marks the start of a new type
     INDEX_RE = re.compile(r"(?P<key>0x\w+) : .* (?P<type>LF_\w+)")
 
-    # LF_FIELDLIST class/struct member (1/2)
+    # LF_FIELDLIST class/struct member
     LIST_RE = re.compile(
-        r"\s+list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)"
+        r"\s+list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)\n\s+member name = '(?P<name>.*)'"
     )
 
     # LF_FIELDLIST vtable indicator
-    VTABLE_RE = re.compile(r"^\s+list\[\d+\] = LF_VFUNCTAB")
+    VTABLE_RE = re.compile(r"\s+list\[\d+\] = LF_VFUNCTAB")
 
     # LF_FIELDLIST superclass indicator
     SUPERCLASS_RE = re.compile(
-        r"^\s+list\[\d+\] = LF_BCLASS, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)"
+        r"\s+list\[\d+\] = LF_BCLASS, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)"
     )
 
-    # LF_FIELDLIST virtual direct/indirect base pointer, line 1/2
+    # LF_FIELDLIST virtual direct/indirect base pointer
     VBCLASS_RE = re.compile(
-        r"^\s+list\[\d+\] = LF_(?P<indirect>I?)VBCLASS, .* base type = (?P<type>.*)$"
+        r"\s+list\[\d+\] = LF_(?P<indirect>I?)VBCLASS, .* base type = (?P<type>.*)\n\s+virtual base ptr = .+, vbpoff = (?P<vboffset>\d+), vbind = (?P<vbindex>\d+)"
     )
-
-    # LF_FIELDLIST virtual direct/indirect base pointer, line 2/2
-    VBCLASS_LINE_2_RE = re.compile(
-        r"^\s+virtual base ptr = .+, vbpoff = (?P<vboffset>\d+), vbind = (?P<vbindex>\d+)$"
-    )
-
-    # LF_FIELDLIST member name (2/2)
-    MEMBER_RE = re.compile(r"^\s+member name = '(?P<name>.*)'$")
 
     LF_FIELDLIST_ENUMERATE = re.compile(
-        r"^\s+list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'$"
+        r"\s+list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'"
     )
 
     # LF_ARRAY element type
@@ -516,8 +508,7 @@ class CvdumpTypesParser:
                     self.read_array_line(line)
 
             elif self.mode == "LF_FIELDLIST":
-                for line in lines:
-                    self.read_fieldlist_line(line)
+                self.read_fieldlist(leaf)
 
             elif self.mode == "LF_ARGLIST":
                 for line in lines:
@@ -561,15 +552,15 @@ class CvdumpTypesParser:
         elif (match := self.ARRAY_LENGTH_RE.match(line)) is not None:
             self._set("size", int(match.group("length")))
 
-    def read_fieldlist_line(self, line: str):
+    def read_fieldlist(self, leaf: str):
         # If this class has a vtable, create a mock member at offset 0
-        if (match := self.VTABLE_RE.match(line)) is not None:
+        if (match := self.VTABLE_RE.search(leaf)) is not None:
             # For our purposes, any pointer type will do
             self._add_member(0, "T_32PVOID")
             self._set_member_name("vftable")
 
         # Superclass is set here in the fieldlist rather than in LF_CLASS
-        elif (match := self.SUPERCLASS_RE.match(line)) is not None:
+        for match in self.SUPERCLASS_RE.finditer(leaf):
             superclass_list: dict[str, int] = self.keys[self.last_key].setdefault(
                 "super", {}
             )
@@ -578,7 +569,7 @@ class CvdumpTypesParser:
             )
 
         # virtual base class (direct or indirect)
-        elif (match := self.VBCLASS_RE.match(line)) is not None:
+        for match in self.VBCLASS_RE.finditer(leaf):
             virtual_base_pointer = self.keys[self.last_key].setdefault(
                 "vbase",
                 VirtualBasePointer(
@@ -598,11 +589,6 @@ class CvdumpTypesParser:
                 )
             )
 
-        elif (match := self.VBCLASS_LINE_2_RE.match(line)) is not None:
-            virtual_base_pointer = self.keys[self.last_key].get("vbase", None)
-            assert isinstance(
-                virtual_base_pointer, VirtualBasePointer
-            ), "Parsed the second line of an (I)VBCLASS without the first one"
             vboffset = int(match.group("vboffset"))
 
             if virtual_base_pointer.vboffset == -1:
@@ -623,16 +609,13 @@ class CvdumpTypesParser:
             virtual_base_pointer.bases.sort(key=lambda x: x.index)
 
         # Member offset and type given on the first of two lines.
-        elif (match := self.LIST_RE.match(line)) is not None:
+        for match in self.LIST_RE.finditer(leaf):
             self._add_member(
                 int(match.group("offset")), normalize_type_id(match.group("type"))
             )
-
-        # Name of the member read on the second of two lines.
-        elif (match := self.MEMBER_RE.match(line)) is not None:
             self._set_member_name(match.group("name"))
 
-        elif (match := self.LF_FIELDLIST_ENUMERATE.match(line)) is not None:
+        for match in self.LF_FIELDLIST_ENUMERATE.finditer(leaf):
             self._add_variant(match.group("name"), int(match.group("value")))
 
     def read_class_or_struct_line(self, line: str):

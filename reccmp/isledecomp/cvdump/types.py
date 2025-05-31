@@ -160,24 +160,24 @@ class CvdumpTypesParser:
 
     # LF_FIELDLIST class/struct member
     LIST_RE = re.compile(
-        r"\s+list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)\n\s+member name = '(?P<name>.*)'"
+        r"list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)\n\s+member name = '(?P<name>.*)'"
     )
 
     # LF_FIELDLIST vtable indicator
-    VTABLE_RE = re.compile(r"\s+list\[\d+\] = LF_VFUNCTAB")
+    VTABLE_RE = re.compile(r"list\[\d+\] = LF_VFUNCTAB")
 
     # LF_FIELDLIST superclass indicator
     SUPERCLASS_RE = re.compile(
-        r"\s+list\[\d+\] = LF_BCLASS, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)"
+        r"list\[\d+\] = LF_BCLASS, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)"
     )
 
     # LF_FIELDLIST virtual direct/indirect base pointer
     VBCLASS_RE = re.compile(
-        r"\s+list\[\d+\] = LF_(?P<indirect>I?)VBCLASS, .* base type = (?P<type>.*)\n\s+virtual base ptr = .+, vbpoff = (?P<vboffset>\d+), vbind = (?P<vbindex>\d+)"
+        r"list\[\d+\] = LF_(?P<indirect>I?)VBCLASS, .* base type = (?P<type>.*)\n\s+virtual base ptr = .+, vbpoff = (?P<vboffset>\d+), vbind = (?P<vbindex>\d+)"
     )
 
     LF_FIELDLIST_ENUMERATE = re.compile(
-        r"\s+list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'"
+        r"list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'"
     )
 
     # LF_ARRAY element type
@@ -553,70 +553,75 @@ class CvdumpTypesParser:
             self._set("size", int(match.group("length")))
 
     def read_fieldlist(self, leaf: str):
-        # If this class has a vtable, create a mock member at offset 0
-        if (match := self.VTABLE_RE.search(leaf)) is not None:
-            # For our purposes, any pointer type will do
-            self._add_member(0, "T_32PVOID")
-            self._set_member_name("vftable")
+        for list_idx in re.split(r"(?=list\[)", leaf):
+            if list_idx[0] != "l":
+                continue
 
-        # Superclass is set here in the fieldlist rather than in LF_CLASS
-        for match in self.SUPERCLASS_RE.finditer(leaf):
-            superclass_list: dict[str, int] = self.keys[self.last_key].setdefault(
-                "super", {}
-            )
-            superclass_list[normalize_type_id(match.group("type"))] = int(
-                match.group("offset")
-            )
+            # If this class has a vtable, create a mock member at offset 0
+            if "LF_VFUNCTAB" in list_idx:
+                # For our purposes, any pointer type will do
+                self._add_member(0, "T_32PVOID")
+                self._set_member_name("vftable")
+            elif "LF_BCLASS" in list_idx:
+                # Superclass is set here in the fieldlist rather than in LF_CLASS
+                if (match := self.SUPERCLASS_RE.search(list_idx)) is not None:
+                    superclass_list: dict[str, int] = self.keys[
+                        self.last_key
+                    ].setdefault("super", {})
+                    superclass_list[normalize_type_id(match.group("type"))] = int(
+                        match.group("offset")
+                    )
+            elif "VBCLASS" in list_idx:
+                # virtual base class (direct or indirect)
+                if (match := self.VBCLASS_RE.search(list_idx)) is not None:
+                    virtual_base_pointer = self.keys[self.last_key].setdefault(
+                        "vbase",
+                        VirtualBasePointer(
+                            vboffset=-1,  # default to -1 until we parse the correct value
+                            bases=[],
+                        ),
+                    )
+                    assert isinstance(
+                        virtual_base_pointer, VirtualBasePointer
+                    )  # type checker only
 
-        # virtual base class (direct or indirect)
-        for match in self.VBCLASS_RE.finditer(leaf):
-            virtual_base_pointer = self.keys[self.last_key].setdefault(
-                "vbase",
-                VirtualBasePointer(
-                    vboffset=-1,  # default to -1 until we parse the correct value
-                    bases=[],
-                ),
-            )
-            assert isinstance(
-                virtual_base_pointer, VirtualBasePointer
-            )  # type checker only
+                    virtual_base_pointer.bases.append(
+                        VirtualBaseClass(
+                            type=match.group("type"),
+                            index=-1,  # default to -1 until we parse the correct value
+                            direct=match.group("indirect") != "I",
+                        )
+                    )
 
-            virtual_base_pointer.bases.append(
-                VirtualBaseClass(
-                    type=match.group("type"),
-                    index=-1,  # default to -1 until we parse the correct value
-                    direct=match.group("indirect") != "I",
-                )
-            )
+                    vboffset = int(match.group("vboffset"))
 
-            vboffset = int(match.group("vboffset"))
+                    if virtual_base_pointer.vboffset == -1:
+                        # default value
+                        virtual_base_pointer.vboffset = vboffset
+                    elif virtual_base_pointer.vboffset != vboffset:
+                        # vboffset is always equal to 4 in our examples. We are not sure if there can be multiple
+                        # virtual base pointers, and if so, how the layout is supposed to look.
+                        # We therefore assume that there is always only one virtual base pointer.
+                        logger.error(
+                            "Unhandled: Found multiple virtual base pointers at offsets %d and %d",
+                            virtual_base_pointer.vboffset,
+                            vboffset,
+                        )
 
-            if virtual_base_pointer.vboffset == -1:
-                # default value
-                virtual_base_pointer.vboffset = vboffset
-            elif virtual_base_pointer.vboffset != vboffset:
-                # vboffset is always equal to 4 in our examples. We are not sure if there can be multiple
-                # virtual base pointers, and if so, how the layout is supposed to look.
-                # We therefore assume that there is always only one virtual base pointer.
-                logger.error(
-                    "Unhandled: Found multiple virtual base pointers at offsets %d and %d",
-                    virtual_base_pointer.vboffset,
-                    vboffset,
-                )
-
-            virtual_base_pointer.bases[-1].index = int(match.group("vbindex"))
-            # these come out of order, and the lists are so short that it's fine to sort them every time
-            virtual_base_pointer.bases.sort(key=lambda x: x.index)
-
-        # Member offset and type given on the first of two lines.
-        for match in self.LIST_RE.finditer(leaf):
-            self._add_member(
-                int(match.group("offset")), normalize_type_id(match.group("type"))
-            )
-            self._set_member_name(match.group("name"))
-
-        for match in self.LF_FIELDLIST_ENUMERATE.finditer(leaf):
-            self._add_variant(match.group("name"), int(match.group("value")))
+                    virtual_base_pointer.bases[-1].index = int(match.group("vbindex"))
+                    # these come out of order, and the lists are so short that it's fine to sort them every time
+                    virtual_base_pointer.bases.sort(key=lambda x: x.index)
+            elif "LF_MEMBER" in list_idx:
+                # Member offset and type given on the first of two lines.
+                if (match := self.LIST_RE.search(list_idx)) is not None:
+                    self._add_member(
+                        int(match.group("offset")),
+                        normalize_type_id(match.group("type")),
+                    )
+                    self._set_member_name(match.group("name"))
+            elif "LF_ENUMERATE" in list_idx:
+                if (match := self.LF_FIELDLIST_ENUMERATE.search(list_idx)) is not None:
+                    self._add_variant(match.group("name"), int(match.group("value")))
 
     def read_class_or_struct_line(self, line: str):
         # Match the reference to the associated LF_FIELDLIST

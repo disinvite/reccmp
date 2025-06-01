@@ -1,7 +1,5 @@
 import re
 import io
-import threading
-import queue
 from os import name as os_name
 from enum import Enum
 from typing import Iterable, Iterator
@@ -52,12 +50,6 @@ def iter_cvdump_sections(stream: Iterable[str]) -> Iterator[tuple[str, str]]:
         yield (section, "".join(lines))
 
 
-def cvdump_thread(stream: Iterable[str], q: queue.Queue):
-    for name, section in iter_cvdump_sections(stream):
-        print("Pushed ", name)
-        q.put((name, section))
-
-
 class Cvdump:
     def __init__(self, pdb: str) -> None:
         self._pdb: str = pdb
@@ -103,29 +95,10 @@ class Cvdump:
     def run(self) -> CvdumpParser:
         parser = CvdumpParser()
         call = self.cmd_line()
-        proc = subprocess.Popen(
-            call, stdout=subprocess.PIPE, bufsize=1, encoding="utf-8", errors="ignore"
-        )
-        assert proc.stdout is not None
-
-        use_threads = True
-
-        if use_threads:
-            qq: queue.Queue = queue.Queue()
-            thread = threading.Thread(target=cvdump_thread, args=(proc.stdout, qq))
-            thread.start()
-
-            while True:
-                try:
-                    (name, section) = qq.get(False)
-                    parser.read_section(name, section)
-                    print("Read ", name)
-                except queue.Empty:
-                    proc.poll()
-                    if proc.returncode is not None:
-                        break
-        else:
-            for name, section in iter_cvdump_sections(proc.stdout):
+        with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
+            assert proc.stdout is not None
+            wrap = io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="ignore")
+            for name, section in iter_cvdump_sections(wrap):
                 parser.read_section(name, section)
 
         return parser

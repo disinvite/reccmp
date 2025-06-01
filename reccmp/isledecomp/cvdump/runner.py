@@ -2,6 +2,7 @@ import re
 import io
 from os import name as os_name
 from enum import Enum
+from typing import Iterable, Iterator
 import subprocess
 from reccmp.bin import lib_path_join
 from reccmp.isledecomp.dir import winepath_unix_to_win
@@ -29,7 +30,24 @@ cvdump_opt_map = {
 }
 
 
-r_section = re.compile(r"\*{3} ([A-Z]{2,}.+)\n")
+def iter_cvdump_sections(stream: Iterable[str]) -> Iterator[tuple[str, str]]:
+    r_section = re.compile(r"\*{3} ([A-Z]{2,}.+)\n")
+    section = None
+    lines = []
+
+    for line in stream:
+        if line[0] == "*" and (match := r_section.match(line)) is not None:
+            if section is not None:
+                yield (section, "".join(lines))
+                lines.clear()
+
+            section = match.group(1)
+        else:
+            lines.append(line)
+
+    # Save the final section from stdout
+    if section is not None:
+        yield (section, "".join(lines))
 
 
 class Cvdump:
@@ -76,27 +94,11 @@ class Cvdump:
 
     def run(self) -> CvdumpParser:
         parser = CvdumpParser()
-        sections = {}
         call = self.cmd_line()
         with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
             assert proc.stdout is not None
-            section = None
-            lines = []
-
-            for line in io.TextIOWrapper(
-                proc.stdout, encoding="utf-8", errors="ignore"
-            ):
-                if line[0] == "*" and (match := r_section.match(line)) is not None:
-                    if section is not None:
-                        sections[section] = "".join(lines)
-                        lines.clear()
-
-                    section = match.group(1)
-                else:
-                    lines.append(line)
-
-            # Save the final section from stdout
-            sections[section] = "".join(lines)
+            wrap = io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="ignore")
+            sections = dict(iter_cvdump_sections(wrap))
 
         if "TYPES" in sections:
             parser.parse_types(sections["TYPES"])

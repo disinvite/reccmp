@@ -98,27 +98,7 @@ class Cvdump:
         with subprocess.Popen(call, stdout=subprocess.PIPE) as proc:
             assert proc.stdout is not None
             wrap = io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="ignore")
-            sections = dict(iter_cvdump_sections(wrap))
-
-        if "TYPES" in sections:
-            parser.parse_types(sections["TYPES"])
-
-        if "SYMBOLS" in sections:
-            parser.parse_symbols(sections["SYMBOLS"])
-
-        if "LINES" in sections:
-            parser.parse_lines(sections["LINES"])
-
-        if "PUBLICS" in sections:
-            parser.parse_publics(sections["PUBLICS"])
-
-        if "SECTION CONTRIBUTIONS" in sections:
-            parser.parse_contrib(sections["SECTION CONTRIBUTIONS"])
-
-        if "GLOBALS" in sections:
-            parser.parse_globals(sections["GLOBALS"])
-
-        if "MODULES" in sections:
-            parser.parse_modules(sections["MODULES"])
+            for name, section in iter_cvdump_sections(wrap):
+                parser.read_section(name, section)
 
         return parser

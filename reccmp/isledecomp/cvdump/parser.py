@@ -194,28 +194,29 @@ class CvdumpParser:
                 )
             )
 
-    def parse_types(self, stream: str):
-        self.types.read_all(stream)
+    def read_section(self, name: str, section: str):
+        if name == "TYPES":
+            self.types.read_all(section)
 
-    def parse_symbols(self, stream: str):
-        for line in stream.splitlines():
-            self.symbols_parser.read_line(line)
+        elif name == "SYMBOLS":
+            for line in section.splitlines():
+                self.symbols_parser.read_line(line)
 
-    def parse_lines(self, stream: str):
-        self._lines_section(stream)
+        elif name == "LINES":
+            self._lines_section(section)
 
-    def parse_publics(self, stream: str):
-        for line in stream.splitlines():
-            self._publics_section(line)
+        elif name == "PUBLICS":
+            for line in section.splitlines():
+                self._publics_section(line)
 
-    def parse_contrib(self, stream: str):
-        for line in stream.splitlines():
-            self._section_contributions(line)
+        elif name == "SECTION CONTRIBUTIONS":
+            for line in section.splitlines():
+                self._section_contributions(line)
 
-    def parse_globals(self, stream: str):
-        for line in stream.splitlines():
-            self._globals_section(line)
+        elif name == "GLOBALS":
+            for line in section.splitlines():
+                self._globals_section(line)
 
-    def parse_modules(self, stream: str):
-        for line in stream.splitlines():
-            self._modules_section(line)
+        elif name == "MODULES":
+            for line in section.splitlines():
+                self._modules_section(line)

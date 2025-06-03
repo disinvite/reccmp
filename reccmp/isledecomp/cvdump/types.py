@@ -588,9 +588,7 @@ class CvdumpTypesParser:
             for value, name in self.LF_FIELDLIST_ENUMERATE.findall(leaf)
         ]
         if variants:
-            self.keys[self.last_key]["variants"] = sorted(
-                variants, key=lambda v: v["value"]
-            )
+            self.keys[self.last_key]["variants"] = variants
 
     def read_class_or_struct_line(self, line: str):
         # Match the reference to the associated LF_FIELDLIST
@@ -628,7 +626,9 @@ class CvdumpTypesParser:
 
         assert len(arglist) == argcount
         self.keys[self.last_key]["argcount"] = argcount
-        self.keys[self.last_key].setdefault("args", []).extend(arglist)
+
+        if arglist:
+            self.keys[self.last_key]["args"] = arglist
 
     def read_pointer_line(self, line: str):
         if (match := self.LF_POINTER_ELEMENT.match(line)) is not None:

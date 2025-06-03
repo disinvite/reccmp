@@ -160,7 +160,7 @@ class CvdumpTypesParser:
 
     # LF_FIELDLIST class/struct member
     LIST_RE = re.compile(
-        r"list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>.*), offset = (?P<offset>\d+)\n\s+member name = '(?P<name>.*)'"
+        r"list\[\d+\] = LF_MEMBER, (?P<scope>\w+), type = (?P<type>[^,]*), offset = (?P<offset>\d+)\s+member name = '(?P<name>[^']*)'"
     )
 
     # LF_FIELDLIST vtable indicator
@@ -267,25 +267,6 @@ class CvdumpTypesParser:
 
     def _set(self, key: str, value):
         self.keys[self.last_key][key] = value
-
-    def _add_member(self, offset: int, type_: str):
-        obj = self.keys[self.last_key]
-        if "members" not in obj:
-            obj["members"] = []
-
-        obj["members"].append({"offset": offset, "type": type_})
-
-    def _set_member_name(self, name: str):
-        """Set name for most recently added member."""
-        obj = self.keys[self.last_key]
-        obj["members"][-1]["name"] = name
-
-    def _add_variant(self, name: str, value: int):
-        obj = self.keys[self.last_key]
-        if "variants" not in obj:
-            obj["variants"] = []
-        variants: list[dict[str, Any]] = obj["variants"]
-        variants.append({"name": name, "value": value})
 
     def _get_field_list(self, type_obj: dict[str, Any]) -> list[FieldListItem]:
         """Return the field list for the given LF_CLASS/LF_STRUCTURE reference"""
@@ -553,75 +534,85 @@ class CvdumpTypesParser:
             self._set("size", int(match.group("length")))
 
     def read_fieldlist(self, leaf: str):
-        for list_idx in re.split(r"(?=list\[)", leaf):
-            if list_idx[0] != "l":
-                continue
+        self.keys[self.last_key]["members"] = []
 
-            # If this class has a vtable, create a mock member at offset 0
-            if "LF_VFUNCTAB" in list_idx:
-                # For our purposes, any pointer type will do
-                self._add_member(0, "T_32PVOID")
-                self._set_member_name("vftable")
-            elif "LF_BCLASS" in list_idx:
-                # Superclass is set here in the fieldlist rather than in LF_CLASS
-                if (match := self.SUPERCLASS_RE.search(list_idx)) is not None:
-                    superclass_list: dict[str, int] = self.keys[
-                        self.last_key
-                    ].setdefault("super", {})
-                    superclass_list[normalize_type_id(match.group("type"))] = int(
-                        match.group("offset")
-                    )
-            elif "VBCLASS" in list_idx:
-                # virtual base class (direct or indirect)
-                if (match := self.VBCLASS_RE.search(list_idx)) is not None:
-                    virtual_base_pointer = self.keys[self.last_key].setdefault(
-                        "vbase",
-                        VirtualBasePointer(
-                            vboffset=-1,  # default to -1 until we parse the correct value
-                            bases=[],
-                        ),
-                    )
-                    assert isinstance(
-                        virtual_base_pointer, VirtualBasePointer
-                    )  # type checker only
+        # If this class has a vtable, create a mock member at offset 0
+        if self.VTABLE_RE.search(leaf) is not None:
+            # For our purposes, any pointer type will do
+            self.keys[self.last_key]["members"].append(
+                {"offset": 0, "type": "T_32PVOID", "name": "vftable"}
+            )
 
-                    virtual_base_pointer.bases.append(
-                        VirtualBaseClass(
-                            type=match.group("type"),
-                            index=-1,  # default to -1 until we parse the correct value
-                            direct=match.group("indirect") != "I",
-                        )
-                    )
+        # Superclass is set here in the fieldlist rather than in LF_CLASS
+        for match in self.SUPERCLASS_RE.finditer(leaf):
+            superclass_list: dict[str, int] = self.keys[self.last_key].setdefault(
+                "super", {}
+            )
+            superclass_list[normalize_type_id(match.group("type"))] = int(
+                match.group("offset")
+            )
 
-                    vboffset = int(match.group("vboffset"))
+        # virtual base class (direct or indirect)
+        for match in self.VBCLASS_RE.finditer(leaf):
+            virtual_base_pointer = self.keys[self.last_key].setdefault(
+                "vbase",
+                VirtualBasePointer(
+                    vboffset=-1,  # default to -1 until we parse the correct value
+                    bases=[],
+                ),
+            )
+            assert isinstance(
+                virtual_base_pointer, VirtualBasePointer
+            )  # type checker only
 
-                    if virtual_base_pointer.vboffset == -1:
-                        # default value
-                        virtual_base_pointer.vboffset = vboffset
-                    elif virtual_base_pointer.vboffset != vboffset:
-                        # vboffset is always equal to 4 in our examples. We are not sure if there can be multiple
-                        # virtual base pointers, and if so, how the layout is supposed to look.
-                        # We therefore assume that there is always only one virtual base pointer.
-                        logger.error(
-                            "Unhandled: Found multiple virtual base pointers at offsets %d and %d",
-                            virtual_base_pointer.vboffset,
-                            vboffset,
-                        )
+            virtual_base_pointer.bases.append(
+                VirtualBaseClass(
+                    type=match.group("type"),
+                    index=-1,  # default to -1 until we parse the correct value
+                    direct=match.group("indirect") != "I",
+                )
+            )
 
-                    virtual_base_pointer.bases[-1].index = int(match.group("vbindex"))
-                    # these come out of order, and the lists are so short that it's fine to sort them every time
-                    virtual_base_pointer.bases.sort(key=lambda x: x.index)
-            elif "LF_MEMBER" in list_idx:
-                # Member offset and type given on the first of two lines.
-                if (match := self.LIST_RE.search(list_idx)) is not None:
-                    self._add_member(
-                        int(match.group("offset")),
-                        normalize_type_id(match.group("type")),
-                    )
-                    self._set_member_name(match.group("name"))
-            elif "LF_ENUMERATE" in list_idx:
-                if (match := self.LF_FIELDLIST_ENUMERATE.search(list_idx)) is not None:
-                    self._add_variant(match.group("name"), int(match.group("value")))
+            vboffset = int(match.group("vboffset"))
+
+            if virtual_base_pointer.vboffset == -1:
+                # default value
+                virtual_base_pointer.vboffset = vboffset
+            elif virtual_base_pointer.vboffset != vboffset:
+                # vboffset is always equal to 4 in our examples. We are not sure if there can be multiple
+                # virtual base pointers, and if so, how the layout is supposed to look.
+                # We therefore assume that there is always only one virtual base pointer.
+                logger.error(
+                    "Unhandled: Found multiple virtual base pointers at offsets %d and %d",
+                    virtual_base_pointer.vboffset,
+                    vboffset,
+                )
+
+            virtual_base_pointer.bases[-1].index = int(match.group("vbindex"))
+            # these come out of order, and the lists are so short that it's fine to sort them every time
+            virtual_base_pointer.bases.sort(key=lambda x: x.index)
+
+        self.keys[self.last_key]["members"] += [
+            {
+                "offset": int(offset),
+                "type": normalize_type_id(type_),
+                "name": name,
+            }
+            for (_, type_, offset, name) in self.LIST_RE.findall(leaf)
+        ]
+
+        # TODO: ugly. pytest bodge
+        if not self.keys[self.last_key]["members"]:
+            del self.keys[self.last_key]["members"]
+
+        variants = [
+            {"name": name, "value": int(value)}
+            for value, name in self.LF_FIELDLIST_ENUMERATE.findall(leaf)
+        ]
+        if variants:
+            self.keys[self.last_key]["variants"] = sorted(
+                variants, key=lambda v: v["value"]
+            )
 
     def read_class_or_struct_line(self, line: str):
         # Match the reference to the associated LF_FIELDLIST

@@ -190,12 +190,12 @@ class CvdumpTypesParser:
 
     # LF_CLASS/LF_STRUCTURE field list reference
     CLASS_FIELD_RE = re.compile(
-        r"^\s+# members = \d+,  field list type (?P<field_type>0x\w+),"
+        r"\s+# members = \d+,  field list type (?P<field_type>0x\w+),"
     )
 
     # LF_CLASS/LF_STRUCTURE name and other info
     CLASS_NAME_RE = re.compile(
-        r"^\s+Size = (?P<size>\d+), class name = (?P<name>(?:[^,]|,\S)+)(?:, unique name = [^,]+)?(?:, UDT\((?P<udt>0x\w+)\))?"
+        r"\s+Size = (?P<size>\d+), class name = (?P<name>(?:[^\n,]|,\S)+)(?:, unique name = [^\n,]+)?(?:, UDT\((?P<udt>0x\w+)\))?"
     )
 
     # LF_MODIFIER, type being modified
@@ -208,7 +208,10 @@ class CvdumpTypesParser:
     LF_ARGLIST_ENTRY = re.compile(r"list\[(?P<index>\d+)\] = (?P<arg_type>[?\w()]+)")
 
     # LF_POINTER element
-    LF_POINTER_ELEMENT = re.compile(r"^\s+Element type : (?P<element_type>.+)$")
+    LF_POINTER_ELEMENT = re.compile(r"\s+Element type : (?P<element_type>.+)")
+
+    # LF_POINTER type
+    LF_POINTER_TYPE = re.compile(r"\s+(?P<type>.+\S) \(\w+\), Size: \d+")
 
     # LF_MFUNCTION attribute key-value pairs
     LF_MFUNCTION_TRANSLATE = {
@@ -235,7 +238,7 @@ class CvdumpTypesParser:
     )
     LF_ENUM_UDT = re.compile(r"^\s*UDT\((?P<udt>0x\w+)\)$")
     LF_UNION_LINE = re.compile(
-        r"^.*field list type (?P<field_type>0x\w+),.*Size = (?P<size>\d+)\s*,class name = (?P<name>(?:[^,]|,\S)+)(?:, unique name = [^,]+)?(?:,\s.*UDT\((?P<udt>0x\w+)\))?$"
+        r"\s+field list type (?P<field_type>0x\w+),.*Size = (?P<size>\d+)\s*,class name = (?P<name>(?:[^\n,]|,\S)+)(?:, unique name = [^\n,]+)?(?:,\s.*UDT\((?P<udt>0x\w+)\))?"
     )
 
     MODES_OF_INTEREST = {
@@ -462,9 +465,6 @@ class CvdumpTypesParser:
             self.mode = leaf_type
             self._new_type()
 
-            # skip top line (leaf header), remove blank lines
-            lines = (line for line in leaf.splitlines()[1:] if line)
-
             if self.mode == "LF_MODIFIER":
                 self.read_modifier(leaf)
 
@@ -478,23 +478,19 @@ class CvdumpTypesParser:
                 self.read_arglist(leaf)
 
             elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
-                self.read_mfunction_line(leaf)
+                self.read_mfunction(leaf)
 
             elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
-                for line in lines:
-                    self.read_class_or_struct_line(line)
+                self.read_class_or_struct(leaf)
 
             elif self.mode == "LF_POINTER":
-                for line in lines:
-                    self.read_pointer_line(line)
+                self.read_pointer(leaf)
 
             elif self.mode == "LF_ENUM":
-                for line in lines:
-                    self.read_enum_line(line)
+                self.read_enum(leaf)
 
             elif self.mode == "LF_UNION":
-                for line in lines:
-                    self.read_union_line(line)
+                self.read_union(leaf)
 
             else:
                 # Check for exhaustiveness
@@ -590,9 +586,9 @@ class CvdumpTypesParser:
         if variants:
             self.keys[self.last_key]["variants"] = variants
 
-    def read_class_or_struct_line(self, line: str):
+    def read_class_or_struct(self, leaf: str):
         # Match the reference to the associated LF_FIELDLIST
-        if (match := self.CLASS_FIELD_RE.match(line)) is not None:
+        if (match := self.CLASS_FIELD_RE.search(leaf)) is not None:
             if match.group("field_type") == "0x0000":
                 # Not redundant. UDT might not match the key.
                 # These cases get reported as UDT mismatch.
@@ -601,11 +597,7 @@ class CvdumpTypesParser:
                 field_list_type = normalize_type_id(match.group("field_type"))
                 self._set("field_list_type", field_list_type)
 
-        elif line.lstrip().startswith("Derivation list type"):
-            # We do not care about the second line, but we still match it so we see an error
-            # when another line fails to match
-            pass
-        elif (match := self.CLASS_NAME_RE.match(line)) is not None:
+        if (match := self.CLASS_NAME_RE.search(leaf)) is not None:
             # Last line has the vital information.
             # If this is a FORWARD REF, we need to follow the UDT pointer
             # to get the actual class details.
@@ -614,8 +606,6 @@ class CvdumpTypesParser:
             if udt is not None:
                 self._set("udt", normalize_type_id(udt))
             self._set("size", int(match.group("size")))
-        else:
-            logger.error("Unmatched line in class: %s", line[:-1])
 
     def read_arglist(self, leaf: str):
         submatch = self.LF_ARGLIST_ARGCOUNT.match(leaf)
@@ -630,26 +620,23 @@ class CvdumpTypesParser:
         if arglist:
             self.keys[self.last_key]["args"] = arglist
 
-    def read_pointer_line(self, line: str):
-        if (match := self.LF_POINTER_ELEMENT.match(line)) is not None:
+    def read_pointer(self, leaf: str):
+        if (match := self.LF_POINTER_ELEMENT.search(leaf)) is not None:
             self._set("element_type", match.group("element_type"))
-        else:
-            stripped_line = line.strip()
+
+        if (match := self.LF_POINTER_TYPE.search(leaf)) is not None:
             # We don't parse these lines, but we still want to check for exhaustiveness
             # in case we missed some relevant data
-            if not any(
-                stripped_line.startswith(prefix)
-                for prefix in [
-                    "R-value Reference",
-                    "Pointer",
-                    "const Pointer",
-                    "L-value",
-                    "volatile",
-                ]
+            if match.group("type") not in (
+                "R-value Reference",
+                "Pointer",
+                "const Pointer",
+                "L-value Reference",
+                "volatile Pointer",
             ):
-                logger.error("Unrecognized pointer attribute: %s", line[:-1])
+                logger.error("Unrecognized pointer attribute: %s", match.group("type"))
 
-    def read_mfunction_line(self, leaf: str):
+    def read_mfunction(self, leaf: str):
         """
         The layout is not consistent, so we want to be as robust as possible here.
         - Example 1:
@@ -666,18 +653,22 @@ class CvdumpTypesParser:
             if key in self.LF_MFUNCTION_TRANSLATE:
                 obj[self.LF_MFUNCTION_TRANSLATE[key]] = value
 
-    def read_enum_line(self, line: str):
+    def read_enum(self, leaf: str):
         obj = self.keys[self.last_key]
 
-        # We need special comma handling because commas may appear in the name.
-        # Splitting by "," yields the wrong result.
-        enum_attributes = line.split(", ")
-        for pair in enum_attributes:
-            if pair.endswith(","):
-                pair = pair[:-1]
-            if pair.isspace():
+        # TODO: still parsing each line for now
+        for line in leaf.splitlines()[1:]:
+            if not line:
                 continue
-            obj |= self.parse_enum_attribute(pair)
+            # We need special comma handling because commas may appear in the name.
+            # Splitting by "," yields the wrong result.
+            enum_attributes = line.split(", ")
+            for pair in enum_attributes:
+                if pair.endswith(","):
+                    pair = pair[:-1]
+                if pair.isspace():
+                    continue
+                obj |= self.parse_enum_attribute(pair)
 
     def parse_enum_attribute(self, attribute: str) -> dict[str, Any]:
         for attribute_regex in self.LF_ENUM_ATTRIBUTES:
@@ -698,10 +689,11 @@ class CvdumpTypesParser:
         logger.error("Unknown attribute in enum: %s", attribute)
         return {}
 
-    def read_union_line(self, line: str):
+    def read_union(self, leaf: str):
         """This is a rather barebones handler, only parsing the size"""
-        if (match := self.LF_UNION_LINE.match(line)) is None:
-            raise AssertionError(f"Unhandled in union: {line}")
+        match = self.LF_UNION_LINE.search(leaf)
+        assert match is not None
+
         self._set("name", match.group("name"))
         if match.group("field_type") == "0x0000":
             self._set("is_forward_ref", True)

@@ -517,14 +517,12 @@ class CvdumpTypesParser:
             self._set("size", int(match.group("length")))
 
     def read_fieldlist(self, leaf: str):
-        self.keys[self.last_key]["members"] = []
+        members = []
 
         # If this class has a vtable, create a mock member at offset 0
         if self.VTABLE_RE.search(leaf) is not None:
             # For our purposes, any pointer type will do
-            self.keys[self.last_key]["members"].append(
-                {"offset": 0, "type": "T_32PVOID", "name": "vftable"}
-            )
+            members.append({"offset": 0, "type": "T_32PVOID", "name": "vftable"})
 
         # Superclass is set here in the fieldlist rather than in LF_CLASS
         for match in self.SUPERCLASS_RE.finditer(leaf):
@@ -575,7 +573,7 @@ class CvdumpTypesParser:
             # these come out of order, and the lists are so short that it's fine to sort them every time
             virtual_base_pointer.bases.sort(key=lambda x: x.index)
 
-        self.keys[self.last_key]["members"] += [
+        members += [
             {
                 "offset": int(offset),
                 "type": normalize_type_id(type_),
@@ -584,9 +582,8 @@ class CvdumpTypesParser:
             for (_, type_, offset, name) in self.LIST_RE.findall(leaf)
         ]
 
-        # TODO: ugly. pytest bodge
-        if not self.keys[self.last_key]["members"]:
-            del self.keys[self.last_key]["members"]
+        if members:
+            self.keys[self.last_key]["members"] = members
 
         variants = [
             {"name": name, "value": int(value)}

@@ -181,11 +181,11 @@ class CvdumpTypesParser:
     )
 
     # LF_ARRAY element type
-    ARRAY_ELEMENT_RE = re.compile(r"^\s+Element type = (?P<type>.*)")
+    ARRAY_ELEMENT_RE = re.compile(r"\s+Element type = (?P<type>.*)")
 
     # LF_ARRAY total array size
     ARRAY_LENGTH_RE = re.compile(
-        r"^\s+length = (?P<number_type>\([\w_]+\) )?(?P<length>\d+)"
+        r"\s+length = (?P<number_type>\([\w_]+\) )?(?P<length>\d+)"
     )
 
     # LF_CLASS/LF_STRUCTURE field list reference
@@ -199,7 +199,7 @@ class CvdumpTypesParser:
     )
 
     # LF_MODIFIER, type being modified
-    MODIFIES_RE = re.compile(r".*modifies type (?P<type>.*)$")
+    MODIFIES_RE = re.compile(r"\s+modifies type (?P<type>.*)")
 
     # LF_ARGLIST number of entries
     LF_ARGLIST_ARGCOUNT = re.compile(r".*argument count = (?P<argcount>\d+)")
@@ -463,15 +463,13 @@ class CvdumpTypesParser:
             self._new_type()
 
             # skip top line (leaf header), remove blank lines
-            lines = [line for line in leaf.splitlines()[1:] if line]
+            lines = (line for line in leaf.splitlines()[1:] if line)
 
             if self.mode == "LF_MODIFIER":
-                for line in lines:
-                    self.read_modifier_line(line)
+                self.read_modifier(leaf)
 
             elif self.mode == "LF_ARRAY":
-                for line in lines:
-                    self.read_array_line(line)
+                self.read_array(leaf)
 
             elif self.mode == "LF_FIELDLIST":
                 self.read_fieldlist(leaf)
@@ -502,18 +500,18 @@ class CvdumpTypesParser:
                 # Check for exhaustiveness
                 logger.error("Unhandled data in mode: %s", self.mode)
 
-    def read_modifier_line(self, line: str):
-        if (match := self.MODIFIES_RE.match(line)) is not None:
+    def read_modifier(self, leaf: str):
+        if (match := self.MODIFIES_RE.search(leaf)) is not None:
             # For convenience, because this is essentially the same thing
             # as an LF_CLASS forward ref.
             self._set("is_forward_ref", True)
             self._set("modifies", normalize_type_id(match.group("type")))
 
-    def read_array_line(self, line: str):
-        if (match := self.ARRAY_ELEMENT_RE.match(line)) is not None:
+    def read_array(self, leaf: str):
+        if (match := self.ARRAY_ELEMENT_RE.search(leaf)) is not None:
             self._set("array_type", normalize_type_id(match.group("type")))
 
-        elif (match := self.ARRAY_LENGTH_RE.match(line)) is not None:
+        if (match := self.ARRAY_LENGTH_RE.search(leaf)) is not None:
             self._set("size", int(match.group("length")))
 
     def read_fieldlist(self, leaf: str):

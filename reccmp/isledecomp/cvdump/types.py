@@ -205,9 +205,7 @@ class CvdumpTypesParser:
     LF_ARGLIST_ARGCOUNT = re.compile(r".*argument count = (?P<argcount>\d+)")
 
     # LF_ARGLIST list entry
-    LF_ARGLIST_ENTRY = re.compile(
-        r"^\s+list\[(?P<index>\d+)\] = (?P<arg_type>[?\w()]+)$"
-    )
+    LF_ARGLIST_ENTRY = re.compile(r"list\[(?P<index>\d+)\] = (?P<arg_type>[?\w()]+)")
 
     # LF_POINTER element
     LF_POINTER_ELEMENT = re.compile(r"^\s+Element type : (?P<element_type>.+)$")
@@ -464,12 +462,6 @@ class CvdumpTypesParser:
             self.mode = leaf_type
             self._new_type()
 
-            if leaf_type == "LF_ARGLIST":
-                submatch = self.LF_ARGLIST_ARGCOUNT.match(leaf)
-                assert submatch is not None
-                self.keys[self.last_key]["argcount"] = int(submatch.group("argcount"))
-                # TODO: This should be validated in another pass
-
             # skip top line (leaf header), remove blank lines
             lines = [line for line in leaf.splitlines()[1:] if line]
 
@@ -485,8 +477,7 @@ class CvdumpTypesParser:
                 self.read_fieldlist(leaf)
 
             elif self.mode == "LF_ARGLIST":
-                for line in lines:
-                    self.read_arglist_line(line)
+                self.read_arglist(leaf)
 
             elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
                 self.read_mfunction_line(leaf)
@@ -633,16 +624,16 @@ class CvdumpTypesParser:
         else:
             logger.error("Unmatched line in class: %s", line[:-1])
 
-    def read_arglist_line(self, line: str):
-        if (match := self.LF_ARGLIST_ENTRY.match(line)) is not None:
-            obj = self.keys[self.last_key]
-            arglist: list = obj.setdefault("args", [])
-            assert int(match.group("index")) == len(
-                arglist
-            ), "Argument list out of sync"
-            arglist.append(match.group("arg_type"))
-        else:
-            logger.error("Unmatched line in arglist: %s", line[:-1])
+    def read_arglist(self, leaf: str):
+        submatch = self.LF_ARGLIST_ARGCOUNT.match(leaf)
+        assert submatch is not None
+        argcount = int(submatch.group("argcount"))
+
+        arglist = [arg_type for (_, arg_type) in self.LF_ARGLIST_ENTRY.findall(leaf)]
+
+        assert len(arglist) == argcount
+        self.keys[self.last_key]["argcount"] = argcount
+        self.keys[self.last_key].setdefault("args", []).extend(arglist)
 
     def read_pointer_line(self, line: str):
         if (match := self.LF_POINTER_ELEMENT.match(line)) is not None:
@@ -663,7 +654,7 @@ class CvdumpTypesParser:
             ):
                 logger.error("Unrecognized pointer attribute: %s", line[:-1])
 
-    def read_mfunction_line(self, line: str):
+    def read_mfunction_line(self, leaf: str):
         """
         The layout is not consistent, so we want to be as robust as possible here.
         - Example 1:
@@ -676,7 +667,7 @@ class CvdumpTypesParser:
 
         obj = self.keys[self.last_key]
 
-        for key, value in self.LF_MFUNCTION_PAIR.findall(line):
+        for key, value in self.LF_MFUNCTION_PAIR.findall(leaf):
             if key in self.LF_MFUNCTION_TRANSLATE:
                 obj[self.LF_MFUNCTION_TRANSLATE[key]] = value
 

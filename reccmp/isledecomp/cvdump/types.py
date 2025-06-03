@@ -202,7 +202,7 @@ class CvdumpTypesParser:
     MODIFIES_RE = re.compile(r".*modifies type (?P<type>.*)$")
 
     # LF_ARGLIST number of entries
-    LF_ARGLIST_ARGCOUNT = re.compile(r".*argument count = (?P<argcount>\d+)$")
+    LF_ARGLIST_ARGCOUNT = re.compile(r".*argument count = (?P<argcount>\d+)")
 
     # LF_ARGLIST list entry
     LF_ARGLIST_ENTRY = re.compile(
@@ -451,14 +451,7 @@ class CvdumpTypesParser:
     def read_all(self, section: str):
         r_leafsplit = re.compile(r"(?=0x\w{4} : )")
         for leaf in r_leafsplit.split(section):
-            all_lines = [
-                line for line in leaf.splitlines() if line
-            ]  # Remove blank lines
-            if not all_lines:
-                # TODO: ???
-                continue
-
-            if (match := self.INDEX_RE.match(all_lines[0])) is None:
+            if (match := self.INDEX_RE.match(leaf)) is None:
                 continue
 
             (leaf_id, leaf_type) = match.groups()
@@ -472,13 +465,13 @@ class CvdumpTypesParser:
             self._new_type()
 
             if leaf_type == "LF_ARGLIST":
-                submatch = self.LF_ARGLIST_ARGCOUNT.match(all_lines[0])
+                submatch = self.LF_ARGLIST_ARGCOUNT.match(leaf)
                 assert submatch is not None
                 self.keys[self.last_key]["argcount"] = int(submatch.group("argcount"))
                 # TODO: This should be validated in another pass
 
-            # skip top line
-            lines = all_lines[1:]
+            # skip top line (leaf header), remove blank lines
+            lines = [line for line in leaf.splitlines()[1:] if line]
 
             if self.mode == "LF_MODIFIER":
                 for line in lines:
@@ -496,8 +489,7 @@ class CvdumpTypesParser:
                     self.read_arglist_line(line)
 
             elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
-                for line in lines:
-                    self.read_mfunction_line(line)
+                self.read_mfunction_line(leaf)
 
             elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
                 for line in lines:

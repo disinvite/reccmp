@@ -213,21 +213,21 @@ class CvdumpTypesParser:
     # LF_POINTER type
     LF_POINTER_TYPE = re.compile(r"\s+(?P<type>.+\S) \(\w+\), Size: \d+")
 
-    # LF_MFUNCTION attribute key-value pairs
-    LF_MFUNCTION_TRANSLATE = {
-        "Return type": "return_type",
-        "Class type": "class_type",
-        "This type": "this_type",
-        "Call type": "call_type",
-        "Parms": "num_params",  # LF_MFUNCTION only
-        "# Parms": "num_params",  # LF_PROCEDURE only
-        "Arg list type": "arg_list_type",
-        "This adjust": "this_adjust",
-        # By how much the incoming pointers are shifted in virtual inheritance; hex value without `0x` prefix
-        "Func attr": "func_attr",
-    }
+    LF_PROCEDURE_RE = re.compile(
+        (
+            r"\s+Return type = (?P<return_type>[^,]+), Call type = (?P<call_type>[^\n]+)\n"
+            r"\s+Func attr = (?P<func_attr>[^\n]+)\n"
+            r"\s+# Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+)"
+        )
+    )
 
-    LF_MFUNCTION_PAIR = re.compile(r"\s*([\w\s]+) = ([^\n,]+),?")
+    LF_MFUNCTION_RE = re.compile(
+        (
+            r"\s+Return type = (?P<return_type>[^,]+), Class type = (?P<class_type>[^,]+), This type = (?P<this_type>[^,]+),\s*\n"
+            r"\s+Call type = (?P<call_type>[^,]+), Func attr = (?P<func_attr>[^\n]+)\n"
+            r"\s+Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+), This adjust = (?P<this_adjust>\d+)"
+        )
+    )
 
     LF_ENUM_ATTRIBUTES = [
         re.compile(r"^\s*# members = (?P<num_members>\d+)$"),
@@ -450,7 +450,7 @@ class CvdumpTypesParser:
         return member_list_to_struct_string(members)
 
     def read_all(self, section: str):
-        r_leafsplit = re.compile(r"(?=0x\w{4} : )")
+        r_leafsplit = re.compile(r"\n(?=0x\w{4} : )")
         for leaf in r_leafsplit.split(section):
             if (match := self.INDEX_RE.match(leaf)) is None:
                 continue
@@ -477,8 +477,11 @@ class CvdumpTypesParser:
             elif self.mode == "LF_ARGLIST":
                 self.read_arglist(leaf)
 
-            elif self.mode in ["LF_MFUNCTION", "LF_PROCEDURE"]:
+            elif self.mode == "LF_MFUNCTION":
                 self.read_mfunction(leaf)
+
+            elif self.mode == "LF_PROCEDURE":
+                self.read_procedure(leaf)
 
             elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
                 self.read_class_or_struct(leaf)
@@ -637,21 +640,14 @@ class CvdumpTypesParser:
                 logger.error("Unrecognized pointer attribute: %s", match.group("type"))
 
     def read_mfunction(self, leaf: str):
-        """
-        The layout is not consistent, so we want to be as robust as possible here.
-        - Example 1:
-            Return type = T_LONG(0012), Call type = C Near
-            Func attr = none
-        - Example 2:
-                Return type = T_CHAR(0010), Class type = 0x101A, This type = 0x101B,
-            Call type = ThisCall, Func attr = none
-        """
+        match = self.LF_MFUNCTION_RE.search(leaf)
+        assert match is not None
+        self.keys[self.last_key].update(match.groupdict())
 
-        obj = self.keys[self.last_key]
-
-        for key, value in self.LF_MFUNCTION_PAIR.findall(leaf):
-            if key in self.LF_MFUNCTION_TRANSLATE:
-                obj[self.LF_MFUNCTION_TRANSLATE[key]] = value
+    def read_procedure(self, leaf: str):
+        match = self.LF_PROCEDURE_RE.search(leaf)
+        assert match is not None
+        self.keys[self.last_key].update(match.groupdict())
 
     def read_enum(self, leaf: str):
         obj = self.keys[self.last_key]

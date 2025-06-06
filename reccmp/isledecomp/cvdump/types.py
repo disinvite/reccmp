@@ -450,39 +450,42 @@ class CvdumpTypesParser:
 
             this_key = self.keys[leaf_id]
 
-            if self.mode == "LF_MODIFIER":
-                this_key.update(self.read_modifier(leaf))
+            try:
+                if self.mode == "LF_MODIFIER":
+                    this_key.update(self.read_modifier(leaf))
 
-            elif self.mode == "LF_ARRAY":
-                this_key.update(self.read_array(leaf))
+                elif self.mode == "LF_ARRAY":
+                    this_key.update(self.read_array(leaf))
 
-            elif self.mode == "LF_FIELDLIST":
-                this_key.update(self.read_fieldlist(leaf))
+                elif self.mode == "LF_FIELDLIST":
+                    this_key.update(self.read_fieldlist(leaf))
 
-            elif self.mode == "LF_ARGLIST":
-                this_key.update(self.read_arglist(leaf))
+                elif self.mode == "LF_ARGLIST":
+                    this_key.update(self.read_arglist(leaf))
 
-            elif self.mode == "LF_MFUNCTION":
-                this_key.update(self.read_mfunction(leaf))
+                elif self.mode == "LF_MFUNCTION":
+                    this_key.update(self.read_mfunction(leaf))
 
-            elif self.mode == "LF_PROCEDURE":
-                this_key.update(self.read_procedure(leaf))
+                elif self.mode == "LF_PROCEDURE":
+                    this_key.update(self.read_procedure(leaf))
 
-            elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
-                this_key.update(self.read_class_or_struct(leaf))
+                elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
+                    this_key.update(self.read_class_or_struct(leaf))
 
-            elif self.mode == "LF_POINTER":
-                this_key.update(self.read_pointer(leaf))
+                elif self.mode == "LF_POINTER":
+                    this_key.update(self.read_pointer(leaf))
 
-            elif self.mode == "LF_ENUM":
-                this_key.update(self.read_enum(leaf))
+                elif self.mode == "LF_ENUM":
+                    this_key.update(self.read_enum(leaf))
 
-            elif self.mode == "LF_UNION":
-                this_key.update(self.read_union(leaf))
+                elif self.mode == "LF_UNION":
+                    this_key.update(self.read_union(leaf))
+                else:
+                    # Check for exhaustiveness
+                    logger.error("Unhandled data in mode: %s", self.mode)
 
-            else:
-                # Check for exhaustiveness
-                logger.error("Unhandled data in mode: %s", self.mode)
+            except AssertionError:
+                logger.error("Failed to parse PDB types leaf %s", leaf_id)
 
     def read_modifier(self, leaf: str) -> dict[str, Any]:
         match = self.MODIFIES_RE.search(leaf)

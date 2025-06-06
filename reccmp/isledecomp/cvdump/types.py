@@ -473,13 +473,13 @@ class CvdumpTypesParser:
                 self.read_fieldlist(leaf)
 
             elif self.mode == "LF_ARGLIST":
-                self.read_arglist(leaf)
+                this_key.update(self.read_arglist(leaf))
 
             elif self.mode == "LF_MFUNCTION":
-                self.read_mfunction(leaf)
+                this_key.update(self.read_mfunction(leaf))
 
             elif self.mode == "LF_PROCEDURE":
-                self.read_procedure(leaf)
+                this_key.update(self.read_procedure(leaf))
 
             elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
                 self.read_class_or_struct(leaf)
@@ -488,10 +488,10 @@ class CvdumpTypesParser:
                 self.read_pointer(leaf)
 
             elif self.mode == "LF_ENUM":
-                self.read_enum(leaf)
+                this_key.update(self.read_enum(leaf))
 
             elif self.mode == "LF_UNION":
-                self.read_union(leaf)
+                this_key.update(self.read_union(leaf))
 
             else:
                 # Check for exhaustiveness
@@ -508,7 +508,7 @@ class CvdumpTypesParser:
             "modifies": normalize_type_id(match.group("type")),
         }
 
-    def read_array(self, leaf: str):
+    def read_array(self, leaf: str) -> dict[str, Any]:
         match = self.LF_ARRAY_RE.search(leaf)
         assert match is not None
 
@@ -614,18 +614,20 @@ class CvdumpTypesParser:
                 self._set("udt", normalize_type_id(udt))
             self._set("size", int(match.group("size")))
 
-    def read_arglist(self, leaf: str):
-        submatch = self.LF_ARGLIST_ARGCOUNT.match(leaf)
-        assert submatch is not None
-        argcount = int(submatch.group("argcount"))
+    def read_arglist(self, leaf: str) -> dict[str, Any]:
+        match = self.LF_ARGLIST_ARGCOUNT.match(leaf)
+        assert match is not None
+        argcount = int(match.group("argcount"))
 
         arglist = [arg_type for (_, arg_type) in self.LF_ARGLIST_ENTRY.findall(leaf)]
-
         assert len(arglist) == argcount
-        self.keys[self.last_key]["argcount"] = argcount
 
+        obj: dict[str, Any] = {"argcount": argcount}
+        # Set the arglist only when argcount > 0
         if arglist:
-            self.keys[self.last_key]["args"] = arglist
+            obj["args"] = arglist
+
+        return obj
 
     def read_pointer(self, leaf: str):
         if (match := self.LF_POINTER_ELEMENT.search(leaf)) is not None:
@@ -643,18 +645,18 @@ class CvdumpTypesParser:
             ):
                 logger.error("Unrecognized pointer attribute: %s", match.group("type"))
 
-    def read_mfunction(self, leaf: str):
+    def read_mfunction(self, leaf: str) -> dict[str, Any]:
         match = self.LF_MFUNCTION_RE.search(leaf)
         assert match is not None
-        self.keys[self.last_key].update(match.groupdict())
+        return match.groupdict()
 
-    def read_procedure(self, leaf: str):
+    def read_procedure(self, leaf: str) -> dict[str, Any]:
         match = self.LF_PROCEDURE_RE.search(leaf)
         assert match is not None
-        self.keys[self.last_key].update(match.groupdict())
+        return match.groupdict()
 
-    def read_enum(self, leaf: str):
-        obj = self.keys[self.last_key]
+    def read_enum(self, leaf: str) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
 
         # TODO: still parsing each line for now
         for line in leaf.splitlines()[1:]:
@@ -669,6 +671,8 @@ class CvdumpTypesParser:
                 if pair.isspace():
                     continue
                 obj |= self.parse_enum_attribute(pair)
+
+        return obj
 
     def parse_enum_attribute(self, attribute: str) -> dict[str, Any]:
         for attribute_regex in self.LF_ENUM_ATTRIBUTES:
@@ -689,16 +693,19 @@ class CvdumpTypesParser:
         logger.error("Unknown attribute in enum: %s", attribute)
         return {}
 
-    def read_union(self, leaf: str):
+    def read_union(self, leaf: str) -> dict[str, Any]:
         """This is a rather barebones handler, only parsing the size"""
         match = self.LF_UNION_LINE.search(leaf)
         assert match is not None
 
-        self._set("name", match.group("name"))
-        if match.group("field_type") == "0x0000":
-            self._set("is_forward_ref", True)
+        obj: dict[str, Any] = {"name": match.group("name")}
 
-        self._set("field_list_type", match.group("field_type"))
-        self._set("size", int(match.group("size")))
+        if match.group("field_type") == "0x0000":
+            obj["is_forward_ref"] = True
+
+        obj["field_list_type"] = match.group("field_type")
+        obj["size"] = int(match.group("size"))
         if match.group("udt") is not None:
-            self._set("udt", normalize_type_id(match.group("udt")))
+            obj["udt"] = normalize_type_id(match.group("udt"))
+
+        return obj

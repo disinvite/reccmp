@@ -251,17 +251,7 @@ class CvdumpTypesParser:
 
     def __init__(self) -> None:
         self.mode: str | None = None
-        self.last_key = ""
         self.keys: dict[str, dict[str, Any]] = {}
-
-    def _new_type(self):
-        """Prepare a new dict for the type we just parsed.
-        The id is self.last_key and the "type" of type is self.mode.
-        e.g. LF_CLASS"""
-        self.keys[self.last_key] = {"type": self.mode}
-
-    def _set(self, key: str, value):
-        self.keys[self.last_key][key] = value
 
     def _get_field_list(self, type_obj: dict[str, Any]) -> list[FieldListItem]:
         """Return the field list for the given LF_CLASS/LF_STRUCTURE reference"""
@@ -454,12 +444,11 @@ class CvdumpTypesParser:
                 self.mode = None
                 continue
 
-            # TODO: refactor
-            self.last_key = leaf_id
+            # Add the leaf to our dictionary and add details specific to the leaf type.
             self.mode = leaf_type
-            self._new_type()
+            self.keys[leaf_id] = {"type": leaf_type}
 
-            this_key = self.keys[self.last_key]
+            this_key = self.keys[leaf_id]
 
             if self.mode == "LF_MODIFIER":
                 this_key.update(self.read_modifier(leaf))
@@ -468,7 +457,7 @@ class CvdumpTypesParser:
                 this_key.update(self.read_array(leaf))
 
             elif self.mode == "LF_FIELDLIST":
-                self.read_fieldlist(leaf)
+                this_key.update(self.read_fieldlist(leaf))
 
             elif self.mode == "LF_ARGLIST":
                 this_key.update(self.read_arglist(leaf))
@@ -480,7 +469,7 @@ class CvdumpTypesParser:
                 this_key.update(self.read_procedure(leaf))
 
             elif self.mode in ["LF_CLASS", "LF_STRUCTURE"]:
-                self.read_class_or_struct(leaf)
+                this_key.update(self.read_class_or_struct(leaf))
 
             elif self.mode == "LF_POINTER":
                 this_key.update(self.read_pointer(leaf))
@@ -515,7 +504,8 @@ class CvdumpTypesParser:
             "size": int(match.group("length")),
         }
 
-    def read_fieldlist(self, leaf: str):
+    def read_fieldlist(self, leaf: str) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
         members = []
 
         # If this class has a vtable, create a mock member at offset 0
@@ -525,16 +515,14 @@ class CvdumpTypesParser:
 
         # Superclass is set here in the fieldlist rather than in LF_CLASS
         for match in self.SUPERCLASS_RE.finditer(leaf):
-            superclass_list: dict[str, int] = self.keys[self.last_key].setdefault(
-                "super", {}
-            )
+            superclass_list: dict[str, int] = obj.setdefault("super", {})
             superclass_list[normalize_type_id(match.group("type"))] = int(
                 match.group("offset")
             )
 
         # virtual base class (direct or indirect)
         for match in self.VBCLASS_RE.finditer(leaf):
-            virtual_base_pointer = self.keys[self.last_key].setdefault(
+            virtual_base_pointer = obj.setdefault(
                 "vbase",
                 VirtualBasePointer(
                     vboffset=-1,  # default to -1 until we parse the correct value
@@ -582,35 +570,43 @@ class CvdumpTypesParser:
         ]
 
         if members:
-            self.keys[self.last_key]["members"] = members
+            obj["members"] = members
 
         variants = [
             {"name": name, "value": int(value)}
             for value, name in self.LF_FIELDLIST_ENUMERATE.findall(leaf)
         ]
         if variants:
-            self.keys[self.last_key]["variants"] = variants
+            obj["variants"] = variants
 
-    def read_class_or_struct(self, leaf: str):
+        return obj
+
+    def read_class_or_struct(self, leaf: str) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
         # Match the reference to the associated LF_FIELDLIST
-        if (match := self.CLASS_FIELD_RE.search(leaf)) is not None:
-            if match.group("field_type") == "0x0000":
-                # Not redundant. UDT might not match the key.
-                # These cases get reported as UDT mismatch.
-                self._set("is_forward_ref", True)
-            else:
-                field_list_type = normalize_type_id(match.group("field_type"))
-                self._set("field_list_type", field_list_type)
+        match = self.CLASS_FIELD_RE.search(leaf)
+        assert match is not None
+        if match.group("field_type") == "0x0000":
+            # Not redundant. UDT might not match the key.
+            # These cases get reported as UDT mismatch.
+            obj["is_forward_ref"] = True
+        else:
+            field_list_type = normalize_type_id(match.group("field_type"))
+            obj["field_list_type"] = field_list_type
 
-        if (match := self.CLASS_NAME_RE.search(leaf)) is not None:
-            # Last line has the vital information.
-            # If this is a FORWARD REF, we need to follow the UDT pointer
-            # to get the actual class details.
-            self._set("name", match.group("name"))
-            udt = match.group("udt")
-            if udt is not None:
-                self._set("udt", normalize_type_id(udt))
-            self._set("size", int(match.group("size")))
+        match = self.CLASS_NAME_RE.search(leaf)
+        assert match is not None
+        # Last line has the vital information.
+        # If this is a FORWARD REF, we need to follow the UDT pointer
+        # to get the actual class details.
+        obj["name"] = match.group("name")
+        udt = match.group("udt")
+        if udt is not None:
+            obj["udt"] = normalize_type_id(udt)
+
+        obj["size"] = int(match.group("size"))
+
+        return obj
 
     def read_arglist(self, leaf: str) -> dict[str, Any]:
         match = self.LF_ARGLIST_ARGCOUNT.match(leaf)

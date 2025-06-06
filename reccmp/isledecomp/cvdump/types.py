@@ -203,11 +203,9 @@ class CvdumpTypesParser:
     # LF_ARGLIST list entry
     LF_ARGLIST_ENTRY = re.compile(r"list\[(?P<index>\d+)\] = (?P<arg_type>[?\w()]+)")
 
-    # LF_POINTER element
-    LF_POINTER_ELEMENT = re.compile(r"\s+Element type : (?P<element_type>.+)")
-
-    # LF_POINTER type
-    LF_POINTER_TYPE = re.compile(r"\s+(?P<type>.+\S) \(\w+\), Size: \d+")
+    LF_POINTER_RE = re.compile(
+        r"\s+(?P<type>.+\S) \(\w+\), Size: \d+\n\s+Element type : (?P<element_type>.+)"
+    )
 
     LF_PROCEDURE_RE = re.compile(
         (
@@ -485,7 +483,7 @@ class CvdumpTypesParser:
                 self.read_class_or_struct(leaf)
 
             elif self.mode == "LF_POINTER":
-                self.read_pointer(leaf)
+                this_key.update(self.read_pointer(leaf))
 
             elif self.mode == "LF_ENUM":
                 this_key.update(self.read_enum(leaf))
@@ -629,21 +627,21 @@ class CvdumpTypesParser:
 
         return obj
 
-    def read_pointer(self, leaf: str):
-        if (match := self.LF_POINTER_ELEMENT.search(leaf)) is not None:
-            self._set("element_type", match.group("element_type"))
+    def read_pointer(self, leaf: str) -> dict[str, Any]:
+        match = self.LF_POINTER_RE.search(leaf)
+        assert match is not None
 
-        if (match := self.LF_POINTER_TYPE.search(leaf)) is not None:
-            # We don't parse these lines, but we still want to check for exhaustiveness
-            # in case we missed some relevant data
-            if match.group("type") not in (
-                "R-value Reference",
-                "Pointer",
-                "const Pointer",
-                "L-value Reference",
-                "volatile Pointer",
-            ):
-                logger.error("Unrecognized pointer attribute: %s", match.group("type"))
+        # We don't use the pointer type, but we still want to check for exhaustiveness
+        # in case we missed some relevant data
+        assert match.group("type") in (
+            "R-value Reference",
+            "Pointer",
+            "const Pointer",
+            "L-value Reference",
+            "volatile Pointer",
+        )
+
+        return {"element_type": match.group("element_type")}
 
     def read_mfunction(self, leaf: str) -> dict[str, Any]:
         match = self.LF_MFUNCTION_RE.search(leaf)

@@ -485,7 +485,7 @@ class CvdumpTypesParser:
                     logger.error("Unhandled data in mode: %s", self.mode)
 
             except AssertionError:
-                logger.error("Failed to parse PDB types leaf %s", leaf_id)
+                logger.error("Failed to parse PDB types leaf:\n%s", leaf)
 
     def read_modifier(self, leaf: str) -> dict[str, Any]:
         match = self.MODIFIES_RE.search(leaf)
@@ -638,6 +638,7 @@ class CvdumpTypesParser:
             "const Pointer",
             "L-value Reference",
             "volatile Pointer",
+            "volatile const Pointer",
         )
 
         return {"element_type": match.group("element_type")}

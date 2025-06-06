@@ -180,12 +180,8 @@ class CvdumpTypesParser:
         r"list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'"
     )
 
-    # LF_ARRAY element type
-    ARRAY_ELEMENT_RE = re.compile(r"\s+Element type = (?P<type>.*)")
-
-    # LF_ARRAY total array size
-    ARRAY_LENGTH_RE = re.compile(
-        r"\s+length = (?P<number_type>\([\w_]+\) )?(?P<length>\d+)"
+    LF_ARRAY_RE = re.compile(
+        r"\s+Element type = (?P<type>[^\n]+)\n\s+Index type = [^\n]+\n\s+length = (?:[\w()]+ )?(?P<length>\d+)\n"
     )
 
     # LF_CLASS/LF_STRUCTURE field list reference
@@ -465,11 +461,13 @@ class CvdumpTypesParser:
             self.mode = leaf_type
             self._new_type()
 
+            this_key = self.keys[self.last_key]
+
             if self.mode == "LF_MODIFIER":
-                self.read_modifier(leaf)
+                this_key.update(self.read_modifier(leaf))
 
             elif self.mode == "LF_ARRAY":
-                self.read_array(leaf)
+                this_key.update(self.read_array(leaf))
 
             elif self.mode == "LF_FIELDLIST":
                 self.read_fieldlist(leaf)
@@ -499,19 +497,25 @@ class CvdumpTypesParser:
                 # Check for exhaustiveness
                 logger.error("Unhandled data in mode: %s", self.mode)
 
-    def read_modifier(self, leaf: str):
-        if (match := self.MODIFIES_RE.search(leaf)) is not None:
-            # For convenience, because this is essentially the same thing
-            # as an LF_CLASS forward ref.
-            self._set("is_forward_ref", True)
-            self._set("modifies", normalize_type_id(match.group("type")))
+    def read_modifier(self, leaf: str) -> dict[str, Any]:
+        match = self.MODIFIES_RE.search(leaf)
+        assert match is not None
+
+        # For convenience, because this is essentially the same thing
+        # as an LF_CLASS forward ref.
+        return {
+            "is_forward_ref": True,
+            "modifies": normalize_type_id(match.group("type")),
+        }
 
     def read_array(self, leaf: str):
-        if (match := self.ARRAY_ELEMENT_RE.search(leaf)) is not None:
-            self._set("array_type", normalize_type_id(match.group("type")))
+        match = self.LF_ARRAY_RE.search(leaf)
+        assert match is not None
 
-        if (match := self.ARRAY_LENGTH_RE.search(leaf)) is not None:
-            self._set("size", int(match.group("length")))
+        return {
+            "array_type": normalize_type_id(match.group("type")),
+            "size": int(match.group("length")),
+        }
 
     def read_fieldlist(self, leaf: str):
         members = []

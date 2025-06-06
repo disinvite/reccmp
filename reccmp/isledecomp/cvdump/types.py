@@ -225,7 +225,7 @@ class CvdumpTypesParser:
         (
             r"\s+Return type = (?P<return_type>[^,]+), Class type = (?P<class_type>[^,]+), This type = (?P<this_type>[^,]+),\s*\n"
             r"\s+Call type = (?P<call_type>[^,]+), Func attr = (?P<func_attr>[^\n]+)\n"
-            r"\s+Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+), This adjust = (?P<this_adjust>\d+)"
+            r"\s+Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+), This adjust = (?P<this_adjust>[0-9a-f]+)"
         )
     )
 

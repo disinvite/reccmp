@@ -5,8 +5,9 @@ import logging
 from pathlib import Path
 import colorama
 import reccmp
-from reccmp.isledecomp.dir import walk_source_dir, is_file_c_like
+from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.parser import DecompLinter
+from reccmp.isledecomp.parser.error import ParserAlert
 from reccmp.project.logging import argparse_add_logging_args, argparse_parse_logging
 from reccmp.project.detect import RecCmpProject
 
@@ -15,11 +16,12 @@ logger = logging.getLogger(__name__)
 colorama.just_fix_windows_console()
 
 
-def display_errors(alerts, filename):
+def display_errors(alerts: list[ParserAlert], filename: str):
     sorted_alerts = sorted(alerts, key=lambda a: a.line_number)
 
     print(colorama.Fore.LIGHTWHITE_EX, end="")
-    print(filename)
+    # Remove any backrefs from the path
+    print(Path(filename).resolve())
 
     for alert in sorted_alerts:
         error_type = (
@@ -85,7 +87,8 @@ def process_files(files, module=None):
     error_count = 0
 
     linter = DecompLinter()
-    for filename in files:
+    # Use set() so we check each file only once.
+    for filename in set(files):
         success = linter.check_file(filename, module)
 
         warnings = [a for a in linter.alerts if a.is_warning()]
@@ -103,25 +106,27 @@ def process_files(files, module=None):
 
 def main():
     args = parse_args()
+    files_to_check: list[str] = []
 
     if not args.paths:
+        # No path specified. Try to find the project file.
         project = RecCmpProject.from_directory(directory=Path.cwd())
         if not project:
             logger.error("Cannot find reccmp project")
             return 1
-        print(project.targets)
-        args.paths = list(
-            set(target.source_root for target in project.targets.values())
-        )
 
-    files_to_check: list[str] = []
-    for path in args.paths:
-        if path.is_dir():
-            files_to_check.extend(walk_source_dir(path))
-        elif path.is_file() and is_file_c_like(path):
-            files_to_check.append(str(path))
-        else:
-            logger.error("Invalid path: %s", path)
+        # Read each target from the reccmp-project file
+        # then get all filenames from each code directory.
+        for target in project.targets.values():
+            files_to_check.extend(walk_source_dir(target.source_root))
+    else:
+        for path in args.paths:
+            if path.is_dir():
+                files_to_check.extend(walk_source_dir(path))
+            elif path.is_file():
+                files_to_check.append(str(path))
+            else:
+                logger.error("Invalid path: %s", path)
 
     (warning_count, error_count) = process_files(files_to_check, module=args.module)
 

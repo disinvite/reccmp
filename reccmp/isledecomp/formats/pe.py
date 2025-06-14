@@ -5,6 +5,7 @@ Based on the following resources:
 - Debug information: https://www.debuginfo.com/examples/src/DebugDir.cpp
 """
 
+import re
 import dataclasses
 from enum import IntEnum, IntFlag
 from functools import cached_property
@@ -21,6 +22,13 @@ from .image import Image
 from .mz import ImageDosHeader
 
 # pylint: disable=too-many-lines
+
+
+# Match any sequence of bytes until the null terminator
+r_sz_string = re.compile(rb"([^\x00]*\x00)")
+
+# Match any sequence of 16-bit words until LSB and MSB are both 0
+r_wide_string = re.compile(rb"((?:[^\x00]\x00|\x00[^\x00])*\x00{2})")
 
 
 class PEHeaderNotFoundError(ValueError):
@@ -497,9 +505,7 @@ class PEImage(Image):
     imports: list[tuple[str, str, int]] = dataclasses.field(
         default_factory=list, repr=False
     )
-    exports: list[tuple[int, bytes]] = dataclasses.field(
-        default_factory=list, repr=False
-    )
+    exports: list[tuple[int, str]] = dataclasses.field(default_factory=list, repr=False)
     thunks: list[tuple[int, int]] = dataclasses.field(default_factory=list, repr=False)
     _potential_strings: dict[int, set[int]] = dataclasses.field(
         default_factory=dict, repr=False
@@ -776,7 +782,7 @@ class PEImage(Image):
             # IAT gives the address. The compiler generated a thunk function
             # that jumps to the value of this address.
             for start_ilt, dll_addr, start_iat in image_import_descriptors:
-                dll_name = self.read_string(dll_addr).decode("ascii")
+                dll_name = self.read_ascii(dll_addr)
                 ofs_ilt = start_ilt
                 # Address of "__imp__*" symbols.
                 ofs_iat = start_iat
@@ -793,7 +799,7 @@ class PEImage(Image):
                     else:
                         # Skip the "Hint" field, 2 bytes
                         name_ofs = lookup_addr + self.imagebase + 2
-                        symbol_name = self.read_string(name_ofs).decode("ascii")
+                        symbol_name = self.read_ascii(name_ofs)
 
                     yield dll_name, symbol_name, ofs_iat
                     ofs_ilt += 4
@@ -878,7 +884,7 @@ class PEImage(Image):
 
         combined = zip(func_addrs, name_addrs)
         self.exports = [
-            (func_addr, self.read_string(name_addr))
+            (func_addr, self.read_ascii(name_addr))
             for (func_addr, name_addr) in combined
         ]
 
@@ -892,7 +898,7 @@ class PEImage(Image):
                     continue
 
                 try:
-                    string = raw.decode(encoding)
+                    string = raw.decode(encoding).rstrip("\x00")
                 except UnicodeDecodeError:
                     continue
 
@@ -1002,14 +1008,23 @@ class PEImage(Image):
     def addr_is_uninitialized(self, vaddr: int) -> bool:
         return any(start <= vaddr < end for start, end in self.uninitialized_ranges)
 
-    def read_string(self, vaddr: int, chunk_size: int = 1000) -> bytes:
-        """Read up to chunk_size or until we find a zero byte."""
+    def read_string(self, vaddr: int, wide: bool = False) -> bytes:
+        """Read until we find the null-terminator."""
         (section_id, offset) = self.get_relative_addr(vaddr)
         section = self.sections[section_id - 1]
-        view = section.view[offset : offset + chunk_size]
-        # Don't call read() here because we might not get the entire chunk size.
-        # Use whatever we can get if we are at the end of the section.
-        return view.tobytes().partition(b"\x00")[0]
+        view = section.view[offset:]
+
+        regex = r_wide_string if wide else r_sz_string
+
+        match = regex.match(view)
+        if match is not None:
+            return match.group(1)
+
+        # We must be in the uninitialized section.
+        return b"\x00\x00" if wide else b"\x00"
+
+    def read_ascii(self, vaddr: int) -> str:
+        return self.read_string(vaddr).rstrip(b"\x00").decode("ascii")
 
     def read(self, vaddr: int, size: int) -> bytes:
         (section_id, offset) = self.get_relative_addr(vaddr)

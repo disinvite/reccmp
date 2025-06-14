@@ -100,27 +100,35 @@ def test_unusual_reads(binfile: PEImage):
     with pytest.raises(InvalidVirtualReadError):
         binfile.read(0x100DB588, -1)
 
-    # There are fewer than 1000 bytes in .reloc at the location of this string.
-    # Chunk size is chosen arbitrarily for string reads. The reason is that we need
-    # to read until we hit a zero byte, so we don't use the memoryview directly.
-    # This should not fail.
-    assert binfile.read_string(0x1010BFFC, 1000) == b"d3drm.dll"
+    # read_string() now includes null-terminator
+    assert binfile.read_string(0x1010BFFC) == b"d3drm.dll\x00"
+    # read_ascii() decodes and removes null-terminator
+    assert binfile.read_ascii(0x1010BFFC) == "d3drm.dll"
+
+    # "(null)" in UTF-16LE
+    assert binfile.read_string(0x100DAAA0, wide=False) == b"(\x00"  # incomplete
+    assert binfile.read_string(0x100DAAA0, wide=True) == "(null)\x00".encode(
+        "utf-16-le"
+    )
+
+    # Uninitialized read
+    assert binfile.read_string(0x1010A600) == b"\x00"
+    assert binfile.read_string(0x1010A600, wide=True) == b"\x00\x00"
 
 
 STRING_ADDRESSES = (
-    (0x100DB588, b"November"),
-    (0x100F0130, b"Helicopter"),
-    (0x100F0144, b"HelicopterState"),
-    (0x100F0BE4, b"valerie"),
-    (0x100F4080, b"TARGET"),
+    (0x100DB588, "November"),
+    (0x100F0130, "Helicopter"),
+    (0x100F0144, "HelicopterState"),
+    (0x100F0BE4, "valerie"),
+    (0x100F4080, "TARGET"),
 )
 
 
 @pytest.mark.parametrize("addr, string", STRING_ADDRESSES)
 def test_strings(addr: int, string: bytes, binfile: PEImage):
-    """Test string read utility function and the string search feature"""
-    assert binfile.read_string(addr) == string
-    assert binfile.find_string(string) == addr
+    """Test string read utility function"""
+    assert binfile.read_ascii(addr) == string
 
 
 def test_relocation(binfile: PEImage):
@@ -161,5 +169,5 @@ def test_thunks(thunk_ref: tuple[int, int], binfile: PEImage):
 
 def test_exports(binfile: PEImage):
     assert len(binfile.exports) == 130
-    assert (0x1003BFB0, b"??0LegoBackgroundColor@@QAE@PBD0@Z") in binfile.exports
-    assert (0x10091EE0, b"_DllMain@12") in binfile.exports
+    assert (0x1003BFB0, "??0LegoBackgroundColor@@QAE@PBD0@Z") in binfile.exports
+    assert (0x10091EE0, "_DllMain@12") in binfile.exports

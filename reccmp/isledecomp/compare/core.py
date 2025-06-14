@@ -162,46 +162,47 @@ class Compare:
                         )
                         continue
 
-                    # TODO: skip unicode for now. will need to handle these differently.
-                    if string_info.is_utf16:
-                        continue
-
-                    size = sym.size()
-                    assert size is not None
-
-                    raw = self.recomp_bin.read(addr, size)
+                    raw = self.recomp_bin.read_string(addr, wide=string_info.is_utf16)
 
                     try:
-                        # We use the string length reported in the mangled symbol as the
-                        # data size, but this is not always accurate with respect to the
-                        # null terminator.
-                        # e.g. ??_C@_0BA@EFDM@MxObjectFactory?$AA@
-                        # reported length: 16 (includes null terminator)
-                        # c.f. ??_C@_03DPKJ@enz?$AA@
-                        # reported length: 3 (does NOT include terminator)
-                        # This will handle the case where the entire string contains "\x00"
-                        # because those are distinct from the empty string of length 0.
-                        decoded_string = raw.decode("latin1")
-                        rstrip_string = decoded_string.rstrip("\x00")
-
-                        # TODO: Hack to exclude a string that contains \x00 bytes
-                        # The proper solution is to escape the text for JSON or use
-                        # base64 encoding for comparing binary values.
-                        # Kicking the can down the road for now.
-                        if "\x00" in decoded_string and rstrip_string == "":
-                            continue
-                        sym.friendly_name = rstrip_string
+                        if string_info.is_utf16:
+                            # TODO: detect LE or BE
+                            decoded_string = raw.decode("utf-16-le")
+                        else:
+                            decoded_string = raw.decode("ascii")
 
                     except UnicodeDecodeError:
-                        pass
+                        continue
 
-                batch.set_recomp(
-                    addr,
-                    type=sym.node_type,
-                    name=sym.name(),
-                    symbol=sym.decorated_name,
-                    size=sym.size(),
-                )
+                    # Remove the null terminator bytes.
+                    rstrip_string = decoded_string.rstrip("\x00")
+
+                    # TODO: The PDB can reference strings that contain \x00 bytes:
+                    # e.g. ??_C@_01A@?$AA?$AA@ --> b"\x00\x00"
+                    #      ??_C@_00A@?$AA@     --> b"\x00"
+                    # We store the decoded string in the database so these are considered
+                    # equal. (Both are the empty string.)
+                    sym.friendly_name = rstrip_string
+
+                    if string_info.is_utf16:
+                        # TODO: Don't add to DB yet
+                        continue
+
+                    batch.set_recomp(
+                        addr,
+                        type=sym.node_type,
+                        name=sym.name(),
+                        symbol=sym.decorated_name,
+                        size=len(raw),  # Includes null terminator
+                    )
+                else:
+                    batch.set_recomp(
+                        addr,
+                        type=sym.node_type,
+                        name=sym.name(),
+                        symbol=sym.decorated_name,
+                        size=sym.size(),
+                    )
 
         for filename, values in self.cvdump_analysis.lines.items():
             lines = [
@@ -294,8 +295,9 @@ class Compare:
                 # Not that we don't trust you, but we're checking the string
                 # annotation to make sure it is accurate.
                 try:
-                    # TODO: would presumably fail for wchar_t strings
-                    orig = self.orig_bin.read_string(string.offset).decode("latin1")
+                    # TODO: will fail for wchar_t strings
+                    raw = self.orig_bin.read_string(string.offset)
+                    orig = raw.decode("ascii").rstrip("\x00")
                     string_correct = string.name == orig
                 except UnicodeDecodeError:
                     string_correct = False
@@ -312,7 +314,7 @@ class Compare:
                     string.offset,
                     name=string.name,
                     type=EntityType.STRING,
-                    size=len(string.name),
+                    size=len(raw),  # Includes null terminator
                 )
 
             for line in codebase.iter_line_symbols():

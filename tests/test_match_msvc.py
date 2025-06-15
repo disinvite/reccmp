@@ -604,6 +604,13 @@ def test_match_strings_no_match_report(db, report):
 
     match_strings(db, report)
 
+    # Not a "verified" string. No alert.
+    report.assert_not_called()
+
+    with db.batch() as batch:
+        batch.set_orig(123, verified=True)
+
+    match_strings(db, report)
     report.assert_called_with(ReccmpEvent.NO_MATCH, 123, msg=ANY)
 
 

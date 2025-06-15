@@ -198,6 +198,7 @@ class Compare:
                         type=sym.node_type,
                         name=sym.name(),
                         symbol=sym.decorated_name,
+                        verified=True,
                         size=len(raw),  # Includes null terminator
                     )
                 else:
@@ -319,6 +320,7 @@ class Compare:
                     string.offset,
                     name=string.name,
                     type=EntityType.STRING,
+                    verified=True,
                     size=len(raw),  # Includes null terminator
                 )
 

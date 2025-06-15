@@ -1,3 +1,4 @@
+import re
 import os
 import logging
 import difflib
@@ -21,7 +22,11 @@ from reccmp.isledecomp.compare.event import (
     reccmp_report_nop,
     create_logging_wrapper,
 )
-from reccmp.isledecomp.analysis import find_float_consts, find_vtordisp
+from reccmp.isledecomp.analysis import (
+    find_ascii_strings,
+    find_float_consts,
+    find_vtordisp,
+)
 from .match_msvc import (
     match_lines,
     match_symbols,
@@ -85,19 +90,20 @@ class Compare:
         match_vtables(self._db, report)
         match_static_variables(self._db, report)
         match_variables(self._db, report)
-        match_strings(self._db, report)
         match_lines(self._db, self._lines_db, report)
 
         self._match_array_elements()
         # Detect floats first to eliminate potential overlap with string data
         self._find_float_const()
-        self._find_original_strings()
         self._match_imports()
         self._match_exports()
         self._match_thunks()
         self._match_vtordisp()
         self._check_vtables()
         self._unique_names_for_overloaded_functions()
+
+        self._string_search()
+        match_strings(self._db, report)
 
         self.function_comparator = FunctionComparator(
             self._db, self.orig_bin, self.recomp_bin, report, self.runid, self.debug
@@ -411,54 +417,20 @@ class Compare:
 
         batch.commit()
 
-    def _find_original_strings(self):
-        """Go to the original binary and look for the specified string constants
-        to find a match. This is a (relatively) expensive operation so we only
-        look at strings that we have not already matched via a STRING annotation."""
-        # Release builds give each de-duped string a symbol so they are easy to find and match.
-        for string in self._db.get_unmatched_strings():
-            addr = self.orig_bin.find_string(string.encode("latin1"))
-            if addr is None:
-                escaped = repr(string)
-                logger.debug("Failed to find this string in the original: %s", escaped)
-                continue
+    def _string_search(self):
+        """Add ascii strings from each image using brute force search."""
+        with self._db.batch() as batch:
+            for addr, string in find_ascii_strings(self.orig_bin):
+                if self.orig_bin.is_relocated_addr(addr):
+                    batch.insert_orig(
+                        addr, type=EntityType.STRING, name=string, size=len(string) + 1
+                    )
 
-            self._db.match_string(addr, string)
-
-        def is_real_string(s: str) -> bool:
-            """Heuristic to ignore values that only look like strings.
-            This is mostly about short strings (len <= 4) that could be byte or word values.
-            """
-            # 0x10 is the MSB of the address space for DLLs (LEGO1), so this is a pointer
-            if len(s) == 0 or "\x10" in s:
-                return False
-
-            # assert(0) is common
-            if len(s) == 1 and s[0] != "0":
-                return False
-
-            # Hack because str.isprintable() will fail on strings with newlines or tabs
-            if len(s) <= 4 and "\\x" in repr(s):
-                return False
-
-            return True
-
-        # Debug builds do not de-dupe the strings, so we need to find them via brute force scan.
-        # We could try to match the string addrs if there is only one in orig and recomp.
-        # When we sanitize the asm, the result is the same regardless.
-        if self.orig_bin.is_debug:
-            with self._db.batch() as batch:
-                for addr, string in self.orig_bin.iter_string("latin1"):
-                    if is_real_string(string):
-                        batch.insert_orig(
-                            addr, type=EntityType.STRING, name=string, size=len(string)
-                        )
-
-                for addr, string in self.recomp_bin.iter_string("latin1"):
-                    if is_real_string(string):
-                        batch.insert_recomp(
-                            addr, type=EntityType.STRING, name=string, size=len(string)
-                        )
+            for addr, string in find_ascii_strings(self.recomp_bin):
+                if self.recomp_bin.is_relocated_addr(addr):
+                    batch.insert_recomp(
+                        addr, type=EntityType.STRING, name=string, size=len(string) + 1
+                    )
 
     def _find_float_const(self):
         """Add floating point constants in each binary to the database.

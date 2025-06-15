@@ -1,4 +1,3 @@
-import re
 import os
 import logging
 import difflib
@@ -420,16 +419,18 @@ class Compare:
     def _string_search(self):
         """Add ascii strings from each image using brute force search."""
         with self._db.batch() as batch:
-            for addr, string in find_ascii_strings(self.orig_bin):
+            for addr, raw in find_ascii_strings(self.orig_bin):
                 if self.orig_bin.is_relocated_addr(addr):
+                    string = raw.decode("ascii").rstrip("\x00")
                     batch.insert_orig(
-                        addr, type=EntityType.STRING, name=string, size=len(string) + 1
+                        addr, type=EntityType.STRING, name=string, size=len(raw)
                     )
 
-            for addr, string in find_ascii_strings(self.recomp_bin):
+            for addr, raw in find_ascii_strings(self.recomp_bin):
                 if self.recomp_bin.is_relocated_addr(addr):
+                    string = raw.decode("ascii").rstrip("\x00")
                     batch.insert_recomp(
-                        addr, type=EntityType.STRING, name=string, size=len(string) + 1
+                        addr, type=EntityType.STRING, name=string, size=len(raw)
                     )
 
     def _find_float_const(self):

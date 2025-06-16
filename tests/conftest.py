@@ -57,6 +57,16 @@ def fixture_loader(pytestconfig) -> Iterator[Callable[[str, str], Image | None]]
     yield loader
 
 
+@pytest.fixture(name="isle_exe", scope="session")
+def fixture_isle_exe(bin_loader) -> Iterator[PEImage]:
+    """ISLE.EXE: v1.1 English, September"""
+    image = bin_loader(
+        "ISLE.EXE", "5cf57c284973fce9d14f5677a2e4435fd989c5e938970764d00c8932ed5128ca"
+    )
+    assert isinstance(image, PEImage)
+    yield image
+
+
 @pytest.fixture(name="binfile", scope="session")
 def fixture_binfile(bin_loader) -> Iterator[PEImage]:
     """LEGO1.DLL: v1.1 English, September"""

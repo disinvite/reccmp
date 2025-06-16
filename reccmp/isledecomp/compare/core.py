@@ -22,7 +22,7 @@ from reccmp.isledecomp.compare.event import (
     create_logging_wrapper,
 )
 from reccmp.isledecomp.analysis import (
-    find_ascii_strings,
+    find_8bit_strings,
     find_float_consts,
     find_vtordisp,
 )
@@ -174,7 +174,7 @@ class Compare:
                             # TODO: detect LE or BE
                             decoded_string = raw.decode("utf-16-le")
                         else:
-                            decoded_string = raw.decode("ascii")
+                            decoded_string = raw.decode("latin1")
 
                     except UnicodeDecodeError:
                         continue
@@ -303,7 +303,7 @@ class Compare:
                 try:
                     # TODO: will fail for wchar_t strings
                     raw = self.orig_bin.read_string(string.offset)
-                    orig = raw.decode("ascii").rstrip("\x00")
+                    orig = raw.decode("latin1").rstrip("\x00")
                     string_correct = string.name == orig
                 except UnicodeDecodeError:
                     string_correct = False
@@ -421,16 +421,16 @@ class Compare:
     def _string_search(self):
         """Add ascii strings from each image using brute force search."""
         with self._db.batch() as batch:
-            for addr, raw in find_ascii_strings(self.orig_bin):
+            for addr, raw in find_8bit_strings(self.orig_bin):
                 if self.orig_bin.is_relocated_addr(addr):
-                    string = raw.decode("ascii").rstrip("\x00")
+                    string = raw.decode("latin1").rstrip("\x00")
                     batch.insert_orig(
                         addr, type=EntityType.STRING, name=string, size=len(raw)
                     )
 
-            for addr, raw in find_ascii_strings(self.recomp_bin):
+            for addr, raw in find_8bit_strings(self.recomp_bin):
                 if self.recomp_bin.is_relocated_addr(addr):
-                    string = raw.decode("ascii").rstrip("\x00")
+                    string = raw.decode("latin1").rstrip("\x00")
                     batch.insert_recomp(
                         addr, type=EntityType.STRING, name=string, size=len(raw)
                     )

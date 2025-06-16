@@ -47,7 +47,7 @@ def main():
         if not isinstance(img, PEImage):
             raise ValueError(f"{filepath} is not a PE executable")
 
-        return [symbol.decode("ascii") for _, symbol in img.exports]
+        return [symbol for _, symbol in img.exports]
 
     og_exp = get_exports(target.original_path)
     re_exp = get_exports(target.recompiled_path)

@@ -88,8 +88,7 @@ class NewProject:
     def __init__(
         self, root: Path | None = None, targets: dict[str, NewTarget] | None = None
     ) -> None:
-        if root:
-            self.root = root
+        self.root = root
 
         if targets:
             self.targets = targets

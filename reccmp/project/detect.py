@@ -81,12 +81,11 @@ class RecCmpProject:
         build_directory = find_filename_recursively(
             directory=directory, filename=RECCMP_BUILD_CONFIG
         )
-        yaml_loader = ruamel.yaml.YAML()
+
         if build_directory:
             build_config = build_directory / RECCMP_BUILD_CONFIG
             logger.debug("Using build config: %s", build_config)
-            with build_config.open() as buildfile:
-                build_data = BuildFile.model_validate(yaml_loader.load(buildfile))
+            build_data = BuildFile.from_file(build_config)
 
             # The project directory can be relative to the build config
             project_directory = build_config.parent.joinpath(build_data.project)
@@ -102,8 +101,7 @@ class RecCmpProject:
             project_config_path=project_config_path,
         )
         logger.debug("Using project config: %s", project_config_path)
-        with project_config_path.open() as projectfile:
-            project_data = ProjectFile.model_validate(yaml_loader.load(projectfile))
+        project_data = ProjectFile.from_file(project_config_path)
 
         for target_id, project_target_data in project_data.targets.items():
             source_root = project_directory / project_target_data.source_root
@@ -140,15 +138,13 @@ class RecCmpBuiltProject:
         )
         if not build_directory:
             raise RecCmpProjectNotFoundException(
-                f"Cannot find {RECCMP_BUILD_CONFIG} under {build_directory}"
+                f"Cannot find {RECCMP_BUILD_CONFIG} under {directory}"
             )
         build_config = build_directory / RECCMP_BUILD_CONFIG
         logger.debug("Using build config: %s", build_config)
 
         # Parse build.yml
-        yaml_loader = ruamel.yaml.YAML()
-        with build_config.open() as buildfile:
-            build_data = BuildFile.model_validate(yaml_loader.load(buildfile))
+        build_data = BuildFile.from_file(build_config)
 
         # Searching for project.yml
         # note that Path.joinpath() will ignore the first path if the second path is absolute
@@ -161,8 +157,7 @@ class RecCmpBuiltProject:
         logger.debug("Using project config: %s", project_config_path)
 
         # Parse project.yml
-        with project_config_path.open() as projectfile:
-            project_data = ProjectFile.model_validate(yaml_loader.load(projectfile))
+        project_data = ProjectFile.from_file(project_config_path)
 
         # Searching for user.yml
         user_config = project_directory / RECCMP_USER_CONFIG
@@ -173,8 +168,7 @@ class RecCmpBuiltProject:
         logger.debug("Using user config: %s", user_config)
 
         # Parse user.yml
-        with user_config.open() as userfile:
-            user_data = UserFile.model_validate(yaml_loader.load(userfile))
+        user_data = UserFile.from_file(user_config)
 
         verify_target_names(
             project_targets=project_data.targets,
@@ -385,14 +379,12 @@ def detect_project(
     yaml = ruamel.yaml.YAML()
 
     project_config_path = project_directory / RECCMP_PROJECT_CONFIG
-    with project_config_path.open() as f:
-        project_data = ProjectFile.model_validate(yaml.load(stream=f))
+    project_data = ProjectFile.from_file(project_config_path)
 
     if detect_what == DetectWhat.ORIGINAL:
         user_config_path = project_directory / RECCMP_USER_CONFIG
         if user_config_path.is_file():
-            with user_config_path.open() as f:
-                user_data = UserFile.model_validate(yaml.load(stream=f))
+            user_data = UserFile.from_file(user_config_path)
         else:
             user_data = UserFile(targets={})
 

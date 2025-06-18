@@ -2,8 +2,12 @@
 
 from pathlib import Path
 from dataclasses import dataclass
+import ruamel.yaml
 
 from pydantic import AliasChoices, BaseModel, Field
+
+
+_yaml_loader = ruamel.yaml.YAML()
 
 
 class GhidraConfig(BaseModel):
@@ -52,7 +56,52 @@ class RecCmpBuiltTarget(RecCmpTarget):
     recompiled_pdb: Path
 
 
-class Hash(BaseModel):
+#### This is my new stuff. ####
+
+
+@dataclass
+class NewDataSearch:
+    filename: str
+    sha256: str
+
+
+@dataclass
+class NewDataSource:
+    search: NewDataSearch | None = None
+    path: Path | None = None  # image file
+    pdb: Path | None = None
+    code: Path | None = None
+
+
+@dataclass
+class NewTarget:
+    module: str | None = None
+    orig: NewDataSource | None = None
+    recomp: NewDataSource | None = None
+    ghidra: GhidraConfig | None = None
+
+
+class NewProject:
+    root: Path | None
+    targets: dict[str, NewTarget]
+
+    def __init__(
+        self, root: Path | None = None, targets: dict[str, NewTarget] | None = None
+    ) -> None:
+        if root:
+            self.root = root
+
+        if targets:
+            self.targets = targets
+        else:
+            self.targets = {}
+
+
+#### End. ####
+
+
+@dataclass
+class Hash:
     sha256: str
 
 
@@ -72,8 +121,27 @@ class ProjectFile(BaseModel):
 
     targets: dict[str, ProjectFileTarget]
 
+    @classmethod
+    def from_file(cls, filename: Path):
+        with filename.open() as f:
+            return cls.model_validate(_yaml_loader.load(f))
 
-class UserFileTarget(BaseModel):
+    @classmethod
+    def from_str(cls, yaml: str):
+        return cls.model_validate(_yaml_loader.load(yaml))
+
+    def do_thing(self) -> NewProject:
+        proj = NewProject()
+        for name, target in self.targets.items():
+            search = NewDataSearch(filename=target.filename, sha256=target.hash.sha256)
+            ds = NewDataSource(search=search, code=target.source_root)
+            proj.targets[name] = NewTarget(module=name, orig=ds)
+
+        return proj
+
+
+@dataclass
+class UserFileTarget:
     """Target schema for user.yml"""
 
     path: Path
@@ -82,10 +150,28 @@ class UserFileTarget(BaseModel):
 class UserFile(BaseModel):
     """File schema for user.yml"""
 
+    @classmethod
+    def from_file(cls, filename: Path):
+        with filename.open() as f:
+            return cls.model_validate(_yaml_loader.load(f))
+
+    @classmethod
+    def from_str(cls, yaml: str):
+        return cls.model_validate(_yaml_loader.load(yaml))
+
     targets: dict[str, UserFileTarget]
 
+    def do_thing(self) -> NewProject:
+        proj = NewProject()
+        for name, target in self.targets.items():
+            ds = NewDataSource(path=target.path)
+            proj.targets[name] = NewTarget(module=name, orig=ds)
 
-class BuildFileTarget(BaseModel):
+        return proj
+
+
+@dataclass
+class BuildFileTarget:
     """Target schema for build.yml"""
 
     path: Path
@@ -97,3 +183,20 @@ class BuildFile(BaseModel):
 
     project: Path
     targets: dict[str, BuildFileTarget]
+
+    @classmethod
+    def from_file(cls, filename: Path):
+        with filename.open() as f:
+            return cls.model_validate(_yaml_loader.load(f))
+
+    @classmethod
+    def from_str(cls, yaml: str):
+        return cls.model_validate(_yaml_loader.load(yaml))
+
+    def do_thing(self) -> NewProject:
+        proj = NewProject(root=self.project)
+        for name, target in self.targets.items():
+            ds = NewDataSource(path=target.path, pdb=target.pdb)
+            proj.targets[name] = NewTarget(module=name, recomp=ds)
+
+        return proj

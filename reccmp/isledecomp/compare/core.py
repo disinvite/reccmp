@@ -420,20 +420,45 @@ class Compare:
 
     def _string_search(self):
         """Add ascii strings from each image using brute force search."""
-        with self._db.batch() as batch:
-            for addr, raw in find_8bit_strings(self.orig_bin):
-                if self.orig_bin.is_relocated_addr(addr):
-                    string = raw.decode("latin1").rstrip("\x00")
-                    batch.insert_orig(
-                        addr, type=EntityType.STRING, name=string, size=len(raw)
-                    )
+        orig_relocated = set(self.orig_bin.get_relocated_addresses())
+        recomp_relocated = set(self.recomp_bin.get_relocated_addresses())
 
-            for addr, raw in find_8bit_strings(self.recomp_bin):
-                if self.recomp_bin.is_relocated_addr(addr):
-                    string = raw.decode("latin1").rstrip("\x00")
-                    batch.insert_recomp(
-                        addr, type=EntityType.STRING, name=string, size=len(raw)
+        with self._db.batch() as batch:
+            for base, raw in find_8bit_strings(self.orig_bin):
+                if base in orig_relocated:
+                    addr = base
+                else:
+                    addrs = set(range(base, base + len(raw) - 1)).intersection(
+                        orig_relocated
                     )
+                    if not addrs:
+                        continue
+
+                    addr = next(iter(addrs))
+
+                raw = raw[addr - base :]
+                string = raw.decode("latin1").rstrip("\x00")
+                batch.insert_orig(
+                    addr, type=EntityType.STRING, name=string, size=len(raw)
+                )
+
+            for base, raw in find_8bit_strings(self.recomp_bin):
+                if base in recomp_relocated:
+                    addr = base
+                else:
+                    addrs = set(range(base, base + len(raw) - 1)).intersection(
+                        recomp_relocated
+                    )
+                    if not addrs:
+                        continue
+
+                    addr = next(iter(addrs))
+
+                raw = raw[addr - base :]
+                string = raw.decode("latin1").rstrip("\x00")
+                batch.insert_recomp(
+                    addr, type=EntityType.STRING, name=string, size=len(raw)
+                )
 
     def _find_float_const(self):
         """Add floating point constants in each binary to the database.

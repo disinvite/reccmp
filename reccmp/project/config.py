@@ -1,7 +1,7 @@
 """Types for the configuration of a reccmp project"""
 
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ruamel.yaml
 
 from pydantic import AliasChoices, BaseModel, Field
@@ -81,19 +81,10 @@ class NewTarget:
     ghidra: GhidraConfig | None = None
 
 
+@dataclass
 class NewProject:
-    root: Path | None
-    targets: dict[str, NewTarget]
-
-    def __init__(
-        self, root: Path | None = None, targets: dict[str, NewTarget] | None = None
-    ) -> None:
-        self.root = root
-
-        if targets:
-            self.targets = targets
-        else:
-            self.targets = {}
+    root: Path | None = None
+    targets: dict[str, NewTarget] = field(default_factory=dict)
 
 
 #### End. ####

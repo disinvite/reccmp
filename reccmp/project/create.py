@@ -34,6 +34,34 @@ class TargetType(enum.Enum):
     EXECUTABLE = "EXECUTABLE"
 
 
+def update_gitignore(project_directory: Path):
+    """Update existing .gitignore to skip build.yml and user.yml."""
+    gitignore_path = project_directory / ".gitignore"
+    if not gitignore_path.exists():
+        gitignore_path.touch()
+
+    ignore_rules = gitignore_path.read_text().splitlines()
+    if RECCMP_USER_CONFIG not in ignore_rules:
+        logger.debug("Adding '%s' to .gitignore...", RECCMP_USER_CONFIG)
+        with gitignore_path.open("a") as f:
+            f.write(f"{RECCMP_USER_CONFIG}\n")
+    if RECCMP_BUILD_CONFIG not in ignore_rules:
+        logger.debug("Adding '%s' to .gitignore...", RECCMP_BUILD_CONFIG)
+        with gitignore_path.open("a") as f:
+            f.write(f"{RECCMP_BUILD_CONFIG}\n")
+
+
+def create_project_yml(project_config_path: Path, project_config_data: ProjectFile):
+    # Don't overwrite an existing project
+    if project_config_path.exists():
+        raise RecCmpProjectAlreadyExistsError(path=project_config_path)
+
+    logger.debug("Creating %s...", project_config_path)
+    with project_config_path.open("w") as f:
+        yaml = ruamel.yaml.YAML()
+        yaml.dump(data=project_config_data.model_dump(mode="json"), stream=f)
+
+
 def executable_or_library(path: Path) -> TargetType:
     str_path = str(path).lower()
     if str_path.endswith(".dll"):
@@ -178,14 +206,6 @@ def create_project(
     If `scm` is enabled, update an existing .gitignore to skip user.yml and build.yml files.
     If `cmake` is enabled, create CMakeLists.txt and generate sample source files to help get started.
     """
-
-    # Intended reccmp-project.yml location
-    project_config_path = project_directory / RECCMP_PROJECT_CONFIG
-
-    # Don't overwrite an existing project
-    if project_config_path.exists():
-        raise RecCmpProjectAlreadyExistsError(path=project_config_path)
-
     if not original_paths:
         raise RecCmpProjectException("Need at least one original binary")
 
@@ -193,15 +213,15 @@ def create_project(
         if not original_path.is_file():
             raise FileNotFoundError(f"Original binary ({original_path}) is not a file")
 
-    # reccmp-user.yml location
-    user_config_path = project_directory / RECCMP_USER_CONFIG
-
     # Use the base name for each original binary to create a unique ID.
     # If any base names are non-unique, add a number.
     targets = dict(unique_targets(original_paths))
 
     # Object to serialize to YAML
     project_config_data = ProjectFile(targets={})
+
+    # Intended reccmp-project.yml location
+    project_config_path = project_directory / RECCMP_PROJECT_CONFIG
 
     # Return object for user
     project = RecCmpProject(project_config_path=project_config_path)
@@ -230,10 +250,7 @@ def create_project(
         )
 
     # Write project YAML file
-    logger.debug("Creating %s...", project_config_path)
-    with project_config_path.open("w") as f:
-        yaml = ruamel.yaml.YAML()
-        yaml.dump(data=project_config_data.model_dump(mode="json"), stream=f)
+    create_project_yml(project_config_path, project_config_data)
 
     # The user YAML file has the path to the original binary for each target
     user_config_data = UserFile(
@@ -242,6 +259,9 @@ def create_project(
         }
     )
 
+    # reccmp-user.yml location
+    user_config_path = project_directory / RECCMP_USER_CONFIG
+
     # Write user YAML file
     logger.debug("Creating %s...", user_config_data)
     with user_config_path.open("w") as f:
@@ -249,20 +269,7 @@ def create_project(
         yaml.dump(data=user_config_data.model_dump(mode="json"), stream=f)
 
     if scm:
-        # Update existing .gitignore to skip build.yml and user.yml.
-        gitignore_path = project_directory / ".gitignore"
-        if not gitignore_path.exists():
-            gitignore_path.touch()
-
-        ignore_rules = gitignore_path.read_text().splitlines()
-        if RECCMP_USER_CONFIG not in ignore_rules:
-            logger.debug("Adding '%s' to .gitignore...", RECCMP_USER_CONFIG)
-            with gitignore_path.open("a") as f:
-                f.write(f"{RECCMP_USER_CONFIG}\n")
-        if RECCMP_BUILD_CONFIG not in ignore_rules:
-            logger.debug("Adding '%s' to .gitignore...", RECCMP_BUILD_CONFIG)
-            with gitignore_path.open("a") as f:
-                f.write(f"{RECCMP_BUILD_CONFIG}\n")
+        update_gitignore(project_directory)
 
     if cmake:
         # Generate tempalte files so you can start building each target with CMake.

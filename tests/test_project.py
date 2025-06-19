@@ -123,8 +123,13 @@ def test_create_overwrite_project_file(tmp_path_factory):
     with (project_root / RECCMP_PROJECT_CONFIG).open("w+") as f:
         f.write("test")
 
+    # Mock original binary
+    test_file = project_root / "test_file"
+    with test_file.open("w+") as f:
+        f.write("test")
+
     with pytest.raises(RecCmpProjectAlreadyExistsError):
-        create_project(project_directory=project_root, original_paths=[])
+        create_project(project_directory=project_root, original_paths=[test_file])
 
 
 def test_create_require_original_paths(tmp_path_factory):

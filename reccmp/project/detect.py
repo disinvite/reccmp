@@ -6,16 +6,19 @@ from typing import Sequence
 
 import ruamel.yaml
 
-from .config import (
+from .yml import (
     BuildFile,
     BuildFileTarget,
-    GhidraConfig,
     ProjectFile,
     ProjectFileTarget,
-    RecCmpBuiltTarget,
-    RecCmpTarget,
     UserFile,
     UserFileTarget,
+)
+
+from .config import (
+    GhidraConfig,
+    RecCmpBuiltTarget,
+    RecCmpTarget,
 )
 
 from .common import RECCMP_USER_CONFIG, RECCMP_BUILD_CONFIG, RECCMP_PROJECT_CONFIG
@@ -106,12 +109,16 @@ class RecCmpProject:
         for target_id, project_target_data in project_data.targets.items():
             source_root = project_directory / project_target_data.source_root
             filename = project_target_data.filename
+            ghidra_config = GhidraConfig(
+                ignore_types=project_target_data.ghidra.ignore_types,
+                ignore_functions=project_target_data.ghidra.ignore_functions,
+            )
 
             project.targets[target_id] = RecCmpTarget(
                 target_id=target_id,
                 filename=filename,
                 source_root=source_root,
-                ghidra_config=project_target_data.ghidra,
+                ghidra_config=ghidra_config,
             )
         return project
 
@@ -211,6 +218,11 @@ class RecCmpBuiltProject:
             recompiled_path = build_directory.joinpath(build_target_data.path)
             recompiled_pdb = build_directory.joinpath(build_target_data.pdb)
 
+            ghidra_config = GhidraConfig(
+                ignore_types=project_target_data.ghidra.ignore_types,
+                ignore_functions=project_target_data.ghidra.ignore_functions,
+            )
+
             project.targets[target_id] = RecCmpBuiltTarget(
                 target_id=target_id,
                 filename=filename,
@@ -218,7 +230,7 @@ class RecCmpBuiltProject:
                 recompiled_path=recompiled_path,
                 recompiled_pdb=recompiled_pdb,
                 source_root=source_root,
-                ghidra_config=project_target_data.ghidra,
+                ghidra_config=ghidra_config,
             )
         return project
 
@@ -233,7 +245,7 @@ class RecCmpPathsAction(argparse.Action):
             target_id=target_id,
             filename="???",
             source_root=Path(source_root),
-            ghidra_config=GhidraConfig.default(),
+            ghidra_config=GhidraConfig(),
         )
         setattr(namespace, self.dest, target)
 
@@ -251,7 +263,7 @@ class RecCmpBuiltPathsAction(argparse.Action):
             recompiled_path=recompiled,
             recompiled_pdb=pdb,
             source_root=source_root,
-            ghidra_config=GhidraConfig.default(),
+            ghidra_config=GhidraConfig(),
         )
         setattr(namespace, self.dest, target)
 

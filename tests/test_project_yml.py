@@ -1,5 +1,5 @@
 from pathlib import Path
-from reccmp.project.config import (
+from reccmp.project.yml import (
     BuildFile,
     UserFile,
     ProjectFile,

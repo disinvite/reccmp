@@ -7,8 +7,8 @@ import textwrap
 import ruamel.yaml
 
 from reccmp.assets import get_asset_file
-from .config import (
-    GhidraConfig,
+from .config import GhidraConfig
+from .yml import (
     Hash,
     ProjectFile,
     ProjectFileTarget,
@@ -246,7 +246,7 @@ def create_project(
             target_id=target_id,
             filename=target_filename,
             source_root=project_directory,
-            ghidra_config=GhidraConfig.default(),
+            ghidra_config=GhidraConfig(),
         )
 
     # Write project YAML file

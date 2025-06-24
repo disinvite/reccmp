@@ -4,11 +4,16 @@ Based on the following resources:
 - https://github.com/qb40/exe-format/blob/master/README.txt
 """
 
+import re
 import dataclasses
 import struct
 from pathlib import Path
 from enum import IntEnum, IntFlag
 
+from .exceptions import (
+    InvalidVirtualReadError,
+    SectionNotFoundError,
+)
 from .image import Image
 from .mz import ImageDosHeader
 
@@ -151,3 +156,60 @@ class NEImage(Image):
             header=header,
             segments=segments,
         )
+
+    def _get_segment(self, index: int) -> NESegmentTableEntry:
+        try:
+            assert index > 0
+            return self.segments[index - 1]
+        except (AssertionError, IndexError) as ex:
+            raise SectionNotFoundError(index) from ex
+
+    def _get_view_for_read(
+        self, segment: int, offset: int, size: int | None = None
+    ) -> bytes | memoryview:
+        seg = self._get_segment(segment)
+
+        # 64k if either value is 0
+        physical_size = seg.ns_cbseg if seg.ns_cbseg else 0x10000
+        virtual_size = seg.ns_minalloc if seg.ns_minalloc else 0x10000
+
+        if offset > virtual_size:
+            raise InvalidVirtualReadError(
+                f"{segment:04x}:{offset:04x}, {size or 0} bytes"
+            )
+
+        view: bytes
+
+        if seg.ns_sector == 0:
+            # No physical data
+            view = b""
+        else:
+            start = 16 * seg.ns_sector
+            end = start + physical_size
+            view = self.view[start + offset : end]
+
+        # Unbounded read. e.g. read_string() only considers physical data
+        if size is None:
+            return view
+
+        view = view[:size]
+        if len(view) == size:
+            return view
+
+        # Pad with zeroes to emulate uninitialized read
+        buf = bytearray(size)
+        buf[: len(view)] = view
+        return bytes(buf)
+
+    def read(self, segment: int, offset: int, size: int) -> bytes:
+        return self._get_view_for_read(segment, offset, size)
+
+    def read_string(self, segment: int, offset: int) -> bytes:
+        match = re.match(rb"([^\x00]*\x00?)", self._get_view_for_read(segment, offset))
+        if match:
+            return match.group(1)
+
+        return b""
+
+    def read_ascii(self, segment: int, offset: int) -> str:
+        return self.read_string(segment, offset).decode("ascii").rstrip("\x00")

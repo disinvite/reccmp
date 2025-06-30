@@ -421,18 +421,18 @@ class ReccmpMain extends window.HTMLElement {
       evt.detail(this.state);
     });
 
-    this.addEventListener('setHidePerfect', evt => this.state.hidePerfect = evt.detail);
-    this.addEventListener('setHideStub', evt => this.state.hideStub = evt.detail);
-    this.addEventListener('setShowRecomp', evt => this.state.showRecomp = evt.detail);
+    this.addEventListener('setHidePerfect', evt => { this.state.hidePerfect = evt.detail; });
+    this.addEventListener('setHideStub', evt => { this.state.hideStub = evt.detail; });
+    this.addEventListener('setShowRecomp', evt => { this.state.showRecomp = evt.detail; });
 
-    this.addEventListener('prevPage', evt => this.state.page--);
-    this.addEventListener('nextPage', evt => this.state.page++);
-    this.addEventListener('setPage', evt => this.state.page = evt.detail);
-    this.addEventListener('setQuery', evt => this.state.query = evt.detail);
-    this.addEventListener('setFilter', evt => this.state.filterType = evt.detail);
-    this.addEventListener('setSortCol', evt => this.state.sortCol = evt.detail);
+    this.addEventListener('prevPage', evt => { this.state.page--; });
+    this.addEventListener('nextPage', evt => { this.state.page++; });
+    this.addEventListener('setPage', evt => { this.state.page = evt.detail; });
+    this.addEventListener('setQuery', evt => { this.state.query = evt.detail; });
+    this.addEventListener('setFilter', evt => { this.state.filterType = evt.detail; });
+    this.addEventListener('setSortCol', evt => { this.state.sortCol = evt.detail; });
   }
-};
+}
 
 // Sets sort indicator arrow based on element attributes.
 class SortIndicator extends window.HTMLElement {
@@ -691,7 +691,7 @@ class ListingOptions extends window.HTMLElement {
 
     this.querySelectorAll('input[name=filterType]').forEach(radio => {
       radio.addEventListener('change', evt => {
-        this.dispatchEvent(new CustomEvent('setFilter', { bubbles: true, detail: radio.getAttribute('value')}));
+        this.dispatchEvent(new CustomEvent('setFilter', { bubbles: true, detail: radio.getAttribute('value') }));
       });
     });
   }
@@ -807,7 +807,7 @@ class ListingTable extends window.HTMLElement {
         const span = th.querySelector('span');
         if (span) {
           span.addEventListener('click', evt => {
-            this.dispatchEvent(new CustomEvent('setSortCol', { bubbles: true, detail: col }))
+            this.dispatchEvent(new CustomEvent('setSortCol', { bubbles: true, detail: col }));
           });
         }
       }

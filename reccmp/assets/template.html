@@ -188,77 +188,79 @@
     </script>
   </head>
   <body>
-    <div class="main">
-      <h1>Decompilation Status</h1>
-      <listing-options>
-        <input id="search" type="search" placeholder="Search for offset or function name...">
-        <div class="filters">
-          <fieldset>
-            <legend>Options:</legend>
-            <input type="checkbox" id="cbHidePerfect" />
-            <label for="cbHidePerfect">Hide 100% match</label>
-            <input type="checkbox" id="cbHideStub" />
-            <label for="cbHideStub">Hide stubs</label>
-            <input type="checkbox" id="cbShowRecomp" />
-            <label for="cbShowRecomp">Show recomp address</label>
-          </fieldset>
-          <fieldset>
-            <legend>Search filters on:</legend>
-            <input type="radio" name="filterType" id="filterName" value=1 checked />
-            <label for="filterName">Name/address</label>
-            <input type="radio" name="filterType" id="filterAsm" value=2 />
-            <label for="filterAsm">Asm output</label>
-            <input type="radio" name="filterType" id="filterDiff" value=3 />
-            <label for="filterDiff">Asm diffs only</label>
-          </fieldset>
-        </div>
-        <div class="filters">
-          <p class="rowcount">Results: <span id="rowcount"></span></p>
-          <fieldset id="pageDisplay">
-            <legend>Page</legend>
-            <button id="pagePrev">prev</button>
-            <select id="pageSelect">
-            </select>
-            <button id="pageNext">next</button>
-          </fieldset>
-        </div>
-      </listing-options>
-      <listing-table>
-        <table id="listing">
-          <thead>
-            <tr>
-              <th data-col="address">
-                <div>
-                  <span>Address</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="recomp">
-                <div>
-                  <span>Recomp</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="name">
-                <div>
-                  <span>Name</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="diffs" data-no-sort></th>
-              <th data-col="matching">
-                <div>
-                  <sort-indicator></sort-indicator>
-                  <span>Matching</span>
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-          </tbody>
-        </table>
-      </listing-table>
-    </div>
+    <reccmp-main>
+      <div class="main">
+        <h1>Decompilation Status</h1>
+        <listing-options>
+          <input id="search" type="search" placeholder="Search for offset or function name...">
+          <div class="filters">
+            <fieldset>
+              <legend>Options:</legend>
+              <input type="checkbox" id="cbHidePerfect" />
+              <label for="cbHidePerfect">Hide 100% match</label>
+              <input type="checkbox" id="cbHideStub" />
+              <label for="cbHideStub">Hide stubs</label>
+              <input type="checkbox" id="cbShowRecomp" />
+              <label for="cbShowRecomp">Show recomp address</label>
+            </fieldset>
+            <fieldset>
+              <legend>Search filters on:</legend>
+              <input type="radio" name="filterType" id="filterName" value=1 checked />
+              <label for="filterName">Name/address</label>
+              <input type="radio" name="filterType" id="filterAsm" value=2 />
+              <label for="filterAsm">Asm output</label>
+              <input type="radio" name="filterType" id="filterDiff" value=3 />
+              <label for="filterDiff">Asm diffs only</label>
+            </fieldset>
+          </div>
+          <div class="filters">
+            <p class="rowcount">Results: <span id="rowcount"></span></p>
+            <fieldset id="pageDisplay">
+              <legend>Page</legend>
+              <button id="pagePrev">prev</button>
+              <select id="pageSelect">
+              </select>
+              <button id="pageNext">next</button>
+            </fieldset>
+          </div>
+        </listing-options>
+        <listing-table>
+          <table id="listing">
+            <thead>
+              <tr>
+                <th data-col="address">
+                  <div>
+                    <span>Address</span>
+                    <sort-indicator/>
+                  </div>
+                </th>
+                <th data-col="recomp">
+                  <div>
+                    <span>Recomp</span>
+                    <sort-indicator/>
+                  </div>
+                </th>
+                <th data-col="name">
+                  <div>
+                    <span>Name</span>
+                    <sort-indicator/>
+                  </div>
+                </th>
+                <th data-col="diffs" data-no-sort></th>
+                <th data-col="matching">
+                  <div>
+                    <sort-indicator></sort-indicator>
+                    <span>Matching</span>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+            </tbody>
+          </table>
+        </listing-table>
+      </div>
+    </reccmp-main>
     <template id="funcrow-template">
       <style>
         :host(:not([hidden])) {

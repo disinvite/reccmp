@@ -143,6 +143,43 @@ test.describe('Pagination', () => {
     [pageNumber] = await getPageNumbers(page);
     expect(pageNumber).toEqual(1);
   });
+
+  test('Update page count after filtering', async ({ page }) => {
+    const btnNext = page.getByRole('button').getByText(/next/);
+
+    // Make sure we have more than one page.
+    await expect(btnNext).not.toBeDisabled();
+
+    // Filter results using something we know matches fewer than PAGE_SIZE entities.
+    await page.getByRole('searchbox').fill('IsleApp');
+
+    // We should be on page 1 of 1.
+    await expect(btnNext).toBeDisabled();
+    const [start, end] = await getPageNumbers(page);
+    expect(start).toEqual(1);
+    expect(end).toEqual(1);
+  });
+
+  test('Change page if the one we are on no longer exists', async ({ page }) => {
+    // Change the page and make sure we are on page 2.
+    await page.getByRole('button').getByText(/next/).click();
+    let [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(2);
+
+    // Filter results using something we know matches fewer than PAGE_SIZE entities.
+    await page.getByRole('searchbox').fill('IsleApp');
+
+    // We should be sent back to page 1, the only page.
+    [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(1);
+
+    // Clear the filter and restore the full dataset.
+    await page.getByRole('searchbox').clear();
+
+    // Don't change the page back to 2.
+    [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(1);
+  });
 });
 
 test.describe('Clipboard', () => {

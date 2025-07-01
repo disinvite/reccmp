@@ -22,8 +22,7 @@ jobs:
     - name: Create HTML file
       shell: bash
       run: |
-        cd tests-js
-        reccmp-aggregate --samples ./testdata.json ./testdata.json --html ./index.html
+        reccmp-aggregate --samples ./tests/js/testdata.json ./tests/js/testdata.json --html ./tests/js/index.html
 
     - uses: actions/setup-node@v4
       with:
@@ -31,22 +30,19 @@ jobs:
 
     - name: Install dependencies
       run: |
-        cd tests-js
         npm ci
 
     - name: Install Playwright Browsers
       run: |
-        cd tests-js
         npx playwright install --with-deps
 
     - name: Run Playwright tests
       run: |
-        cd tests-js
         npx playwright test
 
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
       with:
         name: playwright-report
-        path: tests-js/playwright-report/
+        path: playwright-report/
         retention-days: 30

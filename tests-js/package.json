@@ -2,7 +2,7 @@
   "name": "reccmp-js-tests",
   "version": "1.0.0",
   "description": "This is only to run tests/linting, not for building.",
-  "license": "AGPL-3.0-only",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "@playwright/test": "^1.53.2",
     "@types/node": "^24.0.8"

@@ -90,16 +90,16 @@ test.describe('Page flipping', () => {
 
 test.describe('Search bar text', () => {
   test('Type', async ({ page }) => {
-    const rowEntity = page.getByRole('table').getByText(/MxEntity/);
-    const rowScore = page.getByRole('table').getByText(/Score/);
+    const filteredRows = page.getByRole('table').getByText(/MxParam/);
+    const searchRows = page.getByRole('table').getByText(/IsleApp/);
 
-    await expect(rowEntity).not.toHaveCount(0);
-    await expect(rowScore).not.toHaveCount(0);
+    await expect(filteredRows).not.toHaveCount(0);
+    await expect(searchRows).not.toHaveCount(0);
 
-    await page.getByRole('searchbox').fill('Score');
+    await page.getByRole('searchbox').fill('IsleApp');
     
-    await expect(rowEntity).toHaveCount(0);
-    await expect(rowScore).not.toHaveCount(0);
+    await expect(filteredRows).toHaveCount(0);
+    await expect(searchRows).not.toHaveCount(0);
   });
 });
 

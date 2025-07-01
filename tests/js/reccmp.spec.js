@@ -146,8 +146,12 @@ test.describe('Pagination', () => {
 });
 
 test.describe('Clipboard', () => {
-  test('Copy original addr', async ({ page, context }) => {
-    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  test('Copy original addr', async ({ page, browserName, context }) => {
+    if (browserName === 'chromium') {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    } else if (browserName === 'webkit') {
+      test.fixme('Permissions problem using clipboard API outside of user event')
+    }
 
     // The text we want copied.
     const addr = '0x401000';

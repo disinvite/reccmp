@@ -77,16 +77,91 @@ test.describe('Table display options', () => {
   });
 });
 
-test.describe('Page flipping', () => {
-  test('Type', async ({ page }) => {
+test.describe('Pagination', () => {
+  const PAGE_SIZE = 200; // defined in reccmp.js
+
+  // Returns integer from results counter.
+  const getResultCount = async page => {
+    const resultsText = await page.getByText(/Results: \d+/).textContent()
+    const [count] = resultsText.match(/\d+/)
+    return parseInt(count)
+  }
+
+  // Returns integers from 'Page x of y' display.
+  const getPageNumbers = async page => {
+    const pageText = await page.getByText(/Page \d+ of \d+/).textContent()
+    const [start, end] = pageText.match(/\d+/g)
+    return [parseInt(start), parseInt(end)]
+  }
+
+  test('Accurate page count', async ({ page }) => {
+    // Derive the max page count based on the number of entities.
+    // This assumes that no entities are hidden on startup.
+    // We could also just hardcode this value.
+    const count = await getResultCount(page);
+    const [start, end] = await getPageNumbers(page);
+
+    expect(start).toEqual(1)
+    expect(end).toEqual(Math.ceil(count / PAGE_SIZE))
+  });
+
+  test('Disable buttons at page limit', async ({ page }) => {
+    // This requires us to have at least two pages worth of entities.
     const btnPrev = page.getByRole('button').getByText(/prev/);
     const btnNext = page.getByRole('button').getByText(/next/);
 
-    // Should start on page one.
+    // Prev button should be disabled on page one.
     await expect(btnPrev).toBeDisabled();
     await expect(btnNext).not.toBeDisabled();
+
+    // Click through to the last page.
+    const [start, end] = await getPageNumbers(page);
+    for (let i = start; i < end; i++) {
+        await btnNext.click();
+    }
+
+    // Disable Next button when we reach the final page.
+    await expect(btnPrev).not.toBeDisabled();
+    await expect(btnNext).toBeDisabled();
+  });
+
+  test('Update page display with button clicks', async ({ page }) => {
+    const btnPrev = page.getByRole('button').getByText(/prev/);
+    const btnNext = page.getByRole('button').getByText(/next/);
+
+    // Destructuring only the first index
+    let [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(1);
+
+    // Go to page 2
+    await btnNext.click();
+    [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(2);
+
+    // Go back to page 1
+    await btnPrev.click();
+    [pageNumber] = await getPageNumbers(page);
+    expect(pageNumber).toEqual(1);
   });
 });
+
+test.describe('Clipboard', () => {
+  test('Copy original addr', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+
+    // The text we want copied.
+    const addr = '0x401000';
+
+    // TODO: this is a convoluted way to avoid other page elements
+    await page.getByText(addr, { exact: true }).filter({ visible: true }).click();
+
+    // Get the value from the clipboard and confirm that it matches the address.
+    const handle = await page.evaluateHandle(() => navigator.clipboard.readText());
+    const clipboardContent = await handle.jsonValue();
+    expect(clipboardContent).toEqual(addr);
+  });
+});
+
 
 test.describe('Search bar', () => {
   test('Search by name', async ({ page }) => {

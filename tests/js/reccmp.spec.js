@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('');
@@ -81,18 +81,18 @@ test.describe('Pagination', () => {
   const PAGE_SIZE = 200; // defined in reccmp.js
 
   // Returns integer from results counter.
-  const getResultCount = async page => {
-    const resultsText = await page.getByText(/Results: \d+/).textContent()
-    const [count] = resultsText.match(/\d+/)
-    return parseInt(count)
-  }
+  const getResultCount = async (page) => {
+    const resultsText = await page.getByText(/Results: \d+/).textContent();
+    const [count] = resultsText.match(/\d+/);
+    return parseInt(count);
+  };
 
   // Returns integers from 'Page x of y' display.
-  const getPageNumbers = async page => {
-    const pageText = await page.getByText(/Page \d+ of \d+/).textContent()
-    const [start, end] = pageText.match(/\d+/g)
-    return [parseInt(start), parseInt(end)]
-  }
+  const getPageNumbers = async (page) => {
+    const pageText = await page.getByText(/Page \d+ of \d+/).textContent();
+    const [start, end] = pageText.match(/\d+/g);
+    return [parseInt(start), parseInt(end)];
+  };
 
   test('Accurate page count', async ({ page }) => {
     // Derive the max page count based on the number of entities.
@@ -101,8 +101,8 @@ test.describe('Pagination', () => {
     const count = await getResultCount(page);
     const [start, end] = await getPageNumbers(page);
 
-    expect(start).toEqual(1)
-    expect(end).toEqual(Math.ceil(count / PAGE_SIZE))
+    expect(start).toEqual(1);
+    expect(end).toEqual(Math.ceil(count / PAGE_SIZE));
   });
 
   test('Disable buttons at page limit', async ({ page }) => {
@@ -117,7 +117,7 @@ test.describe('Pagination', () => {
     // Click through to the last page.
     const [start, end] = await getPageNumbers(page);
     for (let i = start; i < end; i++) {
-        await btnNext.click();
+      await btnNext.click();
     }
 
     // Disable Next button when we reach the final page.
@@ -253,7 +253,7 @@ test.describe('Clipboard', () => {
     if (browserName === 'chromium') {
       await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     } else if (browserName === 'webkit') {
-      test.fixme('Permissions problem using clipboard API outside of user event')
+      test.fixme('Permissions problem using clipboard API outside of user event');
     }
 
     // The text we want copied.
@@ -269,11 +269,10 @@ test.describe('Clipboard', () => {
   });
 });
 
-
 test.describe('Search bar', () => {
   test('Search by name', async ({ page }) => {
-    const query = 'IsleApp'
-    const searchbox = page.getByRole('searchbox')
+    const query = 'IsleApp';
+    const searchbox = page.getByRole('searchbox');
 
     // Locators for rows matching and not matching our intended query.
     // TODO: use better locator for table rows/cells
@@ -300,7 +299,7 @@ test.describe('Search bar', () => {
   });
 
   test('Search by address', async ({ page }) => {
-    const searchbox = page.getByRole('searchbox')
+    const searchbox = page.getByRole('searchbox');
 
     // TODO: use better locator for table rows/cells
     const rows = page.locator('func-row');
@@ -310,14 +309,14 @@ test.describe('Search bar', () => {
 
     // Should match the first row's orig address.
     await searchbox.fill('0x401000');
-    
+
     // Only one row should appear.
     await expect(rows).toHaveCount(1);
   });
 
   test('Changing filter type re-runs search', async ({ page }) => {
-    const searchbox = page.getByRole('searchbox')
-    const radio = page.getByRole('radio', { name: 'Asm output' })
+    const searchbox = page.getByRole('searchbox');
+    const radio = page.getByRole('radio', { name: 'Asm output' });
 
     // TODO: use better locator for table rows/cells
     const rows = page.locator('func-row');
@@ -339,9 +338,9 @@ test.describe('Search bar', () => {
   });
 
   test('Changing filter type changes placeholder', async ({ page }) => {
-    const searchbox = page.getByRole('searchbox')
-    const namePlaceholder = page.getByPlaceholder('Search for offset or function name')
-    const asmPlaceholder = page.getByPlaceholder('Search for instruction')
+    const searchbox = page.getByRole('searchbox');
+    const namePlaceholder = page.getByPlaceholder('Search for offset or function name');
+    const asmPlaceholder = page.getByPlaceholder('Search for instruction');
 
     // Should start with name placeholder
     await expect(searchbox.and(namePlaceholder)).toBeAttached();
@@ -371,7 +370,7 @@ test.describe('Search bar', () => {
 test.describe('Diff rows', () => {
   test('Should add/remove element', async ({ page }) => {
     // Name text to click that toggles the diff row.
-    const nameLink = page.locator('func-row').getByText('IsleApp::IsleApp')
+    const nameLink = page.locator('func-row').getByText('IsleApp::IsleApp');
 
     // There are none to start
     await expect(page.locator('diff-row')).toHaveCount(0);
@@ -386,8 +385,8 @@ test.describe('Diff rows', () => {
   });
 
   test('Should stay open after entity filtering', async ({ page }) => {
-    const nameLink = page.locator('func-row').getByText('IsleApp::IsleApp')
-    const searchbox = page.getByRole('searchbox')
+    const nameLink = page.locator('func-row').getByText('IsleApp::IsleApp');
+    const searchbox = page.getByRole('searchbox');
 
     // TODO: Not sure of a better way to identify this element in the current design
     const diffRow = page.locator('diff-row[data-address="0x401000"]');

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('');
@@ -14,7 +14,7 @@ test.fixme('Reset filter options after reload (Issue #99)', async ({ page }) => 
 
   // First option should be unselected.
   await expect(radio).not.toBeChecked();
-  
+
   // The first option should be selected again after the reload.
   await page.reload();
   await expect(radio).toBeChecked();

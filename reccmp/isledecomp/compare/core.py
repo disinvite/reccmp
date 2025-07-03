@@ -39,6 +39,7 @@ from .match_msvc import (
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport, combined_diff
 from .lines import LinesDb
+from .queries import get_overloaded_functions
 
 
 # pylint: disable=too-many-lines
@@ -711,7 +712,7 @@ class Compare:
         Overloaded functions will all have the same name. This function detects those
         cases and gives each one a unique name in the db."""
         with self._db.batch() as batch:
-            for func in self._db.get_overloaded_functions():
+            for func in get_overloaded_functions(self._db):
                 # TODO: Thunk's link to the original function is lost once the record is created.
                 if "Thunk of" in func.name:
                     continue

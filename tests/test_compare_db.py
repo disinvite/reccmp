@@ -4,6 +4,7 @@ import sqlite3
 from unittest.mock import patch
 import pytest
 from reccmp.isledecomp.compare.db import EntityDb
+from reccmp.isledecomp.compare.queries import get_overloaded_functions
 from reccmp.isledecomp.types import EntityType
 
 
@@ -133,7 +134,7 @@ def test_get_by_exact_keyword(db: EntityDb):
 
 def test_overloaded_functions_all_unique(db: EntityDb):
     # Should start with nothing
-    assert len([*db.get_overloaded_functions()]) == 0
+    assert len([*get_overloaded_functions(db)]) == 0
 
     with db.batch() as batch:
         batch.set_orig(100, name="Hello", type=EntityType.FUNCTION)
@@ -141,7 +142,7 @@ def test_overloaded_functions_all_unique(db: EntityDb):
         batch.set_recomp(300, name="xyz", type=EntityType.FUNCTION)
 
     # All entities are functions, but their names are unique.
-    assert len([*db.get_overloaded_functions()]) == 0
+    assert len([*get_overloaded_functions(db)]) == 0
 
 
 def test_overloaded_functions_ignore_non_functions(db: EntityDb):
@@ -151,20 +152,20 @@ def test_overloaded_functions_ignore_non_functions(db: EntityDb):
         batch.set_recomp(300, name="Hello")
 
     # Name reused, but no entities are functions.
-    assert len([*db.get_overloaded_functions()]) == 0
+    assert len([*get_overloaded_functions(db)]) == 0
 
     with db.batch() as batch:
         batch.set_orig(400, name="Hello", type=EntityType.FUNCTION)
 
     # The name is not shared with *other* functions
-    assert len([*db.get_overloaded_functions()]) == 0
+    assert len([*get_overloaded_functions(db)]) == 0
 
     with db.batch() as batch:
         batch.set_recomp(400, name="Hello", type=EntityType.FUNCTION)
 
     # Now we have two entities that are functions and have the same name.
     # Don't count the other entities that are *not* functions.
-    assert [func.sequence for func in db.get_overloaded_functions()] == [1, 2]
+    assert [func.sequence for func in get_overloaded_functions(db)] == [1, 2]
 
 
 def test_overloaded_functions(db: EntityDb):
@@ -176,7 +177,7 @@ def test_overloaded_functions(db: EntityDb):
         batch.match(200, 200)
 
     # Should have three entities, one matched, all functions and all with the name "Hello".
-    overloaded = list(db.get_overloaded_functions())
+    overloaded = list(get_overloaded_functions(db))
     assert [func.sequence for func in overloaded] == [1, 2, 3]
     assert [func.orig_addr for func in overloaded] == [100, 200, None]
     assert [func.recomp_addr for func in overloaded] == [None, 200, 300]

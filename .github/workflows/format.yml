@@ -39,11 +39,11 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
+      working-directory: ./webui
       run: |
-        cd webui
         npm ci
 
     - name: Biome Format (tests)
+      working-directory: ./webui
       run: |
-        cd webui
         npx @biomejs/biome ci .

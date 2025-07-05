@@ -16,7 +16,6 @@ jobs:
 
     - name: Install reccmp
       shell: bash
-      working-directory: ./webui
       run: |
         pip install .
 

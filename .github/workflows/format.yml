@@ -40,8 +40,10 @@ jobs:
 
     - name: Install dependencies
       run: |
+        cd webui
         npm ci
 
-    - name: Biome Format
+    - name: Biome Format (tests)
       run: |
-        npx @biomejs/biome ci ./tests/js/
+        cd webui
+        npx @biomejs/biome ci .

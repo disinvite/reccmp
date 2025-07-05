@@ -2,6 +2,10 @@ name: Playwright Tests
 
 on: [push, pull_request]
 
+defaults:
+  run:
+    working-directory: ./webui
+
 jobs:
   test:
     timeout-minutes: 60
@@ -22,7 +26,7 @@ jobs:
     - name: Create HTML file
       shell: bash
       run: |
-        reccmp-aggregate --samples ./tests/js/testdata.json ./tests/js/testdata.json --html ./tests/js/index.html
+        reccmp-aggregate --samples ./testdata.json ./testdata.json --html ./index.html
 
     - uses: actions/setup-node@v4
       with:

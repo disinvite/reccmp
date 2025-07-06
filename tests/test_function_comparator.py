@@ -1,10 +1,18 @@
+from pathlib import PureWindowsPath
+from typing import Callable
 from unittest.mock import Mock
 import pytest
 from reccmp.isledecomp.compare.db import EntityDb, ReccmpMatch
 from reccmp.isledecomp.compare.diff import DiffReport
 from reccmp.isledecomp.compare.event import ReccmpEvent, ReccmpReportProtocol
 from reccmp.isledecomp.compare.functions import FunctionComparator
+from reccmp.isledecomp.compare.lines import LinesDb
 from reccmp.isledecomp.types import EntityType
+
+
+MOCK_PATH = PureWindowsPath("some/path/test.cpp")
+ORIG_GLOBAL_OFFSET = 0x200
+RECOMP_GLOBAL_OFFSET = 0x400
 
 
 @pytest.fixture(name="db")
@@ -12,17 +20,23 @@ def fixture_db() -> EntityDb:
     return EntityDb()
 
 
+@pytest.fixture(name="lines_db")
+def fixture_lines_db() -> LinesDb:
+    return LinesDb([MOCK_PATH])
+
+
 @pytest.fixture(name="report")
 def fixture_report_mock() -> ReccmpReportProtocol:
     return Mock(spec=ReccmpReportProtocol)
 
 
-ORIG_GLOBAL_OFFSET = 0x200
-RECOMP_GLOBAL_OFFSET = 0x400
-
-
 def compare_functions(
-    db: EntityDb, orig: bytes, recomp: bytes, report: ReccmpReportProtocol
+    db: EntityDb,
+    lines_db: LinesDb,
+    orig: bytes,
+    recomp: bytes,
+    report: ReccmpReportProtocol,
+    is_relocated_addr: Callable[[int], bool] | None = None,
 ) -> DiffReport:
     """Executes `FunctionComparator.compare_function` on the provided binary code."""
 
@@ -31,16 +45,16 @@ def compare_functions(
     orig_bin = Mock(spec=[])
     orig_bin.read = Mock(return_value=orig)
     orig_bin.imagebase = 0
-    orig_bin.is_relocated_addr = Mock(return_value=False)
+    orig_bin.is_relocated_addr = is_relocated_addr or Mock(return_value=False)
     orig_bin.is_debug = Mock(return_value=False)
 
     recomp_bin = Mock(spec=[])
     recomp_bin.read = Mock(return_value=recomp)
     recomp_bin.imagebase = 0
-    recomp_bin.is_relocated_addr = Mock(return_value=False)
+    recomp_bin.is_relocated_addr = is_relocated_addr or Mock(return_value=False)
     recomp_bin.is_debug = Mock(return_value=False)
 
-    comp = FunctionComparator(db, orig_bin, recomp_bin, report, "unittest")
+    comp = FunctionComparator(db, lines_db, orig_bin, recomp_bin, report, "unittest")
 
     return comp.compare_function(
         ReccmpMatch(
@@ -66,22 +80,26 @@ def add_line_annotation(
     db.set_pair(orig_addr, recomp_addr, EntityType.LINE)
 
 
-def test_simple_identical_diff(db: EntityDb, report: ReccmpReportProtocol):
+def test_simple_identical_diff(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
     # based on BETA10 0x1013e61d
     code = b"U\x8b\xec\x83\xec,SVWf\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8bE\x14"
 
-    diffreport = compare_functions(db, code, code, report)
+    diffreport = compare_functions(db, lines_db, code, code, report)
 
     assert diffreport.ratio == 1.0
     assert diffreport.udiff == []
 
 
-def test_simple_nontrivial_diff(db: EntityDb, report: ReccmpReportProtocol):
+def test_simple_nontrivial_diff(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
     orig = b"f\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8b\x45\x14"
     # one instruction modified
     recm = b"f\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8b\x51\x14"
 
-    diffreport = compare_functions(db, orig, recm, report)
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.ratio < 1.0
 
@@ -116,12 +134,12 @@ LINE_MISMATCH_EXAMPLE_RECOMP = (
 
 
 def test_example_where_diff_mismatches_lines(
-    db: EntityDb, report: ReccmpReportProtocol
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
 ):
     """The text based diff sometimes misjudges which parts correspond when there are a lot of differences. This tests captures one such case."""
 
     diffreport = compare_functions(
-        db, LINE_MISMATCH_EXAMPLE_ORIG, LINE_MISMATCH_EXAMPLE_RECOMP, report
+        db, lines_db, LINE_MISMATCH_EXAMPLE_ORIG, LINE_MISMATCH_EXAMPLE_RECOMP, report
     )
 
     assert diffreport.ratio < 1.0
@@ -192,18 +210,21 @@ def test_example_where_diff_mismatches_lines(
     ]
 
 
-def test_impact_of_line_annotation(db: EntityDb, report: ReccmpReportProtocol):
+def test_impact_of_line_annotation(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
     """When text based diff misjudges which parts correspond, a `// LINE` annotation may help. This test uses the same binary, but with such an annotation."""
 
     add_line_annotation(db, 31, 7)
+    lines_db.add_line(MOCK_PATH, 123, 0x407)
 
     diffreport = compare_functions(
-        db, LINE_MISMATCH_EXAMPLE_ORIG, LINE_MISMATCH_EXAMPLE_RECOMP, report
+        db, lines_db, LINE_MISMATCH_EXAMPLE_ORIG, LINE_MISMATCH_EXAMPLE_RECOMP, report
     )
 
     assert diffreport.udiff == [
         (
-            "@@ -0x200,9 +0x400,3 @@",
+            "@@ -0x200,19 +0x400,22 @@",
             [
                 {
                     "both": [
@@ -225,24 +246,17 @@ def test_impact_of_line_annotation(db: EntityDb, report: ReccmpReportProtocol):
                         ("0x403", "mov word ptr [ebp - 4], cx"),
                     ],
                 },
-            ],
-        ),
-        (
-            "@@ -0x21f,1 +0x407,1 @@",
-            [
                 {
                     "orig": [
                         ("0x21f", "mov eax, dword ptr [ebp - 0x14]"),
                     ],
                     "recomp": [
-                        ("0x407", "mov eax, dword ptr [ebp - 0xc]"),
+                        (
+                            "0x407",
+                            "mov eax, dword ptr [ebp - 0xc] \t(test.cpp:123, pinned)",
+                        ),
                     ],
-                }
-            ],
-        ),
-        (
-            "@@ -0x222,9 +0x40a,18 @@",
-            [
+                },
                 {
                     "both": [
                         ("0x222", "mov ax, word ptr [eax]", "0x40a"),
@@ -294,13 +308,13 @@ def test_impact_of_line_annotation(db: EntityDb, report: ReccmpReportProtocol):
     ]
 
 
-def test_line_annotation_invalid_orig_address(db: EntityDb, report):
+def test_line_annotation_invalid_orig_address(db: EntityDb, lines_db: LinesDb, report):
     # based on BETA10 0x1013e61d
     code = b"U\x8b\xec\x83\xec,SVWf\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8bE\x14"
 
     add_line_annotation(db, 2, 0)
 
-    compare_functions(db, code, code, report)
+    compare_functions(db, lines_db, code, code, report)
 
     report.assert_called_with(
         ReccmpEvent.NO_MATCH,
@@ -309,12 +323,14 @@ def test_line_annotation_invalid_orig_address(db: EntityDb, report):
     )
 
 
-def test_line_annotation_invalid_recomp_address(db: EntityDb, report):
+def test_line_annotation_invalid_recomp_address(
+    db: EntityDb, lines_db: LinesDb, report
+):
     code = b"U\x8b\xec\x83\xec,SVWf\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8bE\x14"
 
     add_line_annotation(db, 1, 2)
 
-    compare_functions(db, code, code, report)
+    compare_functions(db, lines_db, code, code, report)
 
     report.assert_called_with(
         ReccmpEvent.NO_MATCH,
@@ -323,13 +339,13 @@ def test_line_annotation_invalid_recomp_address(db: EntityDb, report):
     )
 
 
-def test_line_annotation_wrong_order(db: EntityDb, report):
+def test_line_annotation_wrong_order(db: EntityDb, lines_db: LinesDb, report):
     code = b"U\x8b\xec\x83\xec,SVWf\xc7E\xf8\x00\x00f\xc7E\xf0\x00\x00\x8bE\x14"
 
     add_line_annotation(db, 0, 3)
     add_line_annotation(db, 3, 0)
 
-    compare_functions(db, code, code, report)
+    compare_functions(db, lines_db, code, code, report)
 
     report.assert_called_with(
         ReccmpEvent.WRONG_ORDER,
@@ -338,22 +354,24 @@ def test_line_annotation_wrong_order(db: EntityDb, report):
     )
 
 
-def test_no_assembly_generated(db: EntityDb, report):
+def test_no_assembly_generated(db: EntityDb, lines_db: LinesDb, report):
     # `capstone` produces no code for these instructions.
     # This test checks for correct edge case handling (e.g. no implicit assumptions that there will always be some assembly)
     code = b"\xcc"
     recm = b"\xcd"
 
-    diffreport = compare_functions(db, code, recm, report)
+    diffreport = compare_functions(db, lines_db, code, recm, report)
 
     assert diffreport.ratio == 1.0
 
 
-def test_displacement_without_match(db: EntityDb, report: ReccmpReportProtocol):
+def test_displacement_without_match(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
     orig = b"\x89\x3c\x85\xa8\x15\xc8\x00"
     recm = b"\x89\x3c\x85\xa8\x15\xd0\x00"
 
-    diffreport = compare_functions(db, orig, recm, report)
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.ratio < 1.0
 
@@ -370,7 +388,9 @@ def test_displacement_without_match(db: EntityDb, report: ReccmpReportProtocol):
     ]
 
 
-def test_displacement_with_match(db: EntityDb, report: ReccmpReportProtocol):
+def test_displacement_with_match(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
     # mov dword ptr [eax*4 + 0xc815a8], edi
     orig = b"\x89\x3c\x85\xa8\x15\xc8\x00"
     recm = b"\x89\x3c\x85\xa8\x15\xd0\x00"
@@ -380,6 +400,85 @@ def test_displacement_with_match(db: EntityDb, report: ReccmpReportProtocol):
     db.set_recomp_symbol(recomp_addr, name="some_global")
     db.set_pair(orig_addr, recomp_addr, EntityType.DATA)
 
-    diffreport = compare_functions(db, orig, recm, report)
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.ratio == 1.0
+
+
+def test_matching_jump_table(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
+    """Jump tables of functions matching relative to the different offsets of the functions"""
+    orig = b"\xff\x24\x85\x07\x02\x00\x00\x33\x04\x00\x00\x43\x04\x00\x00"
+    recm = b"\xff\x24\x85\x07\x04\x00\x00\x33\x06\x00\x00\x43\x06\x00\x00"
+
+    is_relocated_addr = Mock(return_value=True)
+    # is_relocated_addr = None
+    diffreport = compare_functions(db, lines_db, orig, recm, report, is_relocated_addr)
+
+    assert diffreport.ratio == 1.0
+    assert diffreport.is_effective_match is False
+
+
+def test_jump_table_wrong_order(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
+    """
+    Jump tables with the correct entries in the wrong order.
+    In particular, this must not become an accidental effective match.
+    """
+    orig = b"\xff\x24\x85\x07\x02\x00\x00\x33\x04\x00\x00\x43\x04\x00\x00"
+    recm = b"\xff\x24\x85\x07\x04\x00\x00\x43\x06\x00\x00\x33\x06\x00\x00"
+
+    # Required to get an `<OFFSET1> into the jump instruction`
+    is_relocated_addr = Mock(return_value=True)
+    diffreport = compare_functions(db, lines_db, orig, recm, report, is_relocated_addr)
+
+    assert diffreport.ratio < 1.0
+    assert diffreport.is_effective_match is False
+
+    assert diffreport.udiff == [
+        (
+            "@@ -,4 +,4 @@",
+            [
+                {
+                    "both": [
+                        ("0x200", "jmp dword ptr [eax*4 + <OFFSET1>]", "0x400"),
+                        ("", "Jump table:", ""),
+                    ],
+                },
+                {"orig": [], "recomp": [("0x407", "start + 0x243")]},
+                {"both": [("0x207", "start + 0x233", "0x40b")]},
+                {"orig": [("0x20b", "start + 0x243")], "recomp": []},
+            ],
+        )
+    ]
+
+
+def test_source_reference_without_line_annotation(
+    db: EntityDb, lines_db: LinesDb, report: ReccmpReportProtocol
+):
+    orig = b"\x89\x3c\x85\xa8\x15\xc8\x00"
+    recm = b"\x89\x3c\x85\xa8\x15\xd0\x00"
+    lines_db.add_line(MOCK_PATH, 42, 0x400)
+
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
+
+    assert diffreport.ratio < 1.0
+
+    assert diffreport.udiff == [
+        (
+            "@@ -0x200,1 +0x400,1 @@",
+            [
+                {
+                    "orig": [("0x200", "mov dword ptr [eax*4 + 0xc815a8], edi")],
+                    "recomp": [
+                        (
+                            "0x400",
+                            "mov dword ptr [eax*4 + 0xd015a8], edi \t(test.cpp:42)",
+                        )
+                    ],
+                }
+            ],
+        )
+    ]

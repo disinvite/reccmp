@@ -111,6 +111,7 @@ def test_should_output_bool():
                 3000|no
                 4000|FALSE
                 5000|0
+                6000|
             """
             )
         )
@@ -127,6 +128,9 @@ def test_should_output_bool():
     assert skip_map[0x3000] is False
     assert skip_map[0x4000] is False
     assert skip_map[0x5000] is False
+
+    # Empty string considered false
+    assert skip_map[0x6000] is False
 
 
 def test_ignore_blank_lines():
@@ -213,3 +217,42 @@ def test_emulate_file_reads():
         (0x1000, {"symbol": "test"}),
         (0x2000, {"symbol": "test"}),
     ]
+
+
+def test_address_not_first():
+    """Since the address is the unique id for the annotation, it will probably appear first in most cases.
+    However, this is not required."""
+
+    values = [
+        *csv_parse(
+            dedent(
+                """\
+                symbol|skip|addr
+                test|1|1000
+                test|0|2000
+            """
+            )
+        )
+    ]
+
+    addrs = [addr for addr, _ in values]
+    assert addrs == [0x1000, 0x2000]
+
+
+def test_address_repeated():
+    """The address can appear more than once and we will parse it correctly.
+    It's up to the caller to decide how to handle this."""
+
+    values = [
+        *csv_parse(
+            dedent(
+                """\
+                addr|skip
+                1000|1
+                1000|0
+            """
+            )
+        )
+    ]
+
+    assert values == [(0x1000, {"skip": True}), (0x1000, {"skip": False})]

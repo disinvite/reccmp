@@ -36,7 +36,7 @@ CsvValuesType = dict[str, CsvValueOptions]
 
 def _boolify(text: str) -> bool:
     """str to bool conversion. If the string is not in the exclusion list, resolve to True."""
-    return text.strip().lower() not in ("false", "off", "no", "0")
+    return text.strip().lower() not in ("false", "off", "no", "0", "")
 
 
 def _csv_preprocess(lines: Iterable[str]) -> Iterator[str]:

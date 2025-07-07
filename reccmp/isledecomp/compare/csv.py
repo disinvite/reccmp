@@ -48,7 +48,7 @@ def _csv_preprocess(lines: Iterable[str]) -> Iterator[str]:
             continue
 
         # Skip blank lines.
-        if line == "":
+        if strip == "":
             continue
 
         yield line

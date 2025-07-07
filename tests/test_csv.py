@@ -174,3 +174,42 @@ def test_ignore_comments():
     ]
 
     assert values == [(0x2000, {"symbol": "test"})]
+
+
+def test_tab_delimiter():
+    """We support tab as an option for delimiter. (It is not covered in the other tests.)"""
+    values = [
+        *csv_parse(
+            dedent(
+                """\
+                addr\tsymbol
+                1000\ttest
+                2000\ttest
+                3000\ttest
+            """
+            )
+        )
+    ]
+
+    assert values == [
+        (0x1000, {"symbol": "test"}),
+        (0x2000, {"symbol": "test"}),
+        (0x3000, {"symbol": "test"}),
+    ]
+
+
+def test_emulate_file_reads():
+    """The tests thus far have used a string, which is split on the newline.
+    This means each line is *missing* the newline. Make sure we can still parse if
+    we are reading line-by-line, as from a file."""
+
+    # Mix of comments and blank lines
+    file = iter(
+        ["# Comment\n", "\n", "addr|symbol\n", "\n", "1000|test\n", "\n", "2000|test\n"]
+    )
+    values = [*csv_parse(file)]
+
+    assert values == [
+        (0x1000, {"symbol": "test"}),
+        (0x2000, {"symbol": "test"}),
+    ]

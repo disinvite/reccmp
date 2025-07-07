@@ -105,7 +105,6 @@ def csv_parse(lines: str | Iterable[str]) -> Iterator[tuple[int, CsvValuesType]]
         raise CsvNoDelimiterError
 
     # We support multiple options for address key, but exactly one must appear.
-    print(lines, reader.fieldnames)
     addrs = [key for key in ("address", "addr") if key in reader.fieldnames]
     if not addrs:
         raise CsvNoAddressError

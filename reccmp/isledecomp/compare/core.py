@@ -384,6 +384,7 @@ class Compare:
                 rows = list(csv_parse(f))
         except (FileNotFoundError, ReccmpCsvParserError):
             logger.error("Failed to parse csv file %s", str(path))
+            return
 
         with self._db.batch() as batch:
             for addr, values in rows:

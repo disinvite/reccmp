@@ -127,3 +127,50 @@ def test_should_output_bool():
     assert skip_map[0x3000] is False
     assert skip_map[0x4000] is False
     assert skip_map[0x5000] is False
+
+
+def test_ignore_blank_lines():
+    """Parsing should ignore blank lines.
+    n.b. make sure the triple quote string and dedent() remove leading spaces."""
+    values = [
+        *csv_parse(
+            dedent(
+                """\
+
+                addr|symbol
+
+                1000|test
+
+                2000|test
+
+
+                3000|test
+            """
+            )
+        )
+    ]
+
+    assert values == [
+        (0x1000, {"symbol": "test"}),
+        (0x2000, {"symbol": "test"}),
+        (0x3000, {"symbol": "test"}),
+    ]
+
+
+def test_ignore_comments():
+    """We ignore any line starting with // or #."""
+    values = [
+        *csv_parse(
+            dedent(
+                """\
+                # Test CSV file
+                addr|symbol
+                # 1000|test
+                2000|test
+                // 3000|test
+            """
+            )
+        )
+    ]
+
+    assert values == [(0x2000, {"symbol": "test"})]

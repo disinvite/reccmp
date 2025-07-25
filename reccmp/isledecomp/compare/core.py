@@ -24,6 +24,7 @@ from reccmp.isledecomp.compare.event import (
 )
 from reccmp.isledecomp.analysis import (
     find_float_consts,
+    find_import_thunks,
     find_vtordisp,
     is_likely_latin1,
 )
@@ -35,6 +36,7 @@ from .match_msvc import (
     match_static_variables,
     match_variables,
     match_strings,
+    match_byref,
 )
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport, combined_diff
@@ -99,9 +101,11 @@ class Compare:
         self._match_imports()
         self._match_exports()
         self._match_thunks()
+        match_byref(self._db, report)
         self._match_vtordisp()
         self._check_vtables()
         self._unique_names_for_overloaded_functions()
+        self._name_thunks()
 
         match_strings(self._db, report)
 
@@ -543,6 +547,29 @@ class Compare:
                 if recomp_addr is not None:
                     batch.match(orig_addr, recomp_addr)
 
+        with self._db.batch() as batch:
+            for thunk in find_import_thunks(self.orig_bin):
+                name = f"{thunk.dll_name}::{thunk.func_name}"
+                batch.set_orig(
+                    thunk.addr,
+                    name=name,
+                    type=EntityType.FUNCTION,
+                    skip=True,
+                    size=thunk.size,
+                    ref_orig=thunk.import_addr,
+                )
+
+            for thunk in find_import_thunks(self.recomp_bin):
+                name = f"{thunk.dll_name}::{thunk.func_name}"
+                batch.set_recomp(
+                    thunk.addr,
+                    name=name,
+                    type=EntityType.FUNCTION,
+                    skip=True,
+                    size=thunk.size,
+                    ref_recomp=thunk.import_addr,
+                )
+
     def _match_thunks(self):
         """Thunks are (by nature) matched by indirection. If a thunk from orig
         points at a function we have already matched, we can find the matching
@@ -551,57 +578,30 @@ class Compare:
         # Mark all recomp thunks first. This allows us to use their name
         # when we sanitize the asm.
         with self._db.batch() as batch:
-            for recomp_thunk, recomp_addr in self.recomp_bin.thunks:
-                recomp_func = self._db.get_by_recomp(recomp_addr)
-                if recomp_func is None:
-                    continue
+            for orig_thunk, orig_addr in self.orig_bin.thunks:
+                batch.insert_orig(
+                    orig_thunk,
+                    type=EntityType.FUNCTION,
+                    size=5,
+                    ref_orig=orig_addr,
+                    skip=True,
+                )
 
-                assert recomp_func.name is not None
+                # func = self._db.get_by_orig(orig_addr)
+                # if func is not None and func.name is not None:
+                #    batch.insert_orig(orig_thunk, name=f"Thunk of '{func.name}'",)
+
+            for recomp_thunk, recomp_addr in self.recomp_bin.thunks:
                 batch.insert_recomp(
                     recomp_thunk,
                     type=EntityType.FUNCTION,
                     size=5,
-                    name=f"Thunk of '{recomp_func.name}'",
+                    ref_recomp=recomp_addr,
                 )
 
-            # Thunks may be non-unique, so use a list as dict value when
-            # inverting the list of tuples from self.recomp_bin.
-            recomp_thunks: dict[int, list[int]] = {}
-            for thunk_addr, func_addr in self.recomp_bin.thunks:
-                recomp_thunks.setdefault(func_addr, []).append(thunk_addr)
-
-            # Now match the thunks from orig where we can.
-            for orig_thunk, orig_addr in self.orig_bin.thunks:
-                orig_func = self._db.get_by_orig(orig_addr)
-                if orig_func is None or orig_func.recomp_addr is None:
-                    continue
-
-                # Check whether the thunk destination is a matched symbol
-                if orig_func.recomp_addr not in recomp_thunks:
-                    assert orig_func.name is not None
-                    batch.insert_orig(
-                        orig_thunk,
-                        type=EntityType.FUNCTION,
-                        size=5,
-                        name=f"Thunk of '{orig_func.name}'",
-                    )
-                    continue
-
-                # If there are multiple thunks, they are already in v.addr order.
-                # Pop the earliest one and match it.
-                recomp_thunk = recomp_thunks[orig_func.recomp_addr].pop(0)
-                if len(recomp_thunks[orig_func.recomp_addr]) == 0:
-                    del recomp_thunks[orig_func.recomp_addr]
-
-                batch.match(orig_thunk, recomp_thunk)
-
-                # Don't compare thunk functions for now. The comparison isn't
-                # "useful" in the usual sense. We are only looking at the
-                # bytes of the jmp instruction and not the larger context of
-                # where this function is. Also: these will always match 100%
-                # because we are searching for a match to register this as a
-                # function in the first place.
-                batch.set_orig(orig_thunk, skip=True)
+                # func = self._db.get_by_recomp(recomp_addr)
+                # if func is not None and func.name is not None:
+                #    batch.insert_recomp(recomp_thunk, name=f"Thunk of '{func.name}'",)
 
     def _match_exports(self):
         # invert for name lookup
@@ -729,6 +729,26 @@ class Compare:
                     batch.set_orig(func.orig_addr, computed_name=new_name)
                 elif func.recomp_addr is not None:
                     batch.set_recomp(func.recomp_addr, computed_name=new_name)
+
+    def _name_thunks(self):
+        with self._db.batch() as batch:
+            for addr, name in self._db.sql.execute(
+                """SELECT e.orig_addr, coalesce(json_extract(r.kvstore, '$.computed_name'), json_extract(r.kvstore, '$.name'))
+                FROM entities e inner join entities r on e.ref_orig = r.orig_addr
+                WHERE e.orig_addr is not null
+                """
+            ):
+                if name:
+                    batch.set_orig(addr, name=f"Thunk of '{name}'")
+
+            for addr, name in self._db.sql.execute(
+                """SELECT e.recomp_addr, coalesce(json_extract(r.kvstore, '$.computed_name'), json_extract(r.kvstore, '$.name'))
+                FROM entities e inner join entities r on e.ref_recomp = r.recomp_addr
+                WHERE e.recomp_addr is not null and e.ref_orig is null
+                """
+            ):
+                if name:
+                    batch.set_recomp(addr, name=f"Thunk of '{name}'")
 
     def _compare_vtable(self, match: ReccmpMatch) -> DiffReport:
         vtable_size = match.size

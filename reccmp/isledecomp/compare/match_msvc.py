@@ -388,3 +388,40 @@ def match_lines(
                     orig_addr,
                     f"Found no matching debug symbol for {filename}:{line}",
                 )
+
+
+def match_byref(
+    db: EntityDb,
+    report: ReccmpReportProtocol = reccmp_report_nop,
+):
+
+    # for orig_addr, recomp_addr in db.sql.execute(
+    #    """
+    #    SELECT x.orig_addr, y.recomp_addr
+    #    from recomp_unmatched y
+    #    inner join matches m on m.recomp_addr = json_extract(y.kvstore, '$.ref_recomp')
+    #    inner join orig_unmatched x on m.orig_addr = json_extract(x.kvstore, '$.ref_orig')
+    #    """
+    # ):
+
+    # [*db.sql.execute("SELECT e.orig_addr, x.rowid from entities e inner join entities x on e.ref_orig = x.orig_addr")]
+    # [*db.sql.execute("SELECT e.recomp_addr, x.rowid from entities e inner join entities x on e.ref_recomp = x.recomp_addr")]
+
+    # [*db.sql.execute("""
+    #    SELECT x.orig_addr, y.recomp_addr
+    #    FROM (SELECT thunk.orig_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_orig = ref.orig_addr) x
+    #    INNER JOIN (SELECT thunk.recomp_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_recomp = ref.recomp_addr) y
+    #    ON x.rowid = y.rowid
+    #    """
+    # )]
+
+    with db.batch() as batch:
+        for orig_addr, recomp_addr in db.sql.execute(
+            """
+            SELECT x.orig_addr, y.recomp_addr
+            FROM (SELECT thunk.orig_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_orig = ref.orig_addr) x
+            INNER JOIN (SELECT thunk.recomp_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_recomp = ref.recomp_addr) y
+            ON x.rowid = y.rowid
+            """
+        ):
+            batch.match(orig_addr, recomp_addr)

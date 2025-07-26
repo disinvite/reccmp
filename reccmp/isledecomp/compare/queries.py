@@ -36,3 +36,27 @@ def get_overloaded_functions(db: EntityDb) -> Iterable[OverloadedFunctionEntity]
         assert isinstance(symbol, str) or symbol is None
         assert isinstance(nth, int)
         yield OverloadedFunctionEntity(orig_addr, recomp_addr, name, symbol, nth)
+
+
+class ThunkWithName(NamedTuple):
+    """Entity address(es) and the name (computed or base name)
+    of the referenced (thunked) entity."""
+
+    orig_addr: int | None
+    recomp_addr: int | None
+    name: str
+
+
+def get_thunks_and_name(db: EntityDb):
+    for orig_addr, recomp_addr, name in db.sql.execute(
+        """SELECT e.orig_addr, e.recomp_addr,
+        coalesce(json_extract(r.kvstore, '$.computed_name'), json_extract(r.kvstore, '$.name')) name
+        FROM entities e
+        INNER JOIN entities r
+        ON e.ref_orig = r.orig_addr or e.ref_recomp = r.recomp_addr
+        WHERE name is not null
+    """
+    ):
+        assert isinstance(orig_addr, int) or isinstance(recomp_addr, int)
+        assert isinstance(name, str)
+        yield ThunkWithName(orig_addr, recomp_addr, name)

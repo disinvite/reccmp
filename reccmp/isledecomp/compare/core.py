@@ -41,7 +41,7 @@ from .match_msvc import (
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport, combined_diff
 from .lines import LinesDb
-from .queries import get_overloaded_functions
+from .queries import get_overloaded_functions, get_thunks_and_name
 
 
 # pylint: disable=too-many-lines
@@ -732,23 +732,12 @@ class Compare:
 
     def _name_thunks(self):
         with self._db.batch() as batch:
-            for addr, name in self._db.sql.execute(
-                """SELECT e.orig_addr, coalesce(json_extract(r.kvstore, '$.computed_name'), json_extract(r.kvstore, '$.name'))
-                FROM entities e inner join entities r on e.ref_orig = r.orig_addr
-                WHERE e.orig_addr is not null
-                """
-            ):
-                if name:
-                    batch.set_orig(addr, name=f"Thunk of '{name}'")
+            for thunk in get_thunks_and_name(self._db):
+                if thunk.orig_addr is not None:
+                    batch.set_orig(thunk.orig_addr, name=f"Thunk of '{thunk.name}'")
 
-            for addr, name in self._db.sql.execute(
-                """SELECT e.recomp_addr, coalesce(json_extract(r.kvstore, '$.computed_name'), json_extract(r.kvstore, '$.name'))
-                FROM entities e inner join entities r on e.ref_recomp = r.recomp_addr
-                WHERE e.recomp_addr is not null and e.ref_orig is null
-                """
-            ):
-                if name:
-                    batch.set_recomp(addr, name=f"Thunk of '{name}'")
+                elif thunk.recomp_addr is not None:
+                    batch.set_recomp(thunk.recomp_addr, name=f"Thunk of '{thunk.name}'")
 
     def _compare_vtable(self, match: ReccmpMatch) -> DiffReport:
         vtable_size = match.size

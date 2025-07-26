@@ -18,8 +18,15 @@ _SETUP_SQL = """
         ref_recomp integer as (json_extract(kvstore, '$.ref_recomp'))
     );
 
-    CREATE INDEX x_ref ON entities (ref_orig);
-    CREATE INDEX y_ref ON entities (ref_recomp);
+    CREATE VIEW orig_refs (orig_addr, ref_id, nth) AS
+        SELECT thunk.orig_addr, ref.rowid, Row_number() OVER (partition BY ref.rowid) nth
+        FROM entities thunk
+        INNER JOIN entities ref on thunk.ref_orig = ref.orig_addr;
+
+    CREATE VIEW recomp_refs (recomp_addr, ref_id, nth) AS
+        SELECT thunk.recomp_addr, ref.rowid, Row_number() OVER (partition BY ref.rowid) nth
+        FROM entities thunk
+        INNER JOIN entities ref on thunk.ref_recomp = ref.recomp_addr;
 
     CREATE VIEW orig_unmatched (orig_addr, kvstore) AS
         SELECT orig_addr, kvstore FROM entities
@@ -30,11 +37,6 @@ _SETUP_SQL = """
         SELECT recomp_addr, kvstore FROM entities
         WHERE recomp_addr is not null and orig_addr is null
         ORDER by recomp_addr;
-
-    CREATE VIEW matches (orig_addr, recomp_addr) AS
-        SELECT orig_addr, recomp_addr FROM entities
-        WHERE orig_addr is not null and recomp_addr is not null
-        ORDER by orig_addr;
 
     -- ReccmpEntity
     CREATE VIEW entity_factory (orig_addr, recomp_addr, kvstore) AS

@@ -392,7 +392,7 @@ def match_lines(
 
 def match_byref(
     db: EntityDb,
-    report: ReccmpReportProtocol = reccmp_report_nop,
+    _: ReccmpReportProtocol = reccmp_report_nop,
 ):
 
     # for orig_addr, recomp_addr in db.sql.execute(
@@ -419,9 +419,9 @@ def match_byref(
         for orig_addr, recomp_addr in db.sql.execute(
             """
             SELECT x.orig_addr, y.recomp_addr
-            FROM (SELECT thunk.orig_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_orig = ref.orig_addr) x
-            INNER JOIN (SELECT thunk.recomp_addr, ref.rowid from entities thunk inner join entities ref on thunk.ref_recomp = ref.recomp_addr) y
-            ON x.rowid = y.rowid
+            FROM (SELECT thunk.orig_addr, ref.rowid, Row_number() OVER (partition BY ref.rowid) nth from entities thunk inner join entities ref on thunk.ref_orig = ref.orig_addr) x
+            INNER JOIN (SELECT thunk.recomp_addr, ref.rowid, Row_number() OVER (partition BY ref.rowid) nth from entities thunk inner join entities ref on thunk.ref_recomp = ref.recomp_addr) y
+            ON x.rowid = y.rowid and x.nth = y.nth
             """
         ):
             batch.match(orig_addr, recomp_addr)

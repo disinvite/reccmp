@@ -148,14 +148,14 @@ def test_imports(import_ref: tuple[str, str, int], binfile: PEImage):
 
 # TODO
 # Location of the JMP instruction and the import address.
-#THUNKS = (
+# THUNKS = (
 #    (0x100D3728, 0x1010B32C),  # DirectDrawCreate
 #    (0x10098F9E, 0x1010B3D4),  # RtlUnwind
-#)
+# )
 #
 #
-#@pytest.mark.parametrize("thunk_ref", THUNKS)
-#def test_thunks(thunk_ref: tuple[int, int], binfile: PEImage):
+# @pytest.mark.parametrize("thunk_ref", THUNKS)
+# def test_thunks(thunk_ref: tuple[int, int], binfile: PEImage):
 #    assert thunk_ref in binfile.thunks
 
 

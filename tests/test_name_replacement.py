@@ -203,7 +203,7 @@ def test_indirect_import(db):
 def test_import_without_name(db):
     """If the import entity doesn't have a name, the lookup should return None."""
     with db.batch() as batch:
-        batch.set_orig(100, type=EntityType.IMPORT) # No name
+        batch.set_orig(100, type=EntityType.IMPORT)  # No name
 
     lookup = create_lookup(db)
 

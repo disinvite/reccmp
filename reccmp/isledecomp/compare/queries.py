@@ -54,8 +54,9 @@ def get_thunks_and_name(db: EntityDb):
         FROM entities e
         INNER JOIN entities r
         ON e.ref_orig = r.orig_addr or e.ref_recomp = r.recomp_addr
-        WHERE name is not null
-    """
+        WHERE name is not null AND json_extract(r.kvstore, '$.type') = ?
+    """,
+        (EntityType.FUNCTION,),
     ):
         assert isinstance(orig_addr, int) or isinstance(recomp_addr, int)
         assert isinstance(name, str)

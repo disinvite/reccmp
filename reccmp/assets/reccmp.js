@@ -174,7 +174,7 @@ class ListingState {
 
   callListeners() {
     for (const fn of this._listeners) {
-      fn();
+      fn(this);
     }
   }
 
@@ -399,11 +399,50 @@ class ListingState {
   }
 }
 
-const appState = new ListingState();
-
 //
 // Custom elements
 //
+
+class ReccmpMain extends window.HTMLElement {
+  constructor() {
+    super();
+    this.state = new ListingState();
+    this.addEventListener('reccmp-register', (evt) => {
+      evt.stopImmediatePropagation();
+      this.state.addListener(evt.detail);
+      evt.detail(this.state);
+    });
+
+    this.addEventListener('setHidePerfect', (evt) => {
+      this.state.hidePerfect = evt.detail;
+    });
+    this.addEventListener('setHideStub', (evt) => {
+      this.state.hideStub = evt.detail;
+    });
+    this.addEventListener('setShowRecomp', (evt) => {
+      this.state.showRecomp = evt.detail;
+    });
+
+    this.addEventListener('prevPage', () => {
+      this.state.page--;
+    });
+    this.addEventListener('nextPage', () => {
+      this.state.page++;
+    });
+    this.addEventListener('setPage', (evt) => {
+      this.state.page = evt.detail;
+    });
+    this.addEventListener('setQuery', (evt) => {
+      this.state.query = evt.detail;
+    });
+    this.addEventListener('setFilter', (evt) => {
+      this.state.filterType = evt.detail;
+    });
+    this.addEventListener('setSortCol', (evt) => {
+      this.state.sortCol = evt.detail;
+    });
+  }
+}
 
 // Sets sort indicator arrow based on element attributes.
 class SortIndicator extends window.HTMLElement {
@@ -639,107 +678,99 @@ class ListingOptions extends window.HTMLElement {
   constructor() {
     super();
 
-    // Register to receive updates
-    appState.addListener(() => this.onUpdate());
-
     const input = this.querySelector('input[type=search]');
-    input.oninput = (evt) => {
-      appState.query = evt.target.value;
-    };
+    input.addEventListener('input', (evt) => {
+      this.dispatchEvent(new CustomEvent('setQuery', { bubbles: true, detail: evt.target.value }));
+    });
 
-    const hidePerf = this.querySelector('input#cbHidePerfect');
-    hidePerf.onchange = (evt) => {
-      appState.hidePerfect = evt.target.checked;
-    };
-    hidePerf.checked = appState.hidePerfect;
+    this.querySelector('input#cbHidePerfect').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setHidePerfect', { bubbles: true, detail: evt.target.checked }));
+    });
 
-    const hideStub = this.querySelector('input#cbHideStub');
-    hideStub.onchange = (evt) => {
-      appState.hideStub = evt.target.checked;
-    };
-    hideStub.checked = appState.hideStub;
+    this.querySelector('input#cbHideStub').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setHideStub', { bubbles: true, detail: evt.target.checked }));
+    });
 
-    const showRecomp = this.querySelector('input#cbShowRecomp');
-    showRecomp.onchange = (evt) => {
-      appState.showRecomp = evt.target.checked;
-    };
-    showRecomp.checked = appState.showRecomp;
+    this.querySelector('input#cbShowRecomp').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setShowRecomp', { bubbles: true, detail: evt.target.checked }));
+    });
 
     this.querySelector('button#pagePrev').addEventListener('click', () => {
-      appState.page = appState.page - 1;
+      this.dispatchEvent(new CustomEvent('prevPage', { bubbles: true }));
     });
 
     this.querySelector('button#pageNext').addEventListener('click', () => {
-      appState.page = appState.page + 1;
+      this.dispatchEvent(new CustomEvent('nextPage', { bubbles: true }));
     });
 
     this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
-      appState.page = evt.target.value;
+      this.dispatchEvent(new CustomEvent('setPage', { bubbles: true, detail: evt.target.value }));
     });
 
     this.querySelectorAll('input[name=filterType]').forEach((radio) => {
-      const checked = appState.filterType === parseInt(radio.getAttribute('value'));
-      radio.checked = checked;
-
-      radio.onchange = () => {
-        appState.filterType = radio.getAttribute('value');
-      };
+      radio.addEventListener('change', () => {
+        this.dispatchEvent(new CustomEvent('setFilter', { bubbles: true, detail: radio.getAttribute('value') }));
+      });
     });
-
-    this.onUpdate();
   }
 
-  onUpdate() {
+  connectedCallback() {
+    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.onUpdate.bind(this) });
+    this.dispatchEvent(event);
+  }
+
+  onUpdate(state) {
     // Update input placeholder based on search type
     this.querySelector('input[type=search]').placeholder =
-      appState.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
+      state.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
+
+    // Reset filter values (including first load)
+    this.querySelector('input#cbHidePerfect').checked = state.hidePerfect;
+    this.querySelector('input#cbHideStub').checked = state.hideStub;
+    this.querySelector('input#cbShowRecomp').checked = state.showRecomp;
+    this.querySelectorAll('input[name=filterType]').forEach((radio) => {
+      radio.checked = state.filterType === parseInt(radio.getAttribute('value'));
+    });
 
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
-      `Page ${appState.page + 1} of ${Math.max(1, appState.pageCount())}`;
+      `Page ${state.page + 1} of ${Math.max(1, state.pageCount())}`;
 
     // Disable prev/next buttons on first/last page
-    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.page === 0);
-    setBooleanAttribute(this.querySelector('button#pageNext'), 'disabled', appState.page === appState.maxPage());
+    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', state.page === 0);
+    setBooleanAttribute(this.querySelector('button#pageNext'), 'disabled', state.page === state.maxPage());
 
     // Update page select dropdown
     const pageSelect = this.querySelector('select#pageSelect');
-    setBooleanAttribute(pageSelect, 'disabled', appState.resultsCount() === 0);
+    setBooleanAttribute(pageSelect, 'disabled', state.resultsCount() === 0);
     pageSelect.innerHTML = '';
 
-    if (appState.resultsCount() === 0) {
+    if (state.resultsCount() === 0) {
       const opt = document.createElement('option');
       opt.textContent = '- no results -';
       pageSelect.appendChild(opt);
     } else {
-      for (const row of appState.pageHeadings()) {
+      for (const row of state.pageHeadings()) {
         const opt = document.createElement('option');
         opt.value = row[0];
-        if (appState.page === row[0]) {
+        if (state.page === row[0]) {
           opt.setAttribute('selected', '');
         }
 
         const [start, end] = [row[1], row[2]];
 
-        opt.textContent = `${appState.sortCol}: ${start} to ${end}`;
+        opt.textContent = `${state.sortCol}: ${start} to ${end}`;
         pageSelect.appendChild(opt);
       }
     }
 
     // Update row count
-    this.querySelector('#rowcount').textContent = `${appState.resultsCount()}`;
+    this.querySelector('#rowcount').textContent = `${state.resultsCount()}`;
   }
 }
 
 // Main application.
 class ListingTable extends window.HTMLElement {
-  constructor() {
-    super();
-
-    // Register to receive updates
-    appState.addListener(() => this.somethingChanged());
-  }
-
   setDiffRow(address, shouldExpand) {
     const tbody = this.querySelector('tbody');
     const funcrow = tbody.querySelector(`func-row[data-address="${address}"]`);
@@ -794,20 +825,21 @@ class ListingTable extends window.HTMLElement {
         const span = th.querySelector('span');
         if (span) {
           span.addEventListener('click', () => {
-            appState.sortCol = col;
+            this.dispatchEvent(new CustomEvent('setSortCol', { bubbles: true, detail: col }));
           });
         }
       }
     });
 
-    this.somethingChanged();
+    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.somethingChanged.bind(this) });
+    this.dispatchEvent(event);
   }
 
-  somethingChanged() {
+  somethingChanged(state) {
     // Toggle recomp/diffs column
-    setBooleanAttribute(this.querySelector('table'), 'show-recomp', appState.showRecomp);
+    setBooleanAttribute(this.querySelector('table'), 'show-recomp', state.showRecomp);
     this.querySelectorAll('func-row[data-address]').forEach((row) => {
-      setBooleanAttribute(row, 'show-recomp', appState.showRecomp);
+      setBooleanAttribute(row, 'show-recomp', state.showRecomp);
     });
 
     const thead = this.querySelector('thead');
@@ -821,8 +853,8 @@ class ListingTable extends window.HTMLElement {
         return;
       }
 
-      if (appState.sortCol === col) {
-        indicator.setAttribute('data-sort', appState.sortDesc ? 'desc' : 'asc');
+      if (state.sortCol === col) {
+        indicator.setAttribute('data-sort', state.sortDesc ? 'desc' : 'asc');
       } else {
         indicator.removeAttribute('data-sort');
       }
@@ -832,15 +864,15 @@ class ListingTable extends window.HTMLElement {
     const tbody = this.querySelector('tbody');
     tbody.innerHTML = ''; // ?
 
-    for (const obj of appState.pageSlice()) {
+    for (const obj of state.pageSlice()) {
       const row = document.createElement('func-row');
       row.setAttribute('data-address', obj.address); // ?
       row.addEventListener('name-click', () => {
-        appState.toggleExpanded(obj.address);
-        this.setDiffRow(obj.address, appState.isExpanded(obj.address));
+        state.toggleExpanded(obj.address);
+        this.setDiffRow(obj.address, state.isExpanded(obj.address));
       });
-      setBooleanAttribute(row, 'show-recomp', appState.showRecomp);
-      setBooleanAttribute(row, 'expanded', appState.isExpanded(row));
+      setBooleanAttribute(row, 'show-recomp', state.showRecomp);
+      setBooleanAttribute(row, 'expanded', state.isExpanded(row));
 
       const items = [
         ['address', obj.address],
@@ -859,7 +891,7 @@ class ListingTable extends window.HTMLElement {
 
       tbody.appendChild(row);
 
-      if (appState.isExpanded(obj.address)) {
+      if (state.isExpanded(obj.address)) {
         this.setDiffRow(obj.address, true);
       }
     }
@@ -867,6 +899,7 @@ class ListingTable extends window.HTMLElement {
 }
 
 window.onload = () => {
+  window.customElements.define('reccmp-main', ReccmpMain);
   window.customElements.define('listing-table', ListingTable);
   window.customElements.define('listing-options', ListingOptions);
   window.customElements.define('diff-display', DiffDisplay);

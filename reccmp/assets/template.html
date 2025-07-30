@@ -19,7 +19,7 @@
         margin: auto;
       }
 
-      #search {
+      search-bar > input {
         width: 100%;
         box-sizing: border-box;
         background: #303030;
@@ -29,7 +29,7 @@
         border-radius: 0.5em;
       }
 
-      #search::placeholder {
+      search-bar > input::placeholder {
         color: #b0b0b0;
       }
 
@@ -191,7 +191,7 @@
     <div class="main">
       <h1>Decompilation Status</h1>
       <listing-options>
-        <input id="search" type="search" placeholder="Search for offset or function name...">
+        <search-bar></search-bar>
         <div class="filters">
           <fieldset>
             <legend>Options:</legend>
@@ -204,6 +204,7 @@
           </fieldset>
           <fieldset>
             <legend>Search filters on:</legend>
+            <filter-options></filter-options>
             <input type="radio" name="filterType" id="filterName" value=1 checked />
             <label for="filterName">Name/address</label>
             <input type="radio" name="filterType" id="filterAsm" value=2 />
@@ -213,13 +214,13 @@
           </fieldset>
         </div>
         <div class="filters">
-          <p class="rowcount">Results: <span id="rowcount"></span></p>
+          <p class="rowcount">Results: <row-count></row-count></p>
           <fieldset id="pageDisplay">
             <legend>Page</legend>
             <button id="pagePrev">prev</button>
             <select id="pageSelect">
             </select>
-            <button id="pageNext">next</button>
+            <button-next-page></button-next-page>
           </fieldset>
         </div>
       </listing-options>

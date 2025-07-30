@@ -170,6 +170,7 @@ class ListingState {
 
   addListener(fn) {
     this._listeners.push(fn);
+    fn();
   }
 
   callListeners() {
@@ -209,7 +210,7 @@ class ListingState {
     return this._results.slice(this.page * PAGE_SIZE, (this.page + 1) * PAGE_SIZE);
   }
 
-  resultsCount() {
+  get resultsCount() {
     return this._results.length;
   }
 
@@ -217,7 +218,7 @@ class ListingState {
     return Math.ceil(this._results.length / PAGE_SIZE);
   }
 
-  maxPage() {
+  get maxPage() {
     return Math.max(0, this.pageCount() - 1);
   }
 
@@ -265,7 +266,7 @@ class ListingState {
 
     // Name/addr search
     if (this.filterType === 1) {
-      return address.includes(this.query) || name.toLowerCase().includes(this.query);
+      return address.includes(this.queryNormalized) || name.toLowerCase().includes(this.queryNormalized);
     }
 
     // no diff for review.
@@ -274,7 +275,7 @@ class ListingState {
     }
 
     // special matcher for combined diff
-    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(this.query);
+    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(this.queryNormalized);
 
     // Flatten all diff groups for the search
     const diffs = diff.flatMap(([_slug, subgroups]) => subgroups);
@@ -309,7 +310,7 @@ class ListingState {
   }
 
   pageClamp(page) {
-    return Math.max(0, Math.min(page, this.maxPage()));
+    return Math.max(0, Math.min(page, this.maxPage));
   }
 
   get page() {
@@ -337,9 +338,13 @@ class ListingState {
     return this._query;
   }
 
-  set query(value) {
+  get queryNormalized() {
     // Normalize search string
-    this._query = value.toLowerCase().trim();
+    return this._query.toLowerCase().trim();
+  }
+
+  set query(value) {
+    this._query = value;
     this.updateResults();
   }
 
@@ -635,17 +640,56 @@ class DiffDisplay extends window.HTMLElement {
   }
 }
 
+class SearchBar extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<input type="search"></input>`;
+    this.querySelector('input[type=search]').addEventListener('input', (evt) => {
+      appState.query = evt.target.value;
+    });
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ query, filterType }) {
+    const input = this.querySelector('input[type=search]');
+    input.value = query;
+    input.placeholder = filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
+  }
+}
+
+class RowCount extends window.HTMLElement {
+  constructor() {
+    super();
+    appState.addListener(() => this.onUpdate(appState));
+  }
+
+  onUpdate({ resultsCount }) {
+    this.textContent = resultsCount;
+  }
+}
+
+class ButtonNextPage extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<button>next</button>`;
+    this.querySelector('button').addEventListener('click', () => {
+      appState.page = appState.page + 1;
+    });
+
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ page, maxPage }) {
+    this.querySelector('button').disabled = page === maxPage;
+  }
+}
+
 class ListingOptions extends window.HTMLElement {
   constructor() {
     super();
 
     // Register to receive updates
     appState.addListener(() => this.onUpdate());
-
-    const input = this.querySelector('input[type=search]');
-    input.oninput = (evt) => {
-      appState.query = evt.target.value;
-    };
 
     const hidePerf = this.querySelector('input#cbHidePerfect');
     hidePerf.onchange = (evt) => {
@@ -669,10 +713,6 @@ class ListingOptions extends window.HTMLElement {
       appState.page = appState.page - 1;
     });
 
-    this.querySelector('button#pageNext').addEventListener('click', () => {
-      appState.page = appState.page + 1;
-    });
-
     this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
       appState.page = evt.target.value;
     });
@@ -690,24 +730,19 @@ class ListingOptions extends window.HTMLElement {
   }
 
   onUpdate() {
-    // Update input placeholder based on search type
-    this.querySelector('input[type=search]').placeholder =
-      appState.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
-
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
       `Page ${appState.page + 1} of ${Math.max(1, appState.pageCount())}`;
 
     // Disable prev/next buttons on first/last page
     setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.page === 0);
-    setBooleanAttribute(this.querySelector('button#pageNext'), 'disabled', appState.page === appState.maxPage());
 
     // Update page select dropdown
     const pageSelect = this.querySelector('select#pageSelect');
-    setBooleanAttribute(pageSelect, 'disabled', appState.resultsCount() === 0);
+    setBooleanAttribute(pageSelect, 'disabled', appState.resultsCount === 0);
     pageSelect.innerHTML = '';
 
-    if (appState.resultsCount() === 0) {
+    if (appState.resultsCount === 0) {
       const opt = document.createElement('option');
       opt.textContent = '- no results -';
       pageSelect.appendChild(opt);
@@ -725,9 +760,6 @@ class ListingOptions extends window.HTMLElement {
         pageSelect.appendChild(opt);
       }
     }
-
-    // Update row count
-    this.querySelector('#rowcount').textContent = `${appState.resultsCount()}`;
   }
 }
 
@@ -874,6 +906,9 @@ window.onload = () => {
   window.customElements.define('sort-indicator', SortIndicator);
   window.customElements.define('func-row', FuncRow);
   window.customElements.define('diff-row', DiffRow);
+  window.customElements.define('row-count', RowCount);
+  window.customElements.define('search-bar', SearchBar);
+  window.customElements.define('button-next-page', ButtonNextPage);
   window.customElements.define('no-diff', NoDiffMessage);
   window.customElements.define('can-copy', CanCopy);
 };

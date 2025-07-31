@@ -640,6 +640,21 @@ class DiffDisplay extends window.HTMLElement {
   }
 }
 
+class HidePerfect extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<label><input type="checkbox" /><span>Hide 100% match</span></label>`;
+    this.querySelector('input[type=checkbox]').addEventListener('change', (evt) => {
+      appState.hidePerfect = evt.target.checked;
+    });
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ hidePerfect }) {
+    this.querySelector('input[type=checkbox]').checked = hidePerfect;
+  }
+}
+
 class SearchBar extends window.HTMLElement {
   constructor() {
     super();
@@ -690,12 +705,6 @@ class ListingOptions extends window.HTMLElement {
 
     // Register to receive updates
     appState.addListener(() => this.onUpdate());
-
-    const hidePerf = this.querySelector('input#cbHidePerfect');
-    hidePerf.onchange = (evt) => {
-      appState.hidePerfect = evt.target.checked;
-    };
-    hidePerf.checked = appState.hidePerfect;
 
     const hideStub = this.querySelector('input#cbHideStub');
     hideStub.onchange = (evt) => {
@@ -908,6 +917,7 @@ window.onload = () => {
   window.customElements.define('diff-row', DiffRow);
   window.customElements.define('row-count', RowCount);
   window.customElements.define('search-bar', SearchBar);
+  window.customElements.define('hide-perfect', HidePerfect);
   window.customElements.define('button-next-page', ButtonNextPage);
   window.customElements.define('no-diff', NoDiffMessage);
   window.customElements.define('can-copy', CanCopy);

@@ -123,11 +123,13 @@
         display: flex;
       }
 
-      .filters > fieldset > input, .filters > fieldset > label {
+      .filters > fieldset label, .filters > fieldset input {
         cursor: pointer;
       }
 
-      .filters > fieldset > label {
+      .filters > fieldset label {
+        align-items: center;
+        display: flex;
         margin-right: 10px;
       }
 
@@ -195,12 +197,9 @@
         <div class="filters">
           <fieldset>
             <legend>Options:</legend>
-            <input type="checkbox" id="cbHidePerfect" />
-            <label for="cbHidePerfect">Hide 100% match</label>
-            <input type="checkbox" id="cbHideStub" />
-            <label for="cbHideStub">Hide stubs</label>
-            <input type="checkbox" id="cbShowRecomp" />
-            <label for="cbShowRecomp">Show recomp address</label>
+            <hide-perfect></hide-perfect>
+            <label><input type="checkbox" id="cbHideStub" />Hide stubs</label>
+            <label><input type="checkbox" id="cbShowRecomp" />Show recomp address</label>
           </fieldset>
           <fieldset>
             <legend>Search filters on:</legend>

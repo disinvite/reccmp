@@ -655,6 +655,36 @@ class HidePerfect extends window.HTMLElement {
   }
 }
 
+class HideStub extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<label><input type="checkbox" /><span>Hide stubs</span></label>`;
+    this.querySelector('input[type=checkbox]').addEventListener('change', (evt) => {
+      appState.hideStub = evt.target.checked;
+    });
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ hideStub }) {
+    this.querySelector('input[type=checkbox]').checked = hideStub;
+  }
+}
+
+class ShowRecompAddr extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<label><input type="checkbox" /><span>Show recomp address</span></label>`;
+    this.querySelector('input[type=checkbox]').addEventListener('change', (evt) => {
+      appState.showRecomp = evt.target.checked;
+    });
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ showRecomp }) {
+    this.querySelector('input[type=checkbox]').checked = showRecomp;
+  }
+}
+
 class SearchBar extends window.HTMLElement {
   constructor() {
     super();
@@ -683,6 +713,22 @@ class RowCount extends window.HTMLElement {
   }
 }
 
+class ButtonPrevPage extends window.HTMLElement {
+  constructor() {
+    super();
+    this.innerHTML = `<button>prev</button>`;
+    this.querySelector('button').addEventListener('click', () => {
+      appState.page = appState.page - 1;
+    });
+
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ page }) {
+    this.querySelector('button').disabled = page === 0;
+  }
+}
+
 class ButtonNextPage extends window.HTMLElement {
   constructor() {
     super();
@@ -706,22 +752,6 @@ class ListingOptions extends window.HTMLElement {
     // Register to receive updates
     appState.addListener(() => this.onUpdate());
 
-    const hideStub = this.querySelector('input#cbHideStub');
-    hideStub.onchange = (evt) => {
-      appState.hideStub = evt.target.checked;
-    };
-    hideStub.checked = appState.hideStub;
-
-    const showRecomp = this.querySelector('input#cbShowRecomp');
-    showRecomp.onchange = (evt) => {
-      appState.showRecomp = evt.target.checked;
-    };
-    showRecomp.checked = appState.showRecomp;
-
-    this.querySelector('button#pagePrev').addEventListener('click', () => {
-      appState.page = appState.page - 1;
-    });
-
     this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
       appState.page = evt.target.value;
     });
@@ -742,9 +772,6 @@ class ListingOptions extends window.HTMLElement {
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
       `Page ${appState.page + 1} of ${Math.max(1, appState.pageCount())}`;
-
-    // Disable prev/next buttons on first/last page
-    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.page === 0);
 
     // Update page select dropdown
     const pageSelect = this.querySelector('select#pageSelect');
@@ -918,7 +945,10 @@ window.onload = () => {
   window.customElements.define('row-count', RowCount);
   window.customElements.define('search-bar', SearchBar);
   window.customElements.define('hide-perfect', HidePerfect);
+  window.customElements.define('hide-stub', HideStub);
+  window.customElements.define('show-recomp-addr', ShowRecompAddr);
   window.customElements.define('button-next-page', ButtonNextPage);
+  window.customElements.define('button-prev-page', ButtonPrevPage);
   window.customElements.define('no-diff', NoDiffMessage);
   window.customElements.define('can-copy', CanCopy);
 };

@@ -165,7 +165,7 @@
         user-select: none;
       }
 
-      #pageDisplay > button {
+      #pageDisplay button {
         cursor: pointer;
         padding: 0.25em 0.5em;
       }
@@ -198,8 +198,8 @@
           <fieldset>
             <legend>Options:</legend>
             <hide-perfect></hide-perfect>
-            <label><input type="checkbox" id="cbHideStub" />Hide stubs</label>
-            <label><input type="checkbox" id="cbShowRecomp" />Show recomp address</label>
+            <hide-stub></hide-stub>
+            <show-recomp-addr></show-recomp-addr>
           </fieldset>
           <fieldset>
             <legend>Search filters on:</legend>
@@ -216,7 +216,7 @@
           <p class="rowcount">Results: <row-count></row-count></p>
           <fieldset id="pageDisplay">
             <legend>Page</legend>
-            <button id="pagePrev">prev</button>
+            <button-prev-page></button-prev-page>
             <select id="pageSelect">
             </select>
             <button-next-page></button-next-page>

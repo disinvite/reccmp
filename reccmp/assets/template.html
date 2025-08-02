@@ -117,19 +117,18 @@
         margin: 0.5em 0 1em 0;
       }
 
-      .filters > fieldset {
-        /* checkbox and radio buttons v-aligned with text */
-        align-items: center;
-        display: flex;
-      }
-
-      .filters > fieldset label, .filters > fieldset input {
+      label, input[type=checkbox], input[type=radio] {
         cursor: pointer;
+        user-select: none;
       }
 
-      .filters > fieldset label {
+      fieldset {
         align-items: center;
         display: flex;
+      }
+
+      /* spread out inputs horizontally */
+      fieldset label {
         margin-right: 10px;
       }
 

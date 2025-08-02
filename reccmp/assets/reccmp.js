@@ -511,65 +511,35 @@ class DiffRow extends window.HTMLElement {
 }
 
 class DiffDisplayOptions extends window.HTMLElement {
-  static observedAttributes = ['data-option'];
+  static observedAttributes = ['value'];
 
-  connectedCallback() {
-    if (this.shadowRoot !== null) {
-      return;
-    }
-
-    const shadow = this.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
-      <style>
-        fieldset {
-          align-items: center;
-          display: flex;
-          margin-bottom: 20px;
-        }
-
-        label {
-          margin-right: 10px;
-          user-select: none;
-        }
-
-        label, input {
-          cursor: pointer;
-        }
-      </style>
+  constructor() {
+    super();
+    this.innerHTML = `
       <fieldset>
         <legend>Address display:</legend>
-        <input type="radio" id="showNone" name="addrDisplay" value=0>
-        <label for="showNone">None</label>
-        <input type="radio" id="showOrig" name="addrDisplay" value=1>
-        <label for="showOrig">Original</label>
-        <input type="radio" id="showBoth" name="addrDisplay" value=2>
-        <label for="showBoth">Both</label>
+        <label><input type="radio" id="showNone" name="addrDisplay" value=0>None</label>
+        <label><input type="radio" id="showOrig" name="addrDisplay" value=1>Original</label>
+        <label><input type="radio" name="addrDisplay" value=2>Both</label>
       </fieldset>`;
 
-    shadow.querySelectorAll('input[type=radio]').forEach((radio) => {
-      const checked = this.option === radio.getAttribute('value');
-      setBooleanAttribute(radio, 'checked', checked);
-
+    this.querySelectorAll('input[type=radio]').forEach((radio) => {
       radio.addEventListener('change', (evt) => {
-        this.option = evt.target.value;
+        this.dispatchEvent(evt);
       });
     });
   }
 
-  set option(value) {
-    this.setAttribute('data-option', parseInt(value));
+  set value(value) {
+    this.querySelectorAll('input[type=radio]').forEach((radio) => {
+      radio.checked = value === radio.getAttribute('value');
+    });
   }
 
-  get option() {
-    return this.getAttribute('data-option') ?? 1;
-  }
-
-  attributeChangedCallback(name, _oldValue, _newValue) {
-    if (name !== 'data-option') {
-      return;
+  attributeChangedCallback(name, _oldValue, newValue) {
+    if (name === 'value') {
+      this.value = newValue;
     }
-
-    this.dispatchEvent(new Event('change'));
   }
 }
 
@@ -582,9 +552,9 @@ class DiffDisplay extends window.HTMLElement {
     }
 
     const optControl = new DiffDisplayOptions();
-    optControl.option = this.option;
+    optControl.value = this.option;
     optControl.addEventListener('change', (evt) => {
-      this.option = evt.target.option;
+      this.option = evt.target.value;
     });
     this.appendChild(optControl);
 

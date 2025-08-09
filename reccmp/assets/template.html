@@ -179,6 +179,18 @@
         font-size: 1.2em;
         margin-bottom: 0;
       }
+
+      tr[data-diff]:not([hidden]) {
+        contain: paint;
+      }
+
+      tr[data-diff] > td {
+        border: 1px #f0f0f0 solid;
+        border-bottom: 0px none;
+        display: table-cell;
+        padding: 0.5em;
+        word-break: break-all !important;
+      }
     </style>
     <script>
       var report = {{{report}}};
@@ -298,25 +310,6 @@
       <div data-col="name"><slot name="name"></slot></div>
       <div data-col="diffs"><slot name="diffs"></slot></div>
       <div data-col="matching"><slot name="matching"></slot></div>
-    </template>
-    <template id="diffrow-template">
-      <style>
-        :host(:not([hidden])) {
-          display: table-row;
-          contain: paint;
-        }
-
-        td.singleCell {
-          border: 1px #f0f0f0 solid;
-          border-bottom: 0px none;
-          display: table-cell;
-          padding: 0.5em;
-          word-break: break-all !important;
-        }
-      </style>
-      <td class="singleCell" colspan="5">
-        <slot></slot>
-      </td>
     </template>
     <template id="nodiff-template">
       <style>

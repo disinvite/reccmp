@@ -747,7 +747,7 @@ class ListingTable extends window.HTMLElement {
       return;
     }
 
-    const existing = tbody.querySelector(`diff-row[data-address="${address}"]`);
+    const existing = tbody.querySelector(`tr[data-diff="${address}"]`);
     if (existing !== null) {
       if (!shouldExpand) {
         tbody.removeChild(existing);
@@ -756,33 +756,21 @@ class ListingTable extends window.HTMLElement {
       return;
     }
 
-    const diffrow = document.createElement('diff-row');
-    diffrow.address = address;
-
     // Decide what goes inside the diff row.
     const obj = getDataByAddr(address);
 
+    let contents;
+
     if ('stub' in obj) {
-      const msg = document.createElement('no-diff');
-      const p = document.createElement('div');
-      p.innerText = 'Stub. No diff.';
-      msg.appendChild(p);
-      diffrow.appendChild(msg);
+      contents = `<no-diff><div>Stub. No diff.</div></no-diff>`;
     } else if (obj.diff.length === 0) {
-      const msg = document.createElement('no-diff');
-      const p = document.createElement('div');
-      p.innerText = 'Identical function - no diff';
-      msg.appendChild(p);
-      diffrow.appendChild(msg);
+      contents = `<no-diff><div>Identical function - no diff</div></no-diff>`;
     } else {
-      const dd = new DiffDisplay();
-      dd.option = '1';
-      dd.address = address;
-      diffrow.appendChild(dd);
+      contents = `<diff-display data-option="1" data-address="${address}"></diff-display>`;
     }
 
     // Insert the diff row after the parent func row.
-    tbody.insertBefore(diffrow, funcrow.nextSibling);
+    funcrow.insertAdjacentHTML('afterend', `<tr data-diff="${address}"><td colspan=5>${contents}</td></tr>`);
   }
 
   connectedCallback() {

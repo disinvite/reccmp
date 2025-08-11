@@ -452,19 +452,11 @@ class NoDiffMessage extends window.HTMLElement {
 
 class CanCopy extends window.HTMLElement {
   connectedCallback() {
-    if (this.shadowRoot !== null) {
-      return;
-    }
-
-    const template = document.querySelector('template#can-copy-template').content;
-    const shadow = this.attachShadow({ mode: 'open' });
-    shadow.appendChild(template.cloneNode(true));
-
-    const el = shadow.querySelector('slot').assignedNodes()[0];
-    el.addEventListener('mouseout', () => {
+    this.addEventListener('mouseout', () => {
       this.copied = false;
     });
-    el.addEventListener('click', (evt) => {
+
+    this.addEventListener('click', (evt) => {
       copyToClipboard(evt.target.textContent);
       this.copied = true;
     });
@@ -768,8 +760,8 @@ class ListingTable extends window.HTMLElement {
     }
 
     return `<tr data-address=${obj.address} ${attributes.join(' ')}>
-      <td data-col="address"><can-copy><slot>${obj.address}</slot></can-copy></td>
-      <td data-col="recomp"><can-copy><slot>${obj.recomp}</slot></can-copy></td>
+      <td data-col="address"><can-copy>${obj.address}</can-copy></td>
+      <td data-col="recomp"><can-copy>${obj.recomp}</can-copy></td>
       <td data-col="name">${obj.name}</td>
       <td data-col="diffs">${countDiffs(obj)}</td>
       <td data-col="matching">${getMatchPercentText(obj)}</td>

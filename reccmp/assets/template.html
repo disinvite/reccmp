@@ -216,6 +216,38 @@
       tr[data-address] > td:last-child {
         text-align: right;
       }
+
+      can-copy {
+        position: relative;
+        cursor: pointer;
+      }
+      can-copy::after {
+        background-color: #fff;
+        color: #222;
+        display: none;
+        font-size: 12px;
+        padding: 1px 2px;
+        width: fit-content;
+        border-radius: 1px;
+        text-align: center;
+        bottom: 120%;
+        left: 0;
+        box-shadow: 0 4px 14px 0 rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.05);
+        position: absolute;
+        white-space: nowrap;
+        transition: .1s;
+        content: 'Copy to clipboard';
+      }
+      can-copy:hover {
+        text-decoration: underline;
+        text-decoration-style: dotted;
+      }
+      can-copy:hover::after {
+        display: block;
+      }
+      can-copy[copied]:hover::after {
+        content: 'Copied!';
+      }
     </style>
     <script>
       var report = {{{report}}};

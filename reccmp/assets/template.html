@@ -39,15 +39,15 @@
         font-family: monospace;
       }
 
-      func-row:hover {
+      tr[data-address]:hover {
         background: #404040 !important;
       }
 
-      func-row:nth-child(odd of :not([hidden])), #listing > thead th {
+      tr[data-address]:nth-child(odd of :not([hidden])), #listing > thead th {
         background: #282828;
       }
 
-      func-row:nth-child(even of :not([hidden])) {
+      tr[data-address]:nth-child(even of :not([hidden])) {
         background: #383838;
       }
 
@@ -190,6 +190,31 @@
         display: table-cell;
         padding: 0.5em;
         word-break: break-all !important;
+      }
+
+      tr[data-address]:not([show-recomp]) > td[data-col="recomp"] {
+        display: none;
+      }
+
+      tr[data-address] > td[data-col="name"]:hover {
+        cursor: pointer;
+        text-decoration: underline;
+        text-decoration-style: dotted;
+      }
+
+      tr[data-address] > td:not(data-col="name"]) {
+        white-space: nowrap;
+      }
+
+      tr[data-address] > td {
+        border-top: 1px #f0f0f0 solid;
+        display: table-cell;
+        padding: 0.5em;
+        word-break: break-all !important;
+      }
+
+      tr[data-address] > td:last-child {
+        text-align: right;
       }
     </style>
     <script>

@@ -740,9 +740,45 @@ class ListingTable extends window.HTMLElement {
     appState.addListener(() => this.somethingChanged());
   }
 
+  diffRowHtml(address) {
+    const obj = getDataByAddr(address);
+
+    let contents;
+
+    if ('stub' in obj) {
+      contents = `<no-diff><div>Stub. No diff.</div></no-diff>`;
+    } else if (obj.diff.length === 0) {
+      contents = `<no-diff><div>Identical function - no diff</div></no-diff>`;
+    } else {
+      contents = `<diff-display data-option="1" data-address="${address}"></diff-display>`;
+    }
+
+    return `<tr data-diff="${address}"><td colspan=5>${contents}</td></tr>`;
+  }
+
+  funcRowHtml(obj) {
+    // TODO: better way?
+    const attributes = [];
+    if (appState.showRecomp) {
+      attributes.push('show-recomp');
+    }
+
+    if (appState.isExpanded(obj.address)) {
+      attributes.push('expanded');
+    }
+
+    return `<tr data-address=${obj.address} ${attributes.join(' ')}>
+      <td data-col="address"><can-copy><slot>${obj.address}</slot></can-copy></td>
+      <td data-col="recomp"><can-copy><slot>${obj.recomp}</slot></can-copy></td>
+      <td data-col="name">${obj.name}</td>
+      <td data-col="diffs">${countDiffs(obj)}</td>
+      <td data-col="matching">${getMatchPercentText(obj)}</td>
+    </tr>`;
+  }
+
   setDiffRow(address, shouldExpand) {
     const tbody = this.querySelector('tbody');
-    const funcrow = tbody.querySelector(`func-row[data-address="${address}"]`);
+    const funcrow = tbody.querySelector(`tr[data-address="${address}"]`);
     if (funcrow === null) {
       return;
     }
@@ -756,21 +792,8 @@ class ListingTable extends window.HTMLElement {
       return;
     }
 
-    // Decide what goes inside the diff row.
-    const obj = getDataByAddr(address);
-
-    let contents;
-
-    if ('stub' in obj) {
-      contents = `<no-diff><div>Stub. No diff.</div></no-diff>`;
-    } else if (obj.diff.length === 0) {
-      contents = `<no-diff><div>Identical function - no diff</div></no-diff>`;
-    } else {
-      contents = `<diff-display data-option="1" data-address="${address}"></diff-display>`;
-    }
-
     // Insert the diff row after the parent func row.
-    funcrow.insertAdjacentHTML('afterend', `<tr data-diff="${address}"><td colspan=5>${contents}</td></tr>`);
+    funcrow.insertAdjacentHTML('afterend', this.diffRowHtml(address));
   }
 
   connectedCallback() {
@@ -786,6 +809,11 @@ class ListingTable extends window.HTMLElement {
           });
         }
       }
+    });
+
+    this.addEventListener('name-click', (evt) => {
+      appState.toggleExpanded(evt.detail);
+      this.setDiffRow(evt.detail, appState.isExpanded(evt.detail));
     });
 
     this.somethingChanged();
@@ -816,41 +844,23 @@ class ListingTable extends window.HTMLElement {
       }
     });
 
-    // Add the rows
-    const tbody = this.querySelector('tbody');
-    tbody.innerHTML = ''; // ?
+    const rows = [];
 
+    // Create rows for this page.
     for (const obj of appState.pageSlice()) {
-      const row = document.createElement('func-row');
-      row.setAttribute('data-address', obj.address); // ?
-      row.addEventListener('name-click', () => {
-        appState.toggleExpanded(obj.address);
-        this.setDiffRow(obj.address, appState.isExpanded(obj.address));
-      });
-      setBooleanAttribute(row, 'show-recomp', appState.showRecomp);
-      setBooleanAttribute(row, 'expanded', appState.isExpanded(row));
-
-      const items = [
-        ['address', obj.address],
-        ['recomp', obj.recomp],
-        ['name', obj.name],
-        ['diffs', countDiffs(obj)],
-        ['matching', getMatchPercentText(obj)],
-      ];
-
-      items.forEach(([slotName, content]) => {
-        const div = document.createElement('span');
-        div.setAttribute('slot', slotName);
-        div.innerText = content;
-        row.appendChild(div);
-      });
-
-      tbody.appendChild(row);
-
+      rows.push(this.funcRowHtml(obj));
       if (appState.isExpanded(obj.address)) {
-        this.setDiffRow(obj.address, true);
+        rows.push(this.diffRowHtml(obj.address));
       }
     }
+
+    this.querySelector('tbody').innerHTML = rows.join('');
+
+    this.querySelectorAll('tr[data-address]').forEach((row) => {
+      row.querySelector('td[data-col="name"]').addEventListener('click', () => {
+        this.dispatchEvent(new CustomEvent('name-click', { detail: row.getAttribute('data-address') }));
+      });
+    });
   }
 }
 

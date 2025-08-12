@@ -875,3 +875,62 @@ def test_issue_137(parser):
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.UNEXPECTED_MARKER
     assert parser.alerts[0].code.name == "UNEXPECTED_MARKER"
+
+
+def test_empty_nameref(parser):
+    """Should not report an incomplete nameref annotation"""
+    parser.read(
+        """\
+        // newline only
+        // FUNCTION: HELLO 0x1234
+        //
+
+        // whitespace then newline
+        // FUNCTION: HELLO 0x1234
+        //             
+        """
+    )
+
+    assert parser.alerts[0].code == ParserError.BAD_NAMEREF
+    assert parser.alerts[1].code == ParserError.BAD_NAMEREF
+
+
+def test_issue_174(parser):
+    """Should not crash if we fail to read a nameref annotation.
+    The specific example in GH issue #174 is a three-slash comment."""
+    parser.read(
+        """\
+        // FUNCTION: TEST 0x100720d0
+        /// Some function description
+        void someFunction() {}
+        """
+    )
+    # Should not crash
+    assert parser.alerts[0].code == ParserError.BAD_NAMEREF_FORMAT
+    assert parser.functions[0].name == "Some function description"
+
+
+def test_issue_184(parser):
+    """GH issue #184: should remove trailing whitespace from nameref annotation name."""
+    parser.read(
+        """\
+        // no whitespace
+        // FUNCTION: HELLO 0x1234
+        //test
+
+        // leading whitespace
+        // FUNCTION: HELLO 0x1234
+        //    test
+
+        // trailing whitespace
+        // FUNCTION: HELLO 0x1234
+        // test   
+        """
+    )
+
+    assert parser.functions[0].name == "test"
+    assert parser.functions[1].name == "test"
+    assert parser.functions[2].name == "test"
+    assert parser.alerts[0].code == ParserError.BAD_NAMEREF_FORMAT
+    assert parser.alerts[1].code == ParserError.BAD_NAMEREF_FORMAT
+    assert parser.alerts[2].code == ParserError.BAD_NAMEREF_FORMAT

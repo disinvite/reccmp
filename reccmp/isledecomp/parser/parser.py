@@ -8,6 +8,7 @@ from .util import (
     get_class_name,
     get_variable_name,
     get_synthetic_name,
+    is_nameref_exact,
     remove_trailing_comment,
     get_string_contents,
     sanitize_code_line,
@@ -451,6 +452,7 @@ class DecompParser:
             self._syntax_warning(ParserError.BOGUS_MARKER)
 
     def read_line(self, line: str):
+        # pylint: disable=too-many-branches
         if self.state == ReaderState.DONE:
             return
 
@@ -480,6 +482,9 @@ class DecompParser:
             if name is None:
                 self._syntax_error(ParserError.BAD_NAMEREF)
             else:
+                if not is_nameref_exact(line):
+                    self._syntax_warning(ParserError.BAD_NAMEREF_FORMAT)
+
                 self.function_sig = name
                 self._function_starts_here()
                 self._function_done(lookup_by_name=True)
@@ -494,10 +499,15 @@ class DecompParser:
                 # function and end here. We know this is not a decomp marker
                 # because it would have been handled already.
                 synthetic_name = get_synthetic_name(line)
-                assert synthetic_name is not None
-                self.function_sig = synthetic_name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
+                if synthetic_name is None:
+                    self._syntax_error(ParserError.BAD_NAMEREF)
+                else:
+                    if not is_nameref_exact(line):
+                        self._syntax_warning(ParserError.BAD_NAMEREF_FORMAT)
+
+                    self.function_sig = synthetic_name
+                    self._function_starts_here()
+                    self._function_done(lookup_by_name=True)
 
             elif line_strip == "{":
                 # We missed the function signature but we can recover from this

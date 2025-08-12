@@ -4,7 +4,10 @@ from ast import literal_eval
 
 # The goal here is to just read whatever is on the next line, so some
 # flexibility in the formatting seems OK
-templateCommentRegex = re.compile(r"\s*//\s+(.*)")
+templateCommentRegex = re.compile(r"\s*/{2,}\s*(.*\S)")
+
+# C++ comment (//), one space, name must begin and end with non-whitespace chars.
+templateCommentExactRegex = re.compile(r"\s*// (\S|\S.*\S)$")
 
 # To remove any comment (//) or block comment (/*) and its leading spaces
 # from the end of a code line
@@ -35,6 +38,11 @@ def get_synthetic_name(line: str) -> str | None:
         return template_match.group(1)
 
     return None
+
+
+def is_nameref_exact(line: str) -> bool:
+    """Does the line with the nameref annotation name match our format exactly?"""
+    return templateCommentExactRegex.match(line) is not None
 
 
 def sanitize_code_line(line: str) -> str:

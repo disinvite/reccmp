@@ -54,6 +54,11 @@ class ParserError(Enum):
     # This makes no sense, so we ignore the option.
     SYMBOL_OPTION_IGNORED = 113
 
+    # WARN: We successfully read a nameref annotation, but the format of the name
+    # field is not to our specifications:
+    # (C++-style comment followed by one space, no trailing whitespace)
+    BAD_NAMEREF_FORMAT = 114
+
     # This code or higher is an error, not a warning
     DECOMP_ERROR_START = 200
 

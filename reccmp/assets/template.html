@@ -85,7 +85,7 @@
       }
 
       #listing > thead th[data-col="name"] {
-        width: 60%;
+        width: 100%;
       }
 
       .diffneg {
@@ -210,6 +210,11 @@
         border-top: 1px #f0f0f0 solid;
         display: table-cell;
         padding: 0.5em;
+        white-space: nowrap;
+      }
+
+      tr[data-address] > td[data-col="name"] {
+        white-space: wrap;
         word-break: break-all !important;
       }
 

@@ -144,6 +144,15 @@ function copyToClipboard(value) {
   navigator.clipboard.writeText(value);
 }
 
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 const PAGE_SIZE = 200;
 
 //
@@ -762,7 +771,7 @@ class ListingTable extends window.HTMLElement {
     return `<tr data-address=${obj.address} ${attributes.join(' ')}>
       <td data-col="address"><can-copy>${obj.address}</can-copy></td>
       <td data-col="recomp"><can-copy>${obj.recomp}</can-copy></td>
-      <td data-col="name">${obj.name}</td>
+      <td data-col="name">${escapeHtml(obj.name)}</td>
       <td data-col="diffs">${countDiffs(obj)}</td>
       <td data-col="matching">${getMatchPercentText(obj)}</td>
     </tr>`;

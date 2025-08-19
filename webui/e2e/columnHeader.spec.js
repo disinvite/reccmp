@@ -50,7 +50,7 @@ test.describe('Column headers', () => {
 
     // Now sorting by name in reverse alphabetical order.
     // Inverted sort on address retained for the new column.
-    await expect(topRow).toContainText('_wctomb');
+    await expect(topRow).toContainText('list<ROI *,allocator<ROI *> >::_Buynode');
   });
 
   test('Update sort indicator', async ({ page }) => {

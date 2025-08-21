@@ -192,6 +192,11 @@
         word-break: break-all !important;
       }
 
+      tr[data-diff] > td > div.no-diff {
+        font-style: italic;
+        text-align: center;
+      }
+
       tr[data-address]:not([show-recomp]) > td[data-col="recomp"] {
         display: none;
       }
@@ -334,91 +339,5 @@
         </table>
       </listing-table>
     </div>
-    <template id="funcrow-template">
-      <style>
-        :host(:not([hidden])) {
-          display: table-row;
-        }
-
-        :host(:not([show-recomp])) > div[data-col="recomp"] {
-          display: none;
-        }
-
-        div[data-col="name"]:hover {
-          cursor: pointer;
-        }
-
-        div[data-col="name"]:hover > ::slotted(*) {
-          text-decoration: underline;
-          text-decoration-style: dotted;
-        }
-
-        ::slotted(*:not([slot="name"])) {
-          white-space: nowrap;
-        }
-
-        :host > div {
-          border-top: 1px #f0f0f0 solid;
-          display: table-cell;
-          padding: 0.5em;
-          word-break: break-all !important;
-        }
-
-        :host > div:last-child {
-          text-align: right;
-        }
-      </style>
-      <div data-col="address"><can-copy><slot name="address"></slot></can-copy></div>
-      <div data-col="recomp"><can-copy><slot name="recomp"></slot></can-copy></div>
-      <div data-col="name"><slot name="name"></slot></div>
-      <div data-col="diffs"><slot name="diffs"></slot></div>
-      <div data-col="matching"><slot name="matching"></slot></div>
-    </template>
-    <template id="nodiff-template">
-      <style>
-        ::slotted(*) {
-          font-style: italic;
-          text-align: center;
-        }
-      </style>
-      <slot></slot>
-    </template>
-    <template id="can-copy-template">
-      <style>
-        :host {
-          position: relative;
-        }
-        ::slotted(*) {
-          cursor: pointer;
-        }
-        slot::after {
-          background-color: #fff;
-          color: #222;
-          display: none;
-          font-size: 12px;
-          padding: 1px 2px;
-          width: fit-content;
-          border-radius: 1px;
-          text-align: center;
-          bottom: 120%;
-          box-shadow: 0 4px 14px 0 rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.05);
-          position: absolute;
-          white-space: nowrap;
-          transition: .1s;
-          content: 'Copy to clipboard';
-        }
-        ::slotted(*:hover) {
-          text-decoration: underline;
-          text-decoration-style: dotted;
-        }
-        slot:hover::after {
-          display: block;
-        }
-        :host([copied]) > slot:hover::after {
-          content: 'Copied!';
-        }
-      </style>
-      <slot></slot>
-    </template>
   </body>
 </html>

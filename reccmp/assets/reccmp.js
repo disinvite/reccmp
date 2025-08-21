@@ -447,18 +447,6 @@ class FuncRow extends window.HTMLElement {
   }
 }
 
-class NoDiffMessage extends window.HTMLElement {
-  connectedCallback() {
-    if (this.shadowRoot !== null) {
-      return;
-    }
-
-    const template = document.querySelector('template#nodiff-template').content;
-    const shadow = this.attachShadow({ mode: 'open' });
-    shadow.appendChild(template.cloneNode(true));
-  }
-}
-
 class CanCopy extends window.HTMLElement {
   connectedCallback() {
     this.addEventListener('mouseout', () => {
@@ -747,9 +735,9 @@ class ListingTable extends window.HTMLElement {
     let contents;
 
     if ('stub' in obj) {
-      contents = `<no-diff><div>Stub. No diff.</div></no-diff>`;
+      contents = `<div class="no-diff">Stub. No diff.</div>`;
     } else if (obj.diff.length === 0) {
-      contents = `<no-diff><div>Identical function - no diff</div></no-diff>`;
+      contents = `<div class="no-diff">Identical function - no diff</div>`;
     } else {
       contents = `<diff-display data-option="1" data-address="${address}"></diff-display>`;
     }
@@ -873,6 +861,5 @@ window.onload = () => {
   window.customElements.define('sort-indicator', SortIndicator);
   window.customElements.define('func-row', FuncRow);
   window.customElements.define('diff-row', DiffRow);
-  window.customElements.define('no-diff', NoDiffMessage);
   window.customElements.define('can-copy', CanCopy);
 };

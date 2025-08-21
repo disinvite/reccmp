@@ -428,25 +428,6 @@ class SortIndicator extends window.HTMLElement {
   }
 }
 
-class FuncRow extends window.HTMLElement {
-  connectedCallback() {
-    if (this.shadowRoot !== null) {
-      return;
-    }
-
-    const template = document.querySelector('template#funcrow-template').content;
-    const shadow = this.attachShadow({ mode: 'open' });
-    shadow.appendChild(template.cloneNode(true));
-    shadow.querySelector(':host > div[data-col="name"]').addEventListener('click', () => {
-      this.dispatchEvent(new Event('name-click'));
-    });
-  }
-
-  get address() {
-    return this.getAttribute('data-address');
-  }
-}
-
 class CanCopy extends window.HTMLElement {
   connectedCallback() {
     this.addEventListener('mouseout', () => {
@@ -470,27 +451,6 @@ class CanCopy extends window.HTMLElement {
       }, 2000);
     }
     setBooleanAttribute(this, 'copied', value);
-  }
-}
-
-// Displays asm diff for the given @data-address value.
-class DiffRow extends window.HTMLElement {
-  connectedCallback() {
-    if (this.shadowRoot !== null) {
-      return;
-    }
-
-    const template = document.querySelector('template#diffrow-template').content;
-    const shadow = this.attachShadow({ mode: 'open' });
-    shadow.appendChild(template.cloneNode(true));
-  }
-
-  get address() {
-    return this.getAttribute('data-address');
-  }
-
-  set address(value) {
-    this.setAttribute('data-address', value);
   }
 }
 
@@ -809,11 +769,8 @@ class ListingTable extends window.HTMLElement {
   }
 
   somethingChanged() {
-    // Toggle recomp/diffs column
+    // Toggle recomp column
     setBooleanAttribute(this.querySelector('table'), 'show-recomp', appState.showRecomp);
-    this.querySelectorAll('func-row[data-address]').forEach((row) => {
-      setBooleanAttribute(row, 'show-recomp', appState.showRecomp);
-    });
 
     const thead = this.querySelector('thead');
     const headers = thead.querySelectorAll('th');
@@ -859,7 +816,5 @@ window.onload = () => {
   window.customElements.define('diff-display', DiffDisplay);
   window.customElements.define('diff-display-options', DiffDisplayOptions);
   window.customElements.define('sort-indicator', SortIndicator);
-  window.customElements.define('func-row', FuncRow);
-  window.customElements.define('diff-row', DiffRow);
   window.customElements.define('can-copy', CanCopy);
 };

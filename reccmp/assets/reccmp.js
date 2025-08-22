@@ -706,16 +706,7 @@ class ListingTable extends window.HTMLElement {
   }
 
   funcRowHtml(obj, showRecomp) {
-    const attributes = [];
-    if (appState.showRecomp) {
-      attributes.push('show-recomp');
-    }
-
-    if (appState.isExpanded(obj.address)) {
-      attributes.push('expanded');
-    }
-
-    return `<tr data-address=${obj.address} ${attributes.join(' ')}>
+    return `<tr data-address=${obj.address}>
       <td data-col="address"><can-copy>${obj.address}</can-copy></td>
       ${showRecomp ? `<td data-col="recomp"><can-copy>${obj.recomp}</can-copy></td>` : ''}
       <td data-col="name">${escapeHtml(obj.name)}</td>

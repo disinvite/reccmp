@@ -706,7 +706,6 @@ class ListingTable extends window.HTMLElement {
   }
 
   funcRowHtml(obj) {
-    // TODO: better way?
     const attributes = [];
     if (appState.showRecomp) {
       attributes.push('show-recomp');
@@ -803,6 +802,8 @@ class ListingTable extends window.HTMLElement {
     this.querySelector('tbody').innerHTML = rows.join('');
 
     this.querySelectorAll('tr[data-address]').forEach((row) => {
+      // Clicking the name column toggles the diff detail row.
+      // This is added or removed without replacing the entire <tbody>.
       row.querySelector('td[data-col="name"]').addEventListener('click', () => {
         this.dispatchEvent(new CustomEvent('name-click', { detail: row.getAttribute('data-address') }));
       });

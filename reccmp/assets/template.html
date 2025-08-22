@@ -73,15 +73,6 @@
         width: 8ch;
       }
 
-      #listing:not([show-recomp]) > thead th[data-col="recomp"],
-      tr[data-address]:not([show-recomp]) > td[data-col="recomp"] {
-        /* Don't use display: none so colspan of diff rows will be accurate. */
-        overflow: hidden;
-        padding: 0;
-        visibility: hidden;
-        width: 0;
-      }
-
       #listing > thead th > div {
         display: flex;
         column-gap: 0.5em;
@@ -97,6 +88,8 @@
       }
 
       #listing > thead th:last-child > div {
+        /* Draw the sort triangle to the left of the last column. */
+        flex-direction: row-reverse;
         justify-content: right;
       }
 
@@ -312,39 +305,6 @@
         </div>
       </listing-options>
       <listing-table>
-        <table id="listing">
-          <thead>
-            <tr>
-              <th data-col="address">
-                <div>
-                  <span>Address</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="recomp">
-                <div>
-                  <span>Recomp</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="name">
-                <div>
-                  <span>Name</span>
-                  <sort-indicator/>
-                </div>
-              </th>
-              <th data-col="diffs" data-no-sort></th>
-              <th data-col="matching">
-                <div>
-                  <sort-indicator></sort-indicator>
-                  <span>Matching</span>
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-          </tbody>
-        </table>
       </listing-table>
     </div>
   </body>

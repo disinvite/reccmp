@@ -100,4 +100,73 @@ test.describe('Search bar', () => {
     await expect(searchbox.and(namePlaceholder)).not.toBeAttached();
     await expect(searchbox.and(asmPlaceholder)).toBeAttached();
   });
+
+  test('Should trim whitespace', async ({ page }) => {
+    const searchbox = page.getByRole('searchbox');
+    const rowLocator = page.getByRole('row').filter({ hasText: 'IsleApp::IsleApp' });
+
+    // The row should be visible to start.
+    await expect(rowLocator).toBeAttached();
+
+    // The row should be there if we start typing text that matches its name.
+    await searchbox.fill('Isle');
+    await expect(rowLocator).toBeAttached();
+
+    // The row should still be there even if we add leading or trailing spaces
+    // (i.e. the whitespace is trimmed)
+    await searchbox.fill('Isle   ');
+    await expect(rowLocator).toBeAttached();
+
+    await searchbox.fill('   Isle');
+    await expect(rowLocator).toBeAttached();
+
+    await searchbox.fill('   Isle   ');
+    await expect(rowLocator).toBeAttached();
+
+    // The row should not be there if the space is enclosed in non-space characters.
+    // i.e. we do not remove *all* spaces
+    await searchbox.fill('Isle App');
+    await expect(rowLocator).not.toBeAttached();
+  });
+
+  test('Should match if space included', async ({ page }) => {
+    const searchbox = page.getByRole('searchbox');
+    // Example row that contains a space in its name.
+    const rowLocator = page.getByRole('row').filter({ hasText: 'list<ROI *,allocator<ROI *> >::_Buynode' });
+
+    // The row should be visible to start.
+    await expect(rowLocator).toBeAttached();
+
+    // The row should be there if we type part of the name.
+    await searchbox.fill('ROI');
+    await expect(rowLocator).toBeAttached();
+
+    // The row should not disappear when we add the space.
+    await searchbox.fill('ROI ');
+    await expect(rowLocator).toBeAttached();
+
+    // The row should still be there after the space is included.
+    await searchbox.fill('ROI *');
+    await expect(rowLocator).toBeAttached();
+
+    // However... we do not remove spaces from the *row* when searching.
+    // This should not match.
+    await searchbox.fill('ROI*');
+    await expect(rowLocator).not.toBeAttached();
+  });
+
+  test('Should run case-insensitive search', async ({ page }) => {
+    const searchbox = page.getByRole('searchbox');
+    const rowLocator = page.getByRole('row').filter({ hasText: 'IsleApp::IsleApp' });
+
+    // The row should appear regardless of case used in the search string.
+    await searchbox.fill('IsleApp');
+    await expect(rowLocator).toBeAttached();
+
+    await searchbox.fill('isleapp');
+    await expect(rowLocator).toBeAttached();
+
+    await searchbox.fill('ISLEAPP');
+    await expect(rowLocator).toBeAttached();
+  });
 });

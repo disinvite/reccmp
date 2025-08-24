@@ -170,6 +170,11 @@ class ListingState {
 
   addListener(fn) {
     this._listeners.push(fn);
+    // Call the listener as soon as we add it.
+    // This is for components that need data immediately after mounting.
+    // TODO: Instead of using global appState, a future refactor should
+    // pass the data object here.
+    fn();
   }
 
   callListeners() {
@@ -251,6 +256,9 @@ class ListingState {
     // Destructuring sets defaults for optional values from this object.
     const { effective = false, stub = false, diff = '', name, address, matching } = row;
 
+    // Search should be case-insensitive. Remove leading and trailing whitespace.
+    const queryNormalized = this.query.toLowerCase().trim();
+
     if (this.hidePerfect && (effective || matching >= 1)) {
       return false;
     }
@@ -259,13 +267,13 @@ class ListingState {
       return false;
     }
 
-    if (this.query === '') {
+    if (queryNormalized === '') {
       return true;
     }
 
     // Name/addr search
     if (this.filterType === 1) {
-      return address.includes(this.query) || name.toLowerCase().includes(this.query);
+      return address.includes(queryNormalized) || name.toLowerCase().includes(queryNormalized);
     }
 
     // no diff for review.
@@ -274,7 +282,7 @@ class ListingState {
     }
 
     // special matcher for combined diff
-    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(this.query);
+    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(queryNormalized);
 
     // Flatten all diff groups for the search
     const diffs = diff.flatMap(([_slug, subgroups]) => subgroups);
@@ -338,8 +346,7 @@ class ListingState {
   }
 
   set query(value) {
-    // Normalize search string
-    this._query = value.toLowerCase().trim();
+    this._query = value;
     this.updateResults();
   }
 
@@ -575,18 +582,25 @@ class DiffDisplay extends window.HTMLElement {
   }
 }
 
-class ListingOptions extends window.HTMLElement {
-  constructor() {
-    super();
-
-    // Register to receive updates
-    appState.addListener(() => this.onUpdate());
-
-    const input = this.querySelector('input[type=search]');
-    input.oninput = (evt) => {
+class SearchBar extends window.HTMLElement {
+  connectedCallback() {
+    this.innerHTML = `<input type="search"></input>`;
+    this.querySelector('input[type=search]').addEventListener('input', (evt) => {
       appState.query = evt.target.value;
-    };
+    });
 
+    appState.addListener(() => this.update(appState));
+  }
+
+  update({ query, filterType }) {
+    const input = this.querySelector('input[type=search]');
+    input.value = query;
+    input.placeholder = filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
+  }
+}
+
+class ListingOptions extends window.HTMLElement {
+  connectedCallback() {
     const hidePerf = this.querySelector('input#cbHidePerfect');
     hidePerf.onchange = (evt) => {
       appState.hidePerfect = evt.target.checked;
@@ -626,14 +640,11 @@ class ListingOptions extends window.HTMLElement {
       };
     });
 
-    this.onUpdate();
+    // Register to receive updates
+    appState.addListener(() => this.onUpdate());
   }
 
   onUpdate() {
-    // Update input placeholder based on search type
-    this.querySelector('input[type=search]').placeholder =
-      appState.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
-
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
       `Page ${appState.page + 1} of ${Math.max(1, appState.pageCount())}`;
@@ -673,8 +684,13 @@ class ListingOptions extends window.HTMLElement {
 
 // Main application.
 class ListingTable extends window.HTMLElement {
-  constructor() {
-    super();
+  connectedCallback() {
+    this.addEventListener('name-click', (evt) => {
+      appState.toggleExpanded(evt.detail);
+      this.setDiffRow(evt.detail, appState.isExpanded(evt.detail));
+    });
+
+    this.innerHTML = '<table id="listing"><thead></thead><tbody></tbody></table>';
 
     // Register to receive updates
     appState.addListener(() => this.somethingChanged());
@@ -803,17 +819,6 @@ class ListingTable extends window.HTMLElement {
     funcrow.insertAdjacentElement('afterend', this.diffRow(address, appState.showRecomp));
   }
 
-  connectedCallback() {
-    this.addEventListener('name-click', (evt) => {
-      appState.toggleExpanded(evt.detail);
-      this.setDiffRow(evt.detail, appState.isExpanded(evt.detail));
-    });
-
-    this.innerHTML = '<table id="listing"><thead></thead><tbody></tbody></table>';
-
-    this.somethingChanged();
-  }
-
   somethingChanged() {
     const header_row = this.headerRow(appState.showRecomp, appState.sortCol, appState.sortDesc);
 
@@ -858,5 +863,6 @@ window.onload = () => {
   window.customElements.define('diff-display', DiffDisplay);
   window.customElements.define('diff-display-options', DiffDisplayOptions);
   window.customElements.define('sort-indicator', SortIndicator);
+  window.customElements.define('search-bar', SearchBar);
   window.customElements.define('can-copy', CanCopy);
 };

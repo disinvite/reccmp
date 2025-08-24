@@ -19,7 +19,7 @@
         margin: auto;
       }
 
-      #search {
+      search-bar > input {
         width: 100%;
         box-sizing: border-box;
         background: #303030;
@@ -29,7 +29,7 @@
         border-radius: 0.5em;
       }
 
-      #search::placeholder {
+      search-bar > input::placeholder {
         color: #b0b0b0;
       }
 
@@ -272,7 +272,7 @@
     <div class="main">
       <h1>Decompilation Status</h1>
       <listing-options>
-        <input id="search" type="search" placeholder="Search for offset or function name...">
+        <search-bar></search-bar>
         <div class="filters">
           <fieldset>
             <legend>Options:</legend>

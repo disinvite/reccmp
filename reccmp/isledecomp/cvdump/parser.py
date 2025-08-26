@@ -201,8 +201,7 @@ class CvdumpParser:
             self.types.read_all(section)
 
         elif name == "SYMBOLS":
-            for line in section.splitlines():
-                self.symbols_parser.read_line(line)
+            self.symbols_parser.read_all(section)
 
         elif name == "LINES":
             for line in section.splitlines():

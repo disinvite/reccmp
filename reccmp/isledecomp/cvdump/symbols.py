@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 import logging
 import re
-from re import Match
 from typing import NamedTuple
 
 
@@ -42,16 +41,7 @@ class SymbolsEntry:
 
 
 class CvdumpSymbolsParser:
-    _symbol_line_generic_regex = re.compile(
-        r"\(\w+\)\s+(?P<symbol_type>[^\s:]+)(?::\s+(?P<second_part>\S.*))?|(?::)$"
-    )
-    """
-    Parses the first part, e.g. `(00008C) S_GPROC32`, and splits off the second part after the colon (if it exists).
-    There are three cases:
-    - no colon, e.g. `(000350) S_END`
-    - colon but no data, e.g. `(000370) S_COMPILE:`
-    - colon and data, e.g. `(000304)  S_REGISTER: esi, Type:             0x1E14, this``
-    """
+    """Parser for cvdump output, SYMBOLS section."""
 
     _symbol_line_function_regex = re.compile(
         r"\[(?P<section>\w{4}):(?P<offset>\w{8})\], Cb: (?P<size>\w+), Type:\s+(?P<func_type>[^\s,]+), (?P<name>.+)"
@@ -63,7 +53,7 @@ class CvdumpSymbolsParser:
 
     # the second part of e.g.
     _stack_register_symbol_regex = re.compile(
-        r"(?P<location>\S+), Type:\s+(?P<data_type>[\w()]+), (?P<name>.+)$"
+        r": (?P<location>[a-z]+|\[\w+\]), Type:\s+(?P<data_type>[\w()]+), (?P<name>.+)"
     )
     """
     Parses the second part of a stack or register symbol, e.g.
@@ -71,25 +61,12 @@ class CvdumpSymbolsParser:
     """
 
     _debug_start_end_regex = re.compile(
-        r"^\s*Debug start: (?P<debug_start>\w+), Debug end: (?P<debug_end>\w+)$"
+        r"\s*Debug start: (?P<debug_start>\w+), Debug end: (?P<debug_end>\w+)"
     )
 
     _parent_end_next_regex = re.compile(
-        r"\s*Parent: (?P<parent_addr>\w+), End: (?P<end_addr>\w+), Next: (?P<next_addr>\w+)$"
+        r"\s*Parent: (?P<parent_addr>\w+), End: (?P<end_addr>\w+), Next: (?P<next_addr>\w+)"
     )
-
-    _module_start_regex = re.compile(
-        r'\*\* Module: "(?P<module>[^"]+)"(?: from "(?P<from>[^"]+)")?$'
-    )
-
-    _compile_key_value = re.compile(r"\s{9}(?P<key>[^:]+):\s(?P<value>.+)$")
-    """
-    For lines like
-    `         Target processor: 80486`
-    within an `S_COMPILE` symbol.
-    """
-
-    _flags_frame_pointer_regex = re.compile(r"\s*Flags: Frame Ptr Present$")
 
     _register_stack_symbols = ["S_BPREL32", "S_REGISTER"]
 
@@ -113,8 +90,6 @@ class CvdumpSymbolsParser:
         "S_UDT",
     ]
 
-    """Parser for cvdump output, SYMBOLS section."""
-
     def __init__(self):
         self.symbols: list[SymbolsEntry] = []
         self.current_function: SymbolsEntry | None = None
@@ -123,94 +98,105 @@ class CvdumpSymbolsParser:
         # that indicates the end of the block.
         self.block_level: int = 0
 
-    def read_line(self, line: str):
-        if len(line) == 0:
-            pass
-        elif (match := self._symbol_line_generic_regex.match(line)) is not None:
-            self._parse_generic_case(line, match)
-        elif (match := self._parent_end_next_regex.match(line)) is not None:
-            # We do not need this info at the moment, might be useful in the future
-            pass
-        elif (match := self._debug_start_end_regex.match(line)) is not None:
-            # We do not need this info at the moment, might be useful in the future
-            pass
-        elif (match := self._flags_frame_pointer_regex.match(line)) is not None:
-            if self.current_function is None:
-                logger.error(
-                    "Found a `Flags: Frame Ptr Present` but self.current_function is None"
-                )
-                return
-            self.current_function.frame_pointer_present = True
-        elif (match := self._module_start_regex.match(line)) is not None:
-            # We do not need this info at the moment, might be useful in the future
-            pass
-        elif (match := self._compile_key_value.match(line)) is not None:
-            # We do not need this info at the moment, might be useful in the future
-            pass
-        else:
-            logger.debug("Unhandled line: %s", line[:-1])
-
-    def _parse_generic_case(self, line, line_match: Match[str]):
-        symbol_type: str = line_match.group("symbol_type")
-        second_part: str | None = line_match.group("second_part")
-
-        if symbol_type in ["S_GPROC32", "S_LPROC32"]:
-            assert second_part is not None
-            if (match := self._symbol_line_function_regex.match(second_part)) is None:
-                logger.error("Invalid function symbol: %s", line[:-1])
-                return
-            self.current_function = SymbolsEntry(
-                type=symbol_type,
-                section=int(match.group("section"), 16),
-                offset=int(match.group("offset"), 16),
-                size=int(match.group("size"), 16),
-                func_type=match.group("func_type"),
-                name=match.group("name"),
-            )
-            self.symbols.append(self.current_function)
-
-        elif symbol_type in self._register_stack_symbols:
-            assert second_part is not None
-            if self.current_function is None:
-                logger.error("Found stack/register outside of function: %s", line[:-1])
-                return
-            if (match := self._stack_register_symbol_regex.match(second_part)) is None:
-                logger.error("Invalid stack/register symbol: %s", line[:-1])
-                return
-
-            new_symbol = StackOrRegisterSymbol(
-                symbol_type=symbol_type,
-                location=match.group("location").lower(),
-                data_type=match.group("data_type"),
-                name=match.group("name"),
-            )
-            self.current_function.stack_symbols.append(new_symbol)
-
-        elif symbol_type == "S_BLOCK32":
-            self.block_level += 1
-        elif symbol_type == "S_END":
-            if self.block_level > 0:
-                self.block_level -= 1
-                assert self.block_level >= 0
-            else:
-                self.current_function = None
-        elif symbol_type == "S_LDATA32":
-            assert second_part is not None
-            if (match := self._ldata32_regex.match(second_part)) is not None:
-                new_var = LdataEntry(
-                    section=int(match.group("section"), 16),
-                    offset=int(match.group("offset"), 16),
-                    type=match.group("type"),
-                    name=match.group("name"),
-                )
-
-                # An S_LDATA32 that appears between S_GPROC32 and S_END blocks then
-                # we consider it to be a static variable from the enclosing function.
-                # If S_LDATA32 appears outside a function, ignore it.
-                if self.current_function is not None:
-                    self.current_function.static_variables.append(new_var)
-
-        elif symbol_type in self._unhandled_symbols:
+    def read_register(self, leaf: str, symbol_type: str):
+        if self.current_function is None:
+            logger.error("Found stack/register outside of function: %s", leaf)
             return
-        else:
-            logger.error("Unhandled symbol type: %s", line)
+
+        match = self._stack_register_symbol_regex.search(leaf)
+        if match is None:
+            logger.error("Invalid stack/register symbol: %s", leaf)
+            return
+
+        new_symbol = StackOrRegisterSymbol(
+            symbol_type=symbol_type,
+            location=match.group("location").lower(),
+            data_type=match.group("data_type"),
+            name=match.group("name"),
+        )
+        self.current_function.stack_symbols.append(new_symbol)
+
+    def read_proc(self, leaf: str, symbol_type: str):
+        match = self._symbol_line_function_regex.search(leaf)
+        if match is None:
+            logger.error("Invalid function symbol: %s", leaf)  # TODO: truncate
+            return
+
+        self.current_function = SymbolsEntry(
+            type=symbol_type,
+            section=int(match.group("section"), 16),
+            offset=int(match.group("offset"), 16),
+            size=int(match.group("size"), 16),
+            func_type=match.group("func_type"),
+            name=match.group("name"),
+        )
+
+        if self._parent_end_next_regex.search(leaf) is not None:
+            # We do not need this info at the moment, might be useful in the future
+            pass
+
+        if self._debug_start_end_regex.search(leaf) is not None:
+            # We do not need this info at the moment, might be useful in the future
+            pass
+
+        if "Flags: Frame Ptr Present" in leaf:
+            self.current_function.frame_pointer_present = True
+
+        self.symbols.append(self.current_function)
+
+    def read_data(self, leaf: str):
+        match = self._ldata32_regex.search(leaf)
+        if match is None:
+            return
+
+        new_var = LdataEntry(
+            section=int(match.group("section"), 16),
+            offset=int(match.group("offset"), 16),
+            type=match.group("type"),
+            name=match.group("name"),
+        )
+
+        # An S_LDATA32 that appears between S_GPROC32 and S_END blocks then
+        # we consider it to be a static variable from the enclosing function.
+        # If S_LDATA32 appears outside a function, ignore it.
+        if self.current_function is not None:
+            self.current_function.static_variables.append(new_var)
+
+    def read_all(self, text: str):
+        r_module_start = re.compile(r"\n(?=\*{2} Module:)")
+        r_sect_leaf = re.compile(r"\n(?=\(\w{6}\))")
+        r_leaf_header = re.compile(r"\((?P<offset>\w{6})\)(?P<tab>\s+)(?P<type>S_\w+)")
+
+        for module in r_module_start.split(text):
+            for leaf in r_sect_leaf.split(module):
+                if not leaf or leaf.startswith("**"):
+                    continue
+
+                match = r_leaf_header.match(leaf)
+                if match is None:
+                    logger.error("Symbols leaf not in expected format: %s", leaf)
+                    continue
+
+                symbol_type = match.group("type")
+
+                if symbol_type in ("S_GPROC32", "S_LPROC32"):
+                    self.read_proc(leaf, symbol_type)
+
+                elif symbol_type in self._register_stack_symbols:
+                    self.read_register(leaf, symbol_type)
+
+                elif symbol_type == "S_LDATA32":
+                    self.read_data(leaf)
+
+                elif symbol_type == "S_BLOCK32":
+                    self.block_level += 1
+
+                elif symbol_type == "S_END":
+                    if self.block_level > 0:
+                        self.block_level = max(0, self.block_level - 1)
+                    else:
+                        self.current_function = None
+
+                # i.e. if this is not one of the symbol types we choose to ignore for now:
+                elif symbol_type not in self._unhandled_symbols:
+                    logger.error("Unhandled symbol type: %s", leaf)  # TODO: truncate

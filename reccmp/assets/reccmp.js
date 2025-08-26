@@ -2,7 +2,7 @@
 /* global data */
 
 // Unwrap array of functions into a dictionary with address as the key.
-const dataDict = Object.fromEntries(data.map((row) => [row.address, row]));
+const dataDict = Object.fromEntries(global_reccmp_data.map((row) => [row.address, row]));
 
 function getDataByAddr(addr) {
   return dataDict[addr];
@@ -67,27 +67,6 @@ function formatAsm(entries, _addrOption) {
   return output;
 }
 
-// Special internal values to ensure this sort order for matching column:
-// 1. Stub
-// 2. Any match percentage [0.0, 1.0)
-// 3. Effective match
-// 4. Actual 100% match
-function matchingColAdjustment(row) {
-  if ('stub' in row) {
-    return -1;
-  }
-
-  if ('effective' in row) {
-    return 1.0;
-  }
-
-  if (row.matching === 1.0) {
-    return 1000;
-  }
-
-  return row.matching;
-}
-
 function getCppClass(str) {
   const idx = str.indexOf('::');
   if (idx !== -1) {
@@ -140,132 +119,93 @@ function setBooleanAttribute(element, attribute, value) {
   }
 }
 
+function pageHeadings(pages, sortCol) {
+  return pages.map((page, index) => {
+    const first = page[0];
+    const last = page[page.length - 1];
+
+    let start = first[sortCol];
+    let end = last[sortCol];
+
+    if (sortCol === 'matching') {
+      start = getMatchPercentText(first);
+      end = getMatchPercentText(last);
+    }
+
+    return [index, stringTruncate(start), stringTruncate(end)];
+  });
+}
+
 function copyToClipboard(value) {
   navigator.clipboard.writeText(value);
 }
 
-const PAGE_SIZE = 200;
+/*****************************************************************************/
+// state.js
 
-//
-// Global state
-//
+// Special internal values to ensure this sort order for matching column:
+// 1. Stub
+// 2. Any match percentage [0.0, 1.0)
+// 3. Effective match
+// 4. Actual 100% match
 
-class ListingState {
-  constructor() {
-    this._query = '';
-    this._sortCol = 'address';
-    this._filterType = 1;
-    this._sortDesc = false;
-    this._hidePerfect = false;
-    this._hideStub = false;
-    this._showRecomp = false;
-    this._expanded = {};
-    this._page = 0;
-
-    this._listeners = [];
-
-    this._results = [];
-    this.updateResults();
+function getRowSortValue(row) {
+  // Stubs appear at the bottom, below even a 0% match.
+  if ('stub' in row) {
+    return -1;
   }
 
-  addListener(fn) {
-    this._listeners.push(fn);
+  // An effective match sorts near the top
+  // but under a non-effective match.
+  if ('effective' in row) {
+    return 1.0;
   }
 
-  callListeners() {
-    for (const fn of this._listeners) {
-      fn();
-    }
+  // Boost non-effective match so they appear at the top.
+  if (row.matching === 1.0) {
+    return 1000;
   }
 
-  isExpanded(addr) {
-    return addr in this._expanded;
-  }
+  return row.matching;
+}
 
-  toggleExpanded(addr) {
-    this.setExpanded(addr, !this.isExpanded(addr));
-  }
+function createSortFunction({ sortCol, sortDesc }) {
+  return (rowA, rowB) => {
+    const valA = sortCol === 'matching' ? getRowSortValue(rowA) : rowA[sortCol];
+    const valB = sortCol === 'matching' ? getRowSortValue(rowB) : rowB[sortCol];
 
-  setExpanded(addr, value) {
-    if (value) {
-      this._expanded[addr] = true;
-    } else {
-      delete this._expanded[addr];
-    }
-  }
-
-  updateResults() {
-    const filterFn = this.rowFilterFn.bind(this);
-    const sortFn = this.rowSortFn.bind(this);
-
-    this._results = data.filter(filterFn).sort(sortFn);
-
-    // Set _page directly to avoid double call to listeners.
-    this._page = this.pageClamp(this.page);
-    this.callListeners();
-  }
-
-  pageSlice() {
-    return this._results.slice(this.page * PAGE_SIZE, (this.page + 1) * PAGE_SIZE);
-  }
-
-  resultsCount() {
-    return this._results.length;
-  }
-
-  pageCount() {
-    return Math.ceil(this._results.length / PAGE_SIZE);
-  }
-
-  maxPage() {
-    return Math.max(0, this.pageCount() - 1);
-  }
-
-  // A list showing the range of each page based on the sort column and direction.
-  pageHeadings() {
-    if (this._results.length === 0) {
-      return [];
+    if (valA > valB) {
+      return sortDesc ? -1 : 1;
+    } else if (valA < valB) {
+      return sortDesc ? 1 : -1;
     }
 
-    const headings = [];
+    return 0;
+  };
+}
 
-    for (let i = 0; i < this.pageCount(); i++) {
-      const startIdx = i * PAGE_SIZE;
-      const endIdx = Math.min(this._results.length, (i + 1) * PAGE_SIZE) - 1;
+function createFilterFunction({ hidePerfect, hideStub, query, filterType }) {
+  const queryNormalized = query.toLowerCase().trim();
 
-      let start = this._results[startIdx][this.sortCol];
-      let end = this._results[endIdx][this.sortCol];
-
-      if (this.sortCol === 'matching') {
-        start = getMatchPercentText(this._results[startIdx]);
-        end = getMatchPercentText(this._results[endIdx]);
-      }
-
-      headings.push([i, stringTruncate(start), stringTruncate(end)]);
-    }
-
-    return headings;
-  }
-
-  rowFilterFn(row) {
+  return (row) => {
     // Destructuring sets defaults for optional values from this object.
     const { effective = false, stub = false, diff = '', name, address, matching } = row;
 
-    if (this.hidePerfect && (effective || matching >= 1)) {
+    if (hidePerfect && (effective || matching >= 1)) {
       return false;
     }
 
-    if (this.hideStub && stub) {
+    if (hideStub && stub) {
       return false;
     }
 
-    if (this.query === '') {
+    if (queryNormalized === '') {
       return true;
     }
 
     // Name/addr search
-    if (this.filterType === 1) {
-      return address.includes(this.query) || name.toLowerCase().includes(this.query);
+    if (filterType === 1) {
+      return address.includes(queryNormalized) || name.toLowerCase().includes(queryNormalized);
     }
 
     // no diff for review.
@@ -274,7 +214,7 @@ class ListingState {
     }
 
     // special matcher for combined diff
-    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(this.query);
+    const anyLineMatch = ([_addr, line]) => line.toLowerCase().trim().includes(queryNormalized);
 
     // Flatten all diff groups for the search
     const diffs = diff.flatMap(([_slug, subgroups]) => subgroups);
@@ -282,7 +222,7 @@ class ListingState {
       const { both = [], orig = [], recomp = [] } = subgroup;
 
       // If search includes context
-      if (this.filterType === 2 && both.some(anyLineMatch)) {
+      if (filterType === 2 && both.some(anyLineMatch)) {
         return true;
       }
 
@@ -292,114 +232,208 @@ class ListingState {
     }
 
     return false;
-  }
+  };
+}
 
-  rowSortFn(rowA, rowB) {
-    const valA = this.sortCol === 'matching' ? matchingColAdjustment(rowA) : rowA[this.sortCol];
-
-    const valB = this.sortCol === 'matching' ? matchingColAdjustment(rowB) : rowB[this.sortCol];
-
-    if (valA > valB) {
-      return this.sortDesc ? -1 : 1;
-    } else if (valA < valB) {
-      return this.sortDesc ? 1 : -1;
+function batched(input, chunkSize) {
+  function* gen(arr, n) {
+    for (let i = 0; i < arr.length; i += n) {
+      yield arr.slice(i, i + n);
     }
-
-    return 0;
   }
 
-  pageClamp(page) {
-    return Math.max(0, Math.min(page, this.maxPage()));
-  }
+  return [...gen(input, Math.max(1, chunkSize))];
+}
 
-  get page() {
-    return this._page;
-  }
+class ReccmpState {
+  constructor(dataset) {
+    // Full dataset and filtered list (before paging)
+    this.dataset = dataset;
+    this.pageSize = 200;
+    this.state = {
+      // Filtered list of entities
+      results: this.dataset,
+      pages: [],
 
-  set page(page) {
-    this._page = this.pageClamp(page);
-    this.callListeners();
-  }
+      // Sort column and direction
+      sortCol: 'address',
+      sortDesc: false,
 
-  get filterType() {
-    return parseInt(this._filterType);
-  }
+      // Query text and which fields to search.
+      query: '',
+      filterType: 1,
 
-  set filterType(value) {
-    value = parseInt(value);
-    if (value >= 1 && value <= 3) {
-      this._filterType = value;
-    }
+      // Row filtering
+      hidePerfect: false,
+      hideStub: false,
+
+      // Column hiding
+      showRecomp: false,
+
+      // Rows with detail row (keyed by address)
+      expanded: {},
+
+      // Paging
+      currentPage: [],
+      pageNumber: 0,
+      maxPageNumber: 0,
+    };
+
     this.updateResults();
   }
 
-  get query() {
-    return this._query;
-  }
+  updateResults() {
+    const filterFn = createFilterFunction(this.state);
+    const sortFn = createSortFunction(this.state);
 
-  set query(value) {
-    // Normalize search string
-    this._query = value.toLowerCase().trim();
-    this.updateResults();
-  }
+    this.state.results = this.dataset.filter(filterFn).sort(sortFn);
+    this.state.pages = batched(this.state.results, this.pageSize);
+    this.state.maxPageNumber = Math.max(0, this.state.pages.length - 1);
+    this.state.pageNumber = Math.min(this.state.pageNumber, this.state.maxPageNumber);
 
-  get showRecomp() {
-    return this._showRecomp;
-  }
-
-  set showRecomp(value) {
-    // Don't sort by the recomp column we are about to hide
-    if (!value && this.sortCol === 'recomp') {
-      this._sortCol = 'address';
-    }
-
-    this._showRecomp = value;
-    this.callListeners();
-  }
-
-  get sortCol() {
-    return this._sortCol;
-  }
-
-  set sortCol(column) {
-    if (column === this._sortCol) {
-      this._sortDesc = !this._sortDesc;
+    if (this.state.pages.length > 0) {
+      this.state.currentPage = this.state.pages[this.state.pageNumber];
     } else {
-      this._sortCol = column;
+      this.state.currentPage = [];
+    }
+  }
+
+  setPageNumber(page) {
+    // Clamp page to what's available
+    this.state.pageNumber = Math.max(0, Math.min(page, this.state.maxPageNumber));
+    const startIdx = this.state.pageNumber * this.pageSize;
+    const endIdx = (this.state.pageNumber + 1) * this.pageSize;
+    this.state.currentPage = this.state.results.slice(startIdx, endIdx);
+  }
+
+  setFilterType(value) {
+    const filterType = parseInt(value); // coerce int
+    if (filterType >= 1 && filterType <= 3) {
+      this.state.filterType = filterType;
     }
 
     this.updateResults();
   }
 
-  get sortDesc() {
-    return this._sortDesc;
-  }
-
-  set sortDesc(value) {
-    this._sortDesc = value;
+  setQuery(query) {
+    this.state.query = query;
     this.updateResults();
   }
 
-  get hidePerfect() {
-    return this._hidePerfect;
+  setShowRecomp(value) {
+    // Don't sort by the recomp column we are about to hide
+    if (!value && this.state.sortCol === 'recomp') {
+      this.state.sortCol = 'address';
+    }
+
+    this.state.showRecomp = value;
   }
 
-  set hidePerfect(value) {
-    this._hidePerfect = value;
+  setSortCol(column) {
+    if (column === this.state.sortCol) {
+      this.state.sortDesc = !this.state.sortDesc;
+    } else {
+      this.state.sortCol = column;
+    }
+    this.state.sortCol = column;
     this.updateResults();
   }
 
-  get hideStub() {
-    return this._hideStub;
+  setHidePerfect(value) {
+    this.state.hidePerfect = value;
+    this.updateResults();
   }
 
-  set hideStub(value) {
-    this._hideStub = value;
+  setHideStub(value) {
+    this.state.hideStub = value;
     this.updateResults();
+  }
+
+  toggleExpanded(addr) {
+    if (addr in this.state.expanded) {
+      delete this.state.expanded[addr];
+    } else {
+      this.state.expanded[addr] = true;
+    }
   }
 }
 
-const appState = new ListingState();
+/*****************************************************************************/
+// provider.js
+
+class ReccmpProvider extends window.HTMLElement {
+  constructor() {
+    super();
+    this.reccmp = new ReccmpState(global_reccmp_data);
+    this.listeners = [];
+
+    this.addEventListener('reccmp-register', (evt) => {
+      evt.stopImmediatePropagation();
+      this.listeners.push(evt.detail);
+      // Call the listener immediately after registering.
+      // This populates the component with data.
+      evt.detail(this.reccmp.state);
+    });
+
+    this.addEventListener('setHidePerfect', (evt) => {
+      this.reccmp.setHidePerfect(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('setHideStub', (evt) => {
+      this.reccmp.setHideStub(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('setShowRecomp', (evt) => {
+      this.reccmp.setShowRecomp(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('prevPage', () => {
+      this.reccmp.setPageNumber(this.reccmp.state.pageNumber - 1);
+      this.callListeners();
+    });
+
+    this.addEventListener('nextPage', () => {
+      this.reccmp.setPageNumber(this.reccmp.state.pageNumber + 1);
+      this.callListeners();
+    });
+
+    this.addEventListener('setPage', (evt) => {
+      this.reccmp.setPageNumber(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('setQuery', (evt) => {
+      this.reccmp.setQuery(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('setFilterType', (evt) => {
+      this.reccmp.setFilterType(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('setSortCol', (evt) => {
+      this.reccmp.setSortCol(evt.detail);
+      this.callListeners();
+    });
+
+    this.addEventListener('toggleExpanded', (evt) => {
+      this.reccmp.toggleExpanded(evt.detail);
+      this.callListeners();
+    });
+  }
+
+  callListeners() {
+    for (const fn of this.listeners) {
+      fn(this.reccmp.state);
+    }
+  }
+}
+
+/*****************************************************************************/
 
 //
 // Custom elements
@@ -579,83 +613,83 @@ class ListingOptions extends window.HTMLElement {
   constructor() {
     super();
 
-    // Register to receive updates
-    appState.addListener(() => this.onUpdate());
-
     const input = this.querySelector('input[type=search]');
-    input.oninput = (evt) => {
-      appState.query = evt.target.value;
-    };
+    input.addEventListener('input', (evt) => {
+      this.dispatchEvent(new CustomEvent('setQuery', { bubbles: true, detail: evt.target.value }));
+    });
 
-    const hidePerf = this.querySelector('input#cbHidePerfect');
-    hidePerf.onchange = (evt) => {
-      appState.hidePerfect = evt.target.checked;
-    };
-    hidePerf.checked = appState.hidePerfect;
+    this.querySelector('input#cbHidePerfect').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setHidePerfect', { bubbles: true, detail: evt.target.checked }));
+    });
 
-    const hideStub = this.querySelector('input#cbHideStub');
-    hideStub.onchange = (evt) => {
-      appState.hideStub = evt.target.checked;
-    };
-    hideStub.checked = appState.hideStub;
+    this.querySelector('input#cbHideStub').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setHideStub', { bubbles: true, detail: evt.target.checked }));
+    });
 
-    const showRecomp = this.querySelector('input#cbShowRecomp');
-    showRecomp.onchange = (evt) => {
-      appState.showRecomp = evt.target.checked;
-    };
-    showRecomp.checked = appState.showRecomp;
+    this.querySelector('input#cbShowRecomp').addEventListener('change', (evt) => {
+      this.dispatchEvent(new CustomEvent('setShowRecomp', { bubbles: true, detail: evt.target.checked }));
+    });
 
     this.querySelector('button#pagePrev').addEventListener('click', () => {
-      appState.page = appState.page - 1;
+      this.dispatchEvent(new CustomEvent('prevPage', { bubbles: true }));
     });
 
     this.querySelector('button#pageNext').addEventListener('click', () => {
-      appState.page = appState.page + 1;
+      this.dispatchEvent(new CustomEvent('nextPage', { bubbles: true }));
     });
 
     this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
-      appState.page = evt.target.value;
+      this.dispatchEvent(new CustomEvent('setPage', { bubbles: true, detail: evt.target.value }));
     });
 
     this.querySelectorAll('input[name=filterType]').forEach((radio) => {
-      const checked = appState.filterType === parseInt(radio.getAttribute('value'));
-      radio.checked = checked;
-
-      radio.onchange = () => {
-        appState.filterType = radio.getAttribute('value');
-      };
+      radio.addEventListener('change', () => {
+        this.dispatchEvent(new CustomEvent('setFilterType', { bubbles: true, detail: radio.getAttribute('value') }));
+      });
     });
-
-    this.onUpdate();
   }
 
-  onUpdate() {
+  connectedCallback() {
+    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.onUpdate.bind(this) });
+    this.dispatchEvent(event);
+  }
+
+  onUpdate(appState) {
     // Update input placeholder based on search type
     this.querySelector('input[type=search]').placeholder =
       appState.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
 
+    this.querySelectorAll('input[name=filterType]').forEach((radio) => {
+      const checked = appState.filterType === parseInt(radio.getAttribute('value'));
+      radio.checked = checked;
+    });
+
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
-      `Page ${appState.page + 1} of ${Math.max(1, appState.pageCount())}`;
+      `Page ${appState.pageNumber + 1} of ${appState.maxPageNumber + 1}`;
 
     // Disable prev/next buttons on first/last page
-    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.page === 0);
-    setBooleanAttribute(this.querySelector('button#pageNext'), 'disabled', appState.page === appState.maxPage());
+    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.pageNumber === 0);
+    setBooleanAttribute(
+      this.querySelector('button#pageNext'),
+      'disabled',
+      appState.pageNumber === appState.maxPageNumber,
+    );
 
     // Update page select dropdown
     const pageSelect = this.querySelector('select#pageSelect');
-    setBooleanAttribute(pageSelect, 'disabled', appState.resultsCount() === 0);
+    setBooleanAttribute(pageSelect, 'disabled', appState.results.length === 0);
     pageSelect.innerHTML = '';
 
-    if (appState.resultsCount() === 0) {
+    if (appState.results.length === 0) {
       const opt = document.createElement('option');
       opt.textContent = '- no results -';
       pageSelect.appendChild(opt);
     } else {
-      for (const row of appState.pageHeadings()) {
+      for (const row of pageHeadings(appState.pages, appState.sortCol)) {
         const opt = document.createElement('option');
         opt.value = row[0];
-        if (appState.page === row[0]) {
+        if (appState.pageNumber === row[0]) {
           opt.setAttribute('selected', '');
         }
 
@@ -667,22 +701,13 @@ class ListingOptions extends window.HTMLElement {
     }
 
     // Update row count
-    this.querySelector('#rowcount').textContent = `${appState.resultsCount()}`;
+    this.querySelector('#rowcount').textContent = `${appState.results.length}`;
   }
 }
 
 // Main application.
 class ListingTable extends window.HTMLElement {
-  constructor() {
-    super();
-
-    // Register to receive updates
-    appState.addListener(() => this.somethingChanged());
-  }
-
-  diffRow(address, showRecomp) {
-    const obj = getDataByAddr(address);
-
+  diffRow(obj, showRecomp) {
     let contents;
 
     if ('stub' in obj) {
@@ -696,7 +721,7 @@ class ListingTable extends window.HTMLElement {
     } else {
       contents = document.createElement('diff-display');
       contents.setAttribute('data-option', '1');
-      contents.setAttribute('data-address', address);
+      contents.setAttribute('data-address', obj.address);
     }
 
     const td = document.createElement('td');
@@ -704,7 +729,7 @@ class ListingTable extends window.HTMLElement {
     td.append(contents);
 
     const tr = document.createElement('tr');
-    tr.setAttribute('data-diff', address);
+    tr.setAttribute('data-diff', obj.address);
     tr.append(td);
     return tr;
   }
@@ -783,47 +808,27 @@ class ListingTable extends window.HTMLElement {
     return tr;
   }
 
-  setDiffRow(address, shouldExpand) {
-    const tbody = this.querySelector('tbody');
-    const funcrow = tbody.querySelector(`tr[data-address="${address}"]`);
-    if (funcrow === null) {
-      return;
-    }
-
-    const existing = tbody.querySelector(`tr[data-diff="${address}"]`);
-    if (existing !== null) {
-      if (!shouldExpand) {
-        tbody.removeChild(existing);
-      }
-
-      return;
-    }
-
-    // Insert the diff row after the parent func row.
-    funcrow.insertAdjacentElement('afterend', this.diffRow(address, appState.showRecomp));
-  }
-
   connectedCallback() {
     this.addEventListener('name-click', (evt) => {
-      appState.toggleExpanded(evt.detail);
-      this.setDiffRow(evt.detail, appState.isExpanded(evt.detail));
+      this.dispatchEvent(new CustomEvent('toggleExpanded', { bubbles: true, detail: evt.detail }));
     });
 
     this.innerHTML = '<table id="listing"><thead></thead><tbody></tbody></table>';
 
-    this.somethingChanged();
+    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.somethingChanged.bind(this) });
+    this.dispatchEvent(event);
   }
 
-  somethingChanged() {
+  somethingChanged(appState) {
     const header_row = this.headerRow(appState.showRecomp, appState.sortCol, appState.sortDesc);
 
     const rows = [];
 
     // Create rows for this page.
-    for (const obj of appState.pageSlice()) {
+    for (const obj of appState.currentPage) {
       rows.push(this.funcRow(obj, appState.showRecomp));
-      if (appState.isExpanded(obj.address)) {
-        rows.push(this.diffRow(obj.address, appState.showRecomp));
+      if (obj.address in appState.expanded) {
+        rows.push(this.diffRow(obj, appState.showRecomp));
       }
     }
 
@@ -836,7 +841,7 @@ class ListingTable extends window.HTMLElement {
         const span = th.querySelector('span');
         if (span) {
           span.addEventListener('click', () => {
-            appState.sortCol = col;
+            this.dispatchEvent(new CustomEvent('setSortCol', { bubbles: true, detail: col }));
           });
         }
       }
@@ -853,6 +858,7 @@ class ListingTable extends window.HTMLElement {
 }
 
 window.onload = () => {
+  window.customElements.define('reccmp-provider', ReccmpProvider);
   window.customElements.define('listing-table', ListingTable);
   window.customElements.define('listing-options', ListingOptions);
   window.customElements.define('diff-display', DiffDisplay);

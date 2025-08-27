@@ -668,6 +668,10 @@ class ListingOptions extends window.HTMLElement {
     this.querySelector('fieldset#pageDisplay > legend').textContent =
       `Page ${appState.pageNumber + 1} of ${appState.maxPageNumber + 1}`;
 
+    this.querySelector('input#cbHidePerfect').checked = appState.hidePerfect;
+    this.querySelector('input#cbHideStub').checked = appState.hideStub;
+    this.querySelector('input#cbShowRecomp').checked = appState.showRecomp;
+
     // Disable prev/next buttons on first/last page
     setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.pageNumber === 0);
     setBooleanAttribute(

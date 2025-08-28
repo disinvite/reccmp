@@ -366,6 +366,7 @@ class ReccmpProvider extends window.HTMLElement {
     super();
     this.reccmp = new ReccmpState(global_reccmp_data);
     this.listeners = [];
+    this.tables = [];
 
     this.addEventListener('reccmp-register', (evt) => {
       evt.stopImmediatePropagation();
@@ -373,6 +374,11 @@ class ReccmpProvider extends window.HTMLElement {
       // Call the listener immediately after registering.
       // This populates the component with data.
       evt.detail(this.reccmp.state);
+    });
+
+    this.addEventListener('reccmp-table', (evt) => {
+      evt.stopImmediatePropagation();
+      this.tables.push(evt.detail);
     });
 
     this.addEventListener('setHidePerfect', (evt) => {
@@ -422,7 +428,9 @@ class ReccmpProvider extends window.HTMLElement {
 
     this.addEventListener('toggleExpanded', (evt) => {
       this.reccmp.toggleExpanded(evt.detail);
-      this.callListeners();
+      for (const fn of this.tables) {
+        fn(this.reccmp.state);
+      }
     });
   }
 
@@ -812,6 +820,29 @@ class ListingTable extends window.HTMLElement {
     return tr;
   }
 
+  setDiffRow(appState) {
+    const tbody = this.querySelector('tbody');
+
+    for (const obj of appState.currentPage) {
+      const address = obj.address;
+      const funcrow = tbody.querySelector(`tr[data-address="${address}"]`);
+      if (funcrow === null) {
+        continue;
+      }
+
+      const existing = tbody.querySelector(`tr[data-diff="${address}"]`);
+      const isExpanded = existing !== null;
+      const shouldExpand = address in appState.expanded;
+
+      if (!isExpanded && shouldExpand) {
+        // Insert the diff row after the parent func row.
+        funcrow.insertAdjacentElement('afterend', this.diffRow(obj, appState.showRecomp));
+      } else if (isExpanded && !shouldExpand) {
+        tbody.removeChild(existing);
+      }
+    }
+  }
+
   connectedCallback() {
     this.addEventListener('name-click', (evt) => {
       this.dispatchEvent(new CustomEvent('toggleExpanded', { bubbles: true, detail: evt.detail }));
@@ -821,6 +852,7 @@ class ListingTable extends window.HTMLElement {
 
     const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.somethingChanged.bind(this) });
     this.dispatchEvent(event);
+    this.dispatchEvent(new CustomEvent('reccmp-table', { bubbles: true, detail: this.setDiffRow.bind(this) }));
   }
 
   somethingChanged(appState) {

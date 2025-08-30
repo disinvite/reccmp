@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Iterable, Iterator
 import logging
 import colorama
 from pystache import Renderer  # type: ignore[import-untyped]
@@ -10,17 +11,43 @@ from reccmp.isledecomp.compare.report import (
 )
 
 
+def reccmp_pack_generator(lines: Iterable[str]) -> Iterator[str]:
+    copy = False
+
+    for line in lines:
+        if line.strip() == "// reccmp-pack-begin":
+            copy = True
+        elif line.strip() == "// reccmp-pack-end":
+            copy = False
+        elif copy:
+            yield line
+
+    yield "\n"
+
+
+def read_js_file(filename: str) -> str:
+    js_path = get_asset_file(filename)
+    lines = []
+
+    with open(js_path, "r", encoding="utf-8") as f:
+        lines = list(reccmp_pack_generator(f))
+
+    horiz_line = f"/{'*' * 78}/\n"
+    return horiz_line + f"// {filename}\n" + "".join(lines)
+
+
 def write_html_report(html_file: str, report: ReccmpStatusReport):
     """Create the interactive HTML diff viewer with the given report."""
-    js_path = get_asset_file("../assets/reccmp.js")
-    with open(js_path, "r", encoding="utf-8") as f:
-        reccmp_js = f.read()
+    js_files = ["globals.js", "state.js", "provider.js", "components.js", "main.js"]
+    reccmp_js = ""
+    for file in js_files:
+        reccmp_js += read_js_file(file)
 
     # Convert the report to a JSON string to insert in the HTML template.
     report_str = serialize_reccmp_report(report, diff_included=True)
 
     output_data = Renderer().render_path(
-        get_asset_file("../assets/template.html"),
+        get_asset_file("template.html"),
         {"report": report_str, "reccmp_js": reccmp_js},
     )
 

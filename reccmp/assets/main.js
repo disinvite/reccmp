@@ -1,7 +1,8 @@
-import { DiffDisplay, DiffDisplayOptions, ListingTable, SortIndicator } from './components';
+import { DiffDisplay, DiffDisplayOptions, SortIndicator } from './components';
 import ClickToCopy from './components/clickToCopy';
 import HidePerfect from './components/hidePerfect';
 import HideStub from './components/hideStub';
+import ListingTable from './components/listingTable';
 import NextPageButton from './components/nextPageButton';
 import PageNumberOf from './components/pageNumberOf';
 import PageSelect from './components/pageSelect';
@@ -16,10 +17,10 @@ import { ReccmpProvider } from './provider';
 window.onload = () => {
   window.customElements.define('reccmp-provider', ReccmpProvider);
   window.customElements.define('click-to-copy', ClickToCopy); // used by listing-table
+  window.customElements.define('sort-indicator', SortIndicator); // used by listing-table
   window.customElements.define('listing-table', ListingTable);
   window.customElements.define('diff-display', DiffDisplay);
   window.customElements.define('diff-display-options', DiffDisplayOptions);
-  window.customElements.define('sort-indicator', SortIndicator);
   window.customElements.define('search-bar', SearchBar);
   window.customElements.define('hide-perfect', HidePerfect);
   window.customElements.define('hide-stub', HideStub);

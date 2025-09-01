@@ -67,30 +67,6 @@ function formatAsm(entries, _addrOption) {
   return output;
 }
 
-function getMatchPercentText(row) {
-  if ('stub' in row) {
-    return 'stub';
-  }
-
-  if ('effective' in row) {
-    return '100.00%*';
-  }
-
-  return `${(row.matching * 100).toFixed(2)}%`;
-}
-
-function countDiffs(row) {
-  const { diff = '' } = row;
-  if (diff === '') {
-    return '';
-  }
-
-  const diffs = diff.flatMap(([_slug, subgroups]) => subgroups);
-  const diffLength = diffs.filter((d) => !('both' in d)).length;
-  const diffWord = diffLength === 1 ? 'diff' : 'diffs';
-  return diffLength === 0 ? '' : `${diffLength} ${diffWord}`;
-}
-
 // Helper for this set/remove attribute block
 function setBooleanAttribute(element, attribute, value) {
   if (value) {
@@ -102,4 +78,4 @@ function setBooleanAttribute(element, attribute, value) {
 
 // reccmp-pack-end
 
-export { global_reccmp_data, countDiffs, formatAsm, getMatchPercentText, setBooleanAttribute, getDataByAddr };
+export { global_reccmp_data, formatAsm, setBooleanAttribute, getDataByAddr };

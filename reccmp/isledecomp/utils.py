@@ -46,6 +46,7 @@ def write_html_report(html_file: str, report: ReccmpStatusReport):
         "components/clickToCopy.js",
         "components/hidePerfect.js",
         "components/hideStub.js",
+        "components/listingTable.js",
         "components/nextPageButton.js",
         "components/pageNumberOf.js",
         "components/pageSelect.js",

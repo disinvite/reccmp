@@ -127,16 +127,11 @@
         user-select: none;
       }
 
-      fieldset {
+      /* Spread out inputs horizontally. */
+      fieldset, search-options {
         align-items: center;
         display: flex;
-      }
-
-      /* Spread out inputs horizontally.
-      This selector (versus "fieldset > label") includes
-      labels inside custom components. */
-      fieldset label {
-        margin-right: 10px;
+        gap: 10px;
       }
 
       table.diffTable {
@@ -286,18 +281,13 @@
             </fieldset>
             <fieldset>
               <legend>Search filters on:</legend>
-              <input type="radio" name="filterType" id="filterName" value=1 checked />
-              <label for="filterName">Name/address</label>
-              <input type="radio" name="filterType" id="filterAsm" value=2 />
-              <label for="filterAsm">Asm output</label>
-              <input type="radio" name="filterType" id="filterDiff" value=3 />
-              <label for="filterDiff">Asm diffs only</label>
+              <search-options></search-options>
             </fieldset>
           </div>
           <div class="filters">
-            <p class="rowcount">Results: <span id="rowcount"></span></p>
+            <p class="rowcount">Results: <result-count></p>
             <fieldset id="pageDisplay">
-              <legend>Page</legend>
+              <legend><page-number-of></page-number-of></legend>
               <button id="pagePrev">prev</button>
               <select id="pageSelect">
               </select>

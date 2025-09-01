@@ -195,12 +195,6 @@ class ListingOptions extends window.HTMLElement {
     this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
       this.dispatchEvent(new CustomEvent('setPage', { bubbles: true, detail: evt.target.value }));
     });
-
-    this.querySelectorAll('input[name=filterType]').forEach((radio) => {
-      radio.addEventListener('change', () => {
-        this.dispatchEvent(new CustomEvent('setFilterType', { bubbles: true, detail: radio.getAttribute('value') }));
-      });
-    });
   }
 
   connectedCallback() {
@@ -209,15 +203,6 @@ class ListingOptions extends window.HTMLElement {
   }
 
   onUpdate(appState) {
-    this.querySelectorAll('input[name=filterType]').forEach((radio) => {
-      const checked = appState.filterType === parseInt(radio.getAttribute('value'));
-      radio.checked = checked;
-    });
-
-    // Update page number and max page
-    this.querySelector('fieldset#pageDisplay > legend').textContent =
-      `Page ${appState.pageNumber + 1} of ${appState.maxPageNumber + 1}`;
-
     // Disable prev/next buttons on first/last page
     setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.pageNumber === 0);
     setBooleanAttribute(
@@ -249,9 +234,6 @@ class ListingOptions extends window.HTMLElement {
         pageSelect.appendChild(opt);
       }
     }
-
-    // Update row count
-    this.querySelector('#rowcount').textContent = `${appState.results.length}`;
   }
 }
 

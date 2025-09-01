@@ -2,6 +2,7 @@ import { CanCopy, DiffDisplay, DiffDisplayOptions, ListingOptions, ListingTable,
 import HidePerfect from './components/hidePerfect';
 import HideStub from './components/hideStub';
 import PageNumberOf from './components/pageNumberOf';
+import PageSelect from './components/pageSelect';
 import ResultCount from './components/resultCount';
 import SearchBar from './components/searchbar';
 import SearchOptions from './components/searchOptions';
@@ -23,5 +24,6 @@ window.onload = () => {
   window.customElements.define('search-options', SearchOptions);
   window.customElements.define('show-recomp', ShowRecomp);
   window.customElements.define('page-number-of', PageNumberOf);
+  window.customElements.define('page-select', PageSelect);
   window.customElements.define('can-copy', CanCopy);
 };

@@ -70,25 +70,6 @@ function formatAsm(entries, _addrOption) {
   return output;
 }
 
-function getCppClass(str) {
-  const idx = str.indexOf('::');
-  if (idx !== -1) {
-    return str.slice(0, idx);
-  }
-
-  return str;
-}
-
-// Clamp string length to specified length and pad with ellipsis
-function stringTruncate(str, maxlen = 20) {
-  str = getCppClass(str);
-  if (str.length > maxlen) {
-    return `${str.slice(0, maxlen)}...`;
-  }
-
-  return str;
-}
-
 function getMatchPercentText(row) {
   if ('stub' in row) {
     return 'stub';
@@ -122,23 +103,6 @@ function setBooleanAttribute(element, attribute, value) {
   }
 }
 
-function pageHeadings(pages, sortCol) {
-  return pages.map((page, index) => {
-    const first = page[0];
-    const last = page[page.length - 1];
-
-    let start = first[sortCol];
-    let end = last[sortCol];
-
-    if (sortCol === 'matching') {
-      start = getMatchPercentText(first);
-      end = getMatchPercentText(last);
-    }
-
-    return [index, stringTruncate(start), stringTruncate(end)];
-  });
-}
-
 function copyToClipboard(value) {
   navigator.clipboard.writeText(value);
 }
@@ -151,7 +115,6 @@ export {
   formatAsm,
   getMatchPercentText,
   setBooleanAttribute,
-  pageHeadings,
   getDataByAddr,
   copyToClipboard,
 };

@@ -4,7 +4,6 @@ import {
   formatAsm,
   getDataByAddr,
   getMatchPercentText,
-  pageHeadings,
   setBooleanAttribute,
 } from './globals';
 
@@ -191,10 +190,6 @@ class ListingOptions extends window.HTMLElement {
     this.querySelector('button#pageNext').addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('nextPage', { bubbles: true }));
     });
-
-    this.querySelector('select#pageSelect').addEventListener('change', (evt) => {
-      this.dispatchEvent(new CustomEvent('setPage', { bubbles: true, detail: evt.target.value }));
-    });
   }
 
   connectedCallback() {
@@ -210,30 +205,6 @@ class ListingOptions extends window.HTMLElement {
       'disabled',
       appState.pageNumber === appState.maxPageNumber,
     );
-
-    // Update page select dropdown
-    const pageSelect = this.querySelector('select#pageSelect');
-    setBooleanAttribute(pageSelect, 'disabled', appState.results.length === 0);
-    pageSelect.innerHTML = '';
-
-    if (appState.results.length === 0) {
-      const opt = document.createElement('option');
-      opt.textContent = '- no results -';
-      pageSelect.appendChild(opt);
-    } else {
-      for (const row of pageHeadings(appState.pages, appState.sortCol)) {
-        const opt = document.createElement('option');
-        opt.value = row[0];
-        if (appState.pageNumber === row[0]) {
-          opt.setAttribute('selected', '');
-        }
-
-        const [start, end] = [row[1], row[2]];
-
-        opt.textContent = `${appState.sortCol}: ${start} to ${end}`;
-        pageSelect.appendChild(opt);
-      }
-    }
   }
 }
 

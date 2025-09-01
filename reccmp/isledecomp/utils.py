@@ -46,6 +46,7 @@ def write_html_report(html_file: str, report: ReccmpStatusReport):
         "components/hidePerfect.js",
         "components/hideStub.js",
         "components/pageNumberOf.js",
+        "components/pageSelect.js",
         "components/resultCount.js",
         "components/showRecomp.js",
         "components/searchbar.js",

@@ -1,8 +1,5 @@
-import * as global_report from '../../webui/testdata.json';
-
-const global_reccmp_data = global_report.data;
-
 // reccmp-pack-begin
+const global_reccmp_data = window.global_reccmp_report.data;
 
 // Unwrap array of functions into a dictionary with address as the key.
 const dataDict = Object.fromEntries(global_reccmp_data.map((row) => [row.address, row]));

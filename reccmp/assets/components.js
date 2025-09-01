@@ -184,23 +184,6 @@ class ListingOptions extends window.HTMLElement {
   constructor() {
     super();
 
-    const input = this.querySelector('input[type=search]');
-    input.addEventListener('input', (evt) => {
-      this.dispatchEvent(new CustomEvent('setQuery', { bubbles: true, detail: evt.target.value }));
-    });
-
-    this.querySelector('input#cbHidePerfect').addEventListener('change', (evt) => {
-      this.dispatchEvent(new CustomEvent('setHidePerfect', { bubbles: true, detail: evt.target.checked }));
-    });
-
-    this.querySelector('input#cbHideStub').addEventListener('change', (evt) => {
-      this.dispatchEvent(new CustomEvent('setHideStub', { bubbles: true, detail: evt.target.checked }));
-    });
-
-    this.querySelector('input#cbShowRecomp').addEventListener('change', (evt) => {
-      this.dispatchEvent(new CustomEvent('setShowRecomp', { bubbles: true, detail: evt.target.checked }));
-    });
-
     this.querySelector('button#pagePrev').addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('prevPage', { bubbles: true }));
     });
@@ -226,10 +209,6 @@ class ListingOptions extends window.HTMLElement {
   }
 
   onUpdate(appState) {
-    // Update input placeholder based on search type
-    this.querySelector('input[type=search]').placeholder =
-      appState.filterType === 1 ? 'Search for offset or function name...' : 'Search for instruction...';
-
     this.querySelectorAll('input[name=filterType]').forEach((radio) => {
       const checked = appState.filterType === parseInt(radio.getAttribute('value'));
       radio.checked = checked;
@@ -238,10 +217,6 @@ class ListingOptions extends window.HTMLElement {
     // Update page number and max page
     this.querySelector('fieldset#pageDisplay > legend').textContent =
       `Page ${appState.pageNumber + 1} of ${appState.maxPageNumber + 1}`;
-
-    this.querySelector('input#cbHidePerfect').checked = appState.hidePerfect;
-    this.querySelector('input#cbHideStub').checked = appState.hideStub;
-    this.querySelector('input#cbShowRecomp').checked = appState.showRecomp;
 
     // Disable prev/next buttons on first/last page
     setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.pageNumber === 0);

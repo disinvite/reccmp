@@ -19,7 +19,7 @@
         margin: auto;
       }
 
-      #search {
+      search-bar > input {
         width: 100%;
         box-sizing: border-box;
         background: #303030;
@@ -29,7 +29,7 @@
         border-radius: 0.5em;
       }
 
-      #search::placeholder {
+      search-bar > input::placeholder {
         color: #b0b0b0;
       }
 
@@ -122,17 +122,20 @@
         margin: 0.5em 0 1em 0;
       }
 
-      .filters > fieldset {
-        /* checkbox and radio buttons v-aligned with text */
+      label, input[type=checkbox], input[type=radio] {
+        cursor: pointer;
+        user-select: none;
+      }
+
+      fieldset {
         align-items: center;
         display: flex;
       }
 
-      .filters > fieldset > input, .filters > fieldset > label {
-        cursor: pointer;
-      }
-
-      .filters > fieldset > label {
+      /* Spread out inputs horizontally.
+      This selector (versus "fieldset > label") includes
+      labels inside custom components. */
+      fieldset label {
         margin-right: 10px;
       }
 
@@ -273,16 +276,13 @@
       <h1>Decompilation Status</h1>
       <reccmp-provider>
         <listing-options>
-          <input id="search" type="search" placeholder="Search for offset or function name...">
+          <search-bar></search-bar>
           <div class="filters">
             <fieldset>
               <legend>Options:</legend>
-              <input type="checkbox" id="cbHidePerfect" />
-              <label for="cbHidePerfect">Hide 100% match</label>
-              <input type="checkbox" id="cbHideStub" />
-              <label for="cbHideStub">Hide stubs</label>
-              <input type="checkbox" id="cbShowRecomp" />
-              <label for="cbShowRecomp">Show recomp address</label>
+              <hide-perfect></hide-perfect>
+              <hide-stub></hide-stub>
+              <show-recomp></show-recomp>
             </fieldset>
             <fieldset>
               <legend>Search filters on:</legend>

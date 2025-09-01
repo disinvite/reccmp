@@ -38,7 +38,17 @@ def read_js_file(filename: str) -> str:
 
 def write_html_report(html_file: str, report: ReccmpStatusReport):
     """Create the interactive HTML diff viewer with the given report."""
-    js_files = ["globals.js", "state.js", "provider.js", "components.js", "main.js"]
+    js_files = [
+        "globals.js",
+        "state.js",
+        "provider.js",
+        "components.js",
+        "components/hidePerfect.js",
+        "components/hideStub.js",
+        "components/showRecomp.js",
+        "components/searchbar.js",
+        "main.js",
+    ]
     reccmp_js = ""
     for file in js_files:
         reccmp_js += read_js_file(file)

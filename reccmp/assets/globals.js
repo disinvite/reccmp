@@ -100,18 +100,6 @@ function setBooleanAttribute(element, attribute, value) {
   }
 }
 
-function copyToClipboard(value) {
-  navigator.clipboard.writeText(value);
-}
-
 // reccmp-pack-end
 
-export {
-  global_reccmp_data,
-  countDiffs,
-  formatAsm,
-  getMatchPercentText,
-  setBooleanAttribute,
-  getDataByAddr,
-  copyToClipboard,
-};
+export { global_reccmp_data, countDiffs, formatAsm, getMatchPercentText, setBooleanAttribute, getDataByAddr };

@@ -1,11 +1,4 @@
-import {
-  copyToClipboard,
-  countDiffs,
-  formatAsm,
-  getDataByAddr,
-  getMatchPercentText,
-  setBooleanAttribute,
-} from './globals';
+import { countDiffs, formatAsm, getDataByAddr, getMatchPercentText, setBooleanAttribute } from './globals';
 
 // reccmp-pack-begin
 
@@ -20,32 +13,6 @@ class SortIndicator extends window.HTMLElement {
     } else {
       this.innerHTML = newValue === 'asc' ? '&#9650;' : '&#9660;';
     }
-  }
-}
-
-class CanCopy extends window.HTMLElement {
-  connectedCallback() {
-    this.addEventListener('mouseout', () => {
-      this.copied = false;
-    });
-
-    this.addEventListener('click', (evt) => {
-      copyToClipboard(evt.target.textContent);
-      this.copied = true;
-    });
-  }
-
-  get copied() {
-    return this.getAttribute('copied');
-  }
-
-  set copied(value) {
-    if (value) {
-      setTimeout(() => {
-        this.copied = false;
-      }, 2000);
-    }
-    setBooleanAttribute(this, 'copied', value);
   }
 }
 
@@ -179,35 +146,6 @@ class DiffDisplay extends window.HTMLElement {
   }
 }
 
-class ListingOptions extends window.HTMLElement {
-  constructor() {
-    super();
-
-    this.querySelector('button#pagePrev').addEventListener('click', () => {
-      this.dispatchEvent(new CustomEvent('prevPage', { bubbles: true }));
-    });
-
-    this.querySelector('button#pageNext').addEventListener('click', () => {
-      this.dispatchEvent(new CustomEvent('nextPage', { bubbles: true }));
-    });
-  }
-
-  connectedCallback() {
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.onUpdate.bind(this) });
-    this.dispatchEvent(event);
-  }
-
-  onUpdate(appState) {
-    // Disable prev/next buttons on first/last page
-    setBooleanAttribute(this.querySelector('button#pagePrev'), 'disabled', appState.pageNumber === 0);
-    setBooleanAttribute(
-      this.querySelector('button#pageNext'),
-      'disabled',
-      appState.pageNumber === appState.maxPageNumber,
-    );
-  }
-}
-
 // Main application.
 class ListingTable extends window.HTMLElement {
   diffRow(obj, showRecomp) {
@@ -242,7 +180,7 @@ class ListingTable extends window.HTMLElement {
       const td = document.createElement('td');
       td.setAttribute('data-col', dataCol);
       if (canCopy) {
-        const copy = document.createElement('can-copy');
+        const copy = document.createElement('click-to-copy');
         copy.textContent = textContent;
         td.append(copy);
       } else {
@@ -386,4 +324,4 @@ class ListingTable extends window.HTMLElement {
 
 // reccmp-pack-end
 
-export { CanCopy, DiffDisplay, DiffDisplayOptions, ListingOptions, ListingTable, SortIndicator };
+export { DiffDisplay, DiffDisplayOptions, ListingTable, SortIndicator };

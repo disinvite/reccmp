@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 class HideStub extends window.HTMLElement {
   connectedCallback() {
@@ -6,8 +8,7 @@ class HideStub extends window.HTMLElement {
       this.dispatchEvent(new CustomEvent('setHideStub', { bubbles: true, detail: evt.target.checked }));
     });
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ hideStub }) {

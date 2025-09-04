@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 function getCppClass(str) {
   const idx = str.indexOf('::');
@@ -43,8 +45,7 @@ class PageSelect extends window.HTMLElement {
       this.dispatchEvent(new CustomEvent('setPage', { bubbles: true, detail: evt.target.value }));
     });
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ pages, pageNumber, results, sortCol }) {

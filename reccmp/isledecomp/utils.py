@@ -40,6 +40,7 @@ def write_html_report(html_file: str, report: ReccmpStatusReport):
     """Create the interactive HTML diff viewer with the given report."""
     js_files = [
         "globals.js",
+        "events.js",
         "state.js",
         "provider.js",
         "components.js",

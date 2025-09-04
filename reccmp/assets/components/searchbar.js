@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 class SearchBar extends window.HTMLElement {
   connectedCallback() {
@@ -6,8 +8,7 @@ class SearchBar extends window.HTMLElement {
       this.dispatchEvent(new CustomEvent('setQuery', { bubbles: true, detail: evt.target.value }));
     });
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ query, filterType }) {

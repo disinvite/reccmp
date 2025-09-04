@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 function countDiffs(row) {
   const { diff = '' } = row;
@@ -128,8 +130,7 @@ class ListingTable extends window.HTMLElement {
   connectedCallback() {
     this.innerHTML = '<table id="listing"><thead></thead><tbody></tbody></table>';
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
     this.dispatchEvent(new CustomEvent('reccmp-table', { bubbles: true, detail: this.setDiffRow.bind(this) }));
   }
 

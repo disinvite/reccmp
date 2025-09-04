@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 class SearchOptions extends window.HTMLElement {
   connectedCallback() {
@@ -12,8 +14,7 @@ class SearchOptions extends window.HTMLElement {
       });
     });
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ filterType }) {

@@ -1,3 +1,5 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 class PrevPageButton extends window.HTMLElement {
   connectedCallback() {
@@ -6,8 +8,7 @@ class PrevPageButton extends window.HTMLElement {
       this.dispatchEvent(new CustomEvent('prevPage', { bubbles: true }));
     });
 
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ pageNumber }) {

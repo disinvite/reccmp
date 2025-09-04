@@ -1,8 +1,9 @@
+import { ReccmpRegisterEvent } from '../events';
+
 // reccmp-pack-begin
 class ResultCount extends window.HTMLElement {
   connectedCallback() {
-    const event = new CustomEvent('reccmp-register', { bubbles: true, detail: this.update.bind(this) });
-    this.dispatchEvent(event);
+    this.dispatchEvent(new ReccmpRegisterEvent(this.update.bind(this)));
   }
 
   update({ results }) {

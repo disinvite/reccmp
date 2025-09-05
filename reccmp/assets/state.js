@@ -103,12 +103,13 @@ function batched(input, chunkSize) {
 
 class ReccmpState {
   constructor(dataset) {
-    // Full dataset and filtered list (before paging)
     this.dataset = dataset;
-    this.pageSize = 200;
+    this.pageSize = 200; // TODO: This should be configurable.
     this.state = {
       // Filtered list of entities
       results: this.dataset,
+
+      // results split into subarrays according to the pageSize.
       pages: [],
 
       // Sort column and direction
@@ -129,13 +130,30 @@ class ReccmpState {
       // Rows with detail row (keyed by address)
       expanded: {},
 
-      // Paging
+      // Paging. Numbers are 0-based. Display components add 1 to both for.
       currentPage: [],
       pageNumber: 0,
       maxPageNumber: 0,
     };
 
+    // Populate fields with default search options.
     this.updateResults();
+  }
+
+  clampPage(desiredPage) {
+    // Clamp desiredPage to (0, maxPageNumber] --> a page that actually exists.
+    return Math.max(0, Math.min(desiredPage, this.state.maxPageNumber));
+  }
+
+  updateCurrentPage() {
+    // Should be called whenever state.pageNumber changes.
+    // If the current search filters yield no results, then there will be no pages
+    // so don't try to index the pages array in that case.
+    if (this.state.pages.length > 0) {
+      this.state.currentPage = this.state.pages[this.state.pageNumber];
+    } else {
+      this.state.currentPage = [];
+    }
   }
 
   updateResults() {
@@ -146,24 +164,19 @@ class ReccmpState {
     this.state.pages = batched(this.state.results, this.pageSize);
     this.state.maxPageNumber = Math.max(0, this.state.pages.length - 1);
     this.state.pageNumber = Math.min(this.state.pageNumber, this.state.maxPageNumber);
-
-    if (this.state.pages.length > 0) {
-      this.state.currentPage = this.state.pages[this.state.pageNumber];
-    } else {
-      this.state.currentPage = [];
-    }
+    this.updateCurrentPage();
   }
 
   setPageNumber(page) {
-    // Clamp page to what's available
-    this.state.pageNumber = Math.max(0, Math.min(page, this.state.maxPageNumber));
-    const startIdx = this.state.pageNumber * this.pageSize;
-    const endIdx = (this.state.pageNumber + 1) * this.pageSize;
-    this.state.currentPage = this.state.results.slice(startIdx, endIdx);
+    this.state.pageNumber = this.clampPage(page);
+    this.updateCurrentPage();
   }
 
   setFilterType(value) {
-    const filterType = parseInt(value); // coerce int
+    // 1: Search by address or name.
+    // 2: Search disassembly.
+    // 3: Search disassembly, diff instructions only.
+    const filterType = parseInt(value);
     if (filterType >= 1 && filterType <= 3) {
       this.state.filterType = filterType;
     }
@@ -177,15 +190,18 @@ class ReccmpState {
   }
 
   setShowRecomp(value) {
-    // Don't sort by the recomp column we are about to hide
-    if (!value && this.state.sortCol === 'recomp') {
-      this.state.sortCol = 'address';
-    }
-
     this.state.showRecomp = value;
+
+    // Don't sort by the recomp column we are about to hide
+    if (!this.state.showRecomp && this.state.sortCol === 'recomp') {
+      this.state.sortCol = 'address';
+      // Re-sort using the address column (GH issue #195)
+      this.updateResults();
+    }
   }
 
   setSortCol(column) {
+    // Flip sort direction if this is the current sort column.
     if (column === this.state.sortCol) {
       this.state.sortDesc = !this.state.sortDesc;
     } else {

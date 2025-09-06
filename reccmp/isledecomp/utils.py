@@ -12,6 +12,9 @@ from reccmp.isledecomp.compare.report import (
 
 
 def reccmp_pack_generator(lines: Iterable[str]) -> Iterator[str]:
+    """Emits only lines between the "reccmp-pack-begin" and "reccmp-pack-end" markers.
+    Intended to remove ES6 imports and exports that are not compatible with our
+    HTML report as served through the file:/// protocol."""
     copy = False
 
     for line in lines:
@@ -26,6 +29,10 @@ def reccmp_pack_generator(lines: Iterable[str]) -> Iterator[str]:
 
 
 def read_js_file(filename: str) -> str:
+    """Read the given file from the assets directory and prepare
+    to be packed into the main distribution .js file.
+    This only captures lines between "reccmp-pack-begin" and "reccmp-pack-end"
+    and adds a header with the source filename."""
     js_path = get_asset_file(filename)
     lines = []
 
@@ -38,6 +45,8 @@ def read_js_file(filename: str) -> str:
 
 def write_html_report(html_file: str, report: ReccmpStatusReport):
     """Create the interactive HTML diff viewer with the given report."""
+    # For the flat-file report, the component JS files must be added in a particular order
+    # so that any dependencies required by a particular file have already been resolved.
     js_files = [
         "globals.js",
         "events.js",

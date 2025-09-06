@@ -106,9 +106,9 @@ function createHeaderRow(showRecomp, sortCol, sortDesc) {
       return th;
     }
 
-    const sort_indicator = document.createElement('sort-indicator');
+    const sort_indicator = document.createElement('div');
     if (key === sortCol) {
-      sort_indicator.setAttribute('data-sort', sortDesc ? 'desc' : 'asc');
+      sort_indicator.innerHTML = sortDesc ? '&#9660' : '&#9650';
     }
 
     const th = document.createElement('th');

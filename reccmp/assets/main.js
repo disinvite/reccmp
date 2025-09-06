@@ -1,4 +1,4 @@
-import { DiffDisplay, DiffDisplayOptions, SortIndicator } from './components';
+import { DiffDisplay, DiffDisplayOptions } from './components';
 import ClickToCopy from './components/clickToCopy';
 import HidePerfect from './components/hidePerfect';
 import HideStub from './components/hideStub';
@@ -17,7 +17,6 @@ import { ReccmpProvider } from './provider';
 window.onload = () => {
   window.customElements.define('reccmp-provider', ReccmpProvider);
   window.customElements.define('click-to-copy', ClickToCopy); // used by listing-table
-  window.customElements.define('sort-indicator', SortIndicator); // used by listing-table
   window.customElements.define('listing-table', ListingTable);
   window.customElements.define('diff-display', DiffDisplay);
   window.customElements.define('diff-display-options', DiffDisplayOptions);

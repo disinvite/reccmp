@@ -2,20 +2,6 @@ import { formatAsm, getDataByAddr, setBooleanAttribute } from './globals';
 
 // reccmp-pack-begin
 
-// Sets sort indicator arrow based on element attributes.
-class SortIndicator extends window.HTMLElement {
-  static observedAttributes = ['data-sort'];
-
-  attributeChangedCallback(_name, _oldValue, newValue) {
-    if (newValue === null) {
-      // Reserve space for blank indicator so column width stays the same
-      this.innerHTML = '&nbsp;';
-    } else {
-      this.innerHTML = newValue === 'asc' ? '&#9650;' : '&#9660;';
-    }
-  }
-}
-
 class DiffDisplayOptions extends window.HTMLElement {
   static observedAttributes = ['data-option'];
 
@@ -147,4 +133,4 @@ class DiffDisplay extends window.HTMLElement {
 }
 // reccmp-pack-end
 
-export { DiffDisplay, DiffDisplayOptions, SortIndicator };
+export { DiffDisplay, DiffDisplayOptions };

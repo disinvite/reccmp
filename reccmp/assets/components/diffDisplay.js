@@ -1,4 +1,4 @@
-import { formatAsm, getDataByAddr, setBooleanAttribute } from './globals';
+import { formatAsm, getDataByAddr, setBooleanAttribute } from '../globals';
 
 // reccmp-pack-begin
 

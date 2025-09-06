@@ -1,5 +1,5 @@
-import { DiffDisplay, DiffDisplayOptions } from './components';
 import ClickToCopy from './components/clickToCopy';
+import { DiffDisplay, DiffDisplayOptions } from './components/diffDisplay';
 import HidePerfect from './components/hidePerfect';
 import HideStub from './components/hideStub';
 import ListingTable from './components/listingTable';

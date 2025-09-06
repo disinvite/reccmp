@@ -28,11 +28,15 @@ function getMatchPercentText(row) {
 function createDiffRow(obj, showRecomp) {
   let contents;
 
+  // If "diff" is undefined or empty, that means
+  // there are no diffs for this entity. (GH #201)
+  const { diff = [] } = obj;
+
   if ('stub' in obj) {
     contents = document.createElement('div');
     contents.setAttribute('class', 'no-diff');
     contents.textContent = 'Stub. No diff.';
-  } else if (obj.diff.length === 0) {
+  } else if (diff.length === 0) {
     contents = document.createElement('div');
     contents.setAttribute('class', 'no-diff');
     contents.textContent = 'Identical function - no diff';

@@ -104,7 +104,6 @@ function batched(input, chunkSize) {
 class ReccmpState {
   constructor(dataset) {
     this.dataset = dataset;
-    this.pageSize = 200; // TODO: This should be configurable.
     this.state = {
       // Filtered list of entities
       results: this.dataset,
@@ -134,6 +133,7 @@ class ReccmpState {
       currentPage: [],
       pageNumber: 0,
       maxPageNumber: 0,
+      pageSize: 200,
     };
 
     // Populate fields with default search options.
@@ -161,7 +161,7 @@ class ReccmpState {
     const sortFn = createSortFunction(this.state);
 
     this.state.results = this.dataset.filter(filterFn).sort(sortFn);
-    this.state.pages = batched(this.state.results, this.pageSize);
+    this.state.pages = batched(this.state.results, this.state.pageSize);
     this.state.maxPageNumber = Math.max(0, this.state.pages.length - 1);
     this.state.pageNumber = Math.min(this.state.pageNumber, this.state.maxPageNumber);
     this.updateCurrentPage();
@@ -218,6 +218,11 @@ class ReccmpState {
 
   setHideStub(value) {
     this.state.hideStub = value;
+    this.updateResults();
+  }
+
+  setPageSize(value) {
+    this.state.pageSize = parseInt(value);
     this.updateResults();
   }
 

@@ -68,6 +68,11 @@ class ReccmpProvider extends window.HTMLElement {
       this.callListeners();
     });
 
+    this.addEventListener('setPageSize', (evt) => {
+      this.reccmp.setPageSize(evt.detail);
+      this.callListeners();
+    });
+
     this.addEventListener('toggleExpanded', (evt) => {
       this.reccmp.toggleExpanded(evt.detail);
       for (const fn of this.tables) {

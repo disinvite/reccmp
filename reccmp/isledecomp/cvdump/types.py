@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import re
 import logging
 from typing import Any, NamedTuple
+from .fieldlist import parse_fieldlist
 
 
 logger = logging.getLogger(__name__)
@@ -512,76 +513,59 @@ class CvdumpTypesParser:
         obj: dict[str, Any] = {}
         members = []
 
+        fieldlist = parse_fieldlist(leaf)
+
         # If this class has a vtable, create a mock member at offset 0
-        if self.VTABLE_RE.search(leaf) is not None:
+        if fieldlist.vfunctabs:
             # For our purposes, any pointer type will do
             members.append({"offset": 0, "type": "T_32PVOID", "name": "vftable"})
 
-        # Superclass is set here in the fieldlist rather than in LF_CLASS
-        for match in self.SUPERCLASS_RE.finditer(leaf):
-            superclass_list: dict[str, int] = obj.setdefault("super", {})
-            superclass_list[normalize_type_id(match.group("type"))] = int(
-                match.group("offset")
-            )
+        if fieldlist.bases:
+            obj["super"] = {b.type: b.offset for b in fieldlist.bases}
 
-        # virtual base class (direct or indirect)
-        for match in self.VBCLASS_RE.finditer(leaf):
-            virtual_base_pointer = obj.setdefault(
-                "vbase",
-                VirtualBasePointer(
-                    vboffset=-1,  # default to -1 until we parse the correct value
-                    bases=[],
-                ),
-            )
-            assert isinstance(
-                virtual_base_pointer, VirtualBasePointer
-            )  # type checker only
+        members.extend(
+            [
+                {
+                    "offset": mem.offset,
+                    "type": mem.type,
+                    "name": mem.name,
+                }
+                for mem in fieldlist.members
+            ]
+        )
 
-            virtual_base_pointer.bases.append(
-                VirtualBaseClass(
-                    type=match.group("type"),
-                    index=-1,  # default to -1 until we parse the correct value
-                    direct=match.group("indirect") != "I",
-                )
-            )
+        if fieldlist.variants:
+            obj["variants"] = [
+                {"name": v.name, "value": v.value} for v in fieldlist.variants
+            ]
 
-            vboffset = int(match.group("vboffset"))
-
-            if virtual_base_pointer.vboffset == -1:
-                # default value
-                virtual_base_pointer.vboffset = vboffset
-            elif virtual_base_pointer.vboffset != vboffset:
+        if fieldlist.virtual_bases:
+            vboffsets = [v.vboffset for v in fieldlist.virtual_bases]
+            if len(set(vboffsets)) != 1:
                 # vboffset is always equal to 4 in our examples. We are not sure if there can be multiple
                 # virtual base pointers, and if so, how the layout is supposed to look.
                 # We therefore assume that there is always only one virtual base pointer.
                 logger.error(
-                    "Unhandled: Found multiple virtual base pointers at offsets %d and %d",
-                    virtual_base_pointer.vboffset,
-                    vboffset,
+                    "Unhandled: Found multiple virtual base pointers: %s",
+                    set(vboffsets),
                 )
 
-            virtual_base_pointer.bases[-1].index = int(match.group("vbindex"))
-            # these come out of order, and the lists are so short that it's fine to sort them every time
-            virtual_base_pointer.bases.sort(key=lambda x: x.index)
+            bases = [
+                VirtualBaseClass(
+                    type=v.type,
+                    index=v.vbindex,
+                    direct=v.direct,
+                )
+                for v in fieldlist.virtual_bases
+            ]
 
-        members += [
-            {
-                "offset": int(offset),
-                "type": normalize_type_id(type_),
-                "name": name,
-            }
-            for (_, type_, offset, name) in self.LIST_RE.findall(leaf)
-        ]
+            # these come out of order, and the lists are so short that it's fine to sort them every time
+            bases.sort(key=lambda v: v.index)
+
+            obj["vbase"] = VirtualBasePointer(vboffset=vboffsets[0], bases=bases)
 
         if members:
             obj["members"] = members
-
-        variants = [
-            {"name": name, "value": int(value)}
-            for value, name in self.LF_FIELDLIST_ENUMERATE.findall(leaf)
-        ]
-        if variants:
-            obj["variants"] = variants
 
         return obj
 

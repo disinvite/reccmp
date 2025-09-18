@@ -34,16 +34,16 @@ function createDiffRow(obj, showRecomp) {
 
   if ('stub' in obj) {
     contents = document.createElement('div');
-    contents.setAttribute('class', 'no-diff');
+    contents.className = 'no-diff';
     contents.textContent = 'Stub. No diff.';
   } else if (diff.length === 0) {
     contents = document.createElement('div');
-    contents.setAttribute('class', 'no-diff');
+    contents.className = 'no-diff';
     contents.textContent = 'Identical function - no diff';
   } else {
     contents = document.createElement('diff-display');
-    contents.setAttribute('data-option', '1');
-    contents.setAttribute('data-address', obj.address);
+    contents.dataset.option = '1';
+    contents.dataset.address = obj.address;
   }
 
   const td = document.createElement('td');
@@ -51,7 +51,7 @@ function createDiffRow(obj, showRecomp) {
   td.append(contents);
 
   const tr = document.createElement('tr');
-  tr.setAttribute('data-diff', obj.address);
+  tr.dataset.diff = obj.address;
   tr.append(td);
   return tr;
 }
@@ -59,7 +59,7 @@ function createDiffRow(obj, showRecomp) {
 function createFuncRow(obj, showRecomp) {
   const createColumn = (dataCol, canCopy, textContent) => {
     const td = document.createElement('td');
-    td.setAttribute('data-col', dataCol);
+    td.dataset.col = dataCol;
     if (canCopy) {
       const copy = document.createElement('click-to-copy');
       copy.textContent = textContent;
@@ -84,7 +84,7 @@ function createFuncRow(obj, showRecomp) {
   }
 
   const tr = document.createElement('tr');
-  tr.setAttribute('data-address', obj.address);
+  tr.dataset.address = obj.address;
   tr.append(...Object.values(cols));
   return tr;
 }
@@ -105,8 +105,8 @@ function createHeaderRow(showRecomp, sortCol, sortDesc) {
   const headers = Object.entries(cols).map(([key, name]) => {
     if (key === 'diffs') {
       const th = document.createElement('th');
-      th.setAttribute('data-col', 'diffs');
-      th.setAttribute('data-no-sort', true);
+      th.dataset.col = 'diffs';
+      th.dataset.noSort = true;
       return th;
     }
 
@@ -116,7 +116,7 @@ function createHeaderRow(showRecomp, sortCol, sortDesc) {
     }
 
     const th = document.createElement('th');
-    th.setAttribute('data-col', key);
+    th.dataset.col = key;
     const div = document.createElement('div');
     const span = document.createElement('span');
     span.textContent = name;
@@ -155,7 +155,7 @@ class ListingTable extends window.HTMLElement {
     this.querySelector('tbody').replaceChildren(...rows);
 
     this.querySelectorAll('th:not([data-no-sort])').forEach((th) => {
-      const col = th.getAttribute('data-col');
+      const col = th.dataset.col;
       if (col) {
         const span = th.querySelector('span');
         if (span) {
@@ -171,7 +171,7 @@ class ListingTable extends window.HTMLElement {
       // This is added or removed without replacing the entire <tbody>.
       row.querySelector('td[data-col="name"]').addEventListener('click', () => {
         this.dispatchEvent(
-          new CustomEvent('toggleExpanded', { bubbles: true, detail: row.getAttribute('data-address') }),
+          new CustomEvent('toggleExpanded', { bubbles: true, detail: row.dataset.address }),
         );
       });
     });

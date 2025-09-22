@@ -127,7 +127,15 @@
       fieldset, search-options {
         align-items: center;
         display: flex;
+      }
+
+      search-options {
         gap: 10px;
+      }
+
+      fieldset:not(#pageDisplay) {
+        gap: 10px;
+        padding-right: 20px;
       }
 
       table.diffTable {
@@ -159,6 +167,8 @@
       }
 
       label {
+        align-items: center;
+        display: flex;
         user-select: none;
       }
 

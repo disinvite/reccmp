@@ -6,7 +6,7 @@ import sqlite3
 import logging
 import json
 from functools import cached_property
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from reccmp.isledecomp.types import EntityType
 
 _SETUP_SQL = """
@@ -16,6 +16,13 @@ _SETUP_SQL = """
         kvstore text default '{}',
         ref_orig integer as (json_extract(kvstore, '$.ref_orig')),
         ref_recomp integer as (json_extract(kvstore, '$.ref_recomp'))
+    );
+
+    CREATE TABLE raw (
+        img integer not null,
+        addr integer not null,
+        data blob,
+        primary key (img, addr)
     );
 
     CREATE VIEW orig_refs (orig_addr, ref_id, nth) AS
@@ -486,3 +493,58 @@ class EntityDb:
         ).fetchone()
 
         return result[0] if result is not None else None
+
+    def read_strings(
+        self, img: int, read_func: Callable[[int, int | None, bool], bytes]
+    ):
+        raws: list[tuple[int, bytes]] = []
+        for addr, size, is_wide in self._sql.execute(
+            """
+            SELECT CASE ? WHEN 0 THEN orig_addr ELSE recomp_addr END addr,
+                json_extract(kvstore, '$.size'),
+                coalesce(json_extract(kvstore, '$.wide'), 0)
+            FROM entities
+            WHERE addr IS NOT NULL
+            AND json_extract(kvstore, '$.type') = ?""",
+            (img, EntityType.STRING),
+        ):
+            try:
+                raw = read_func(addr, size, is_wide)
+                raws.append((addr, raw))
+            # pylint: disable=broad-exception-caught
+            except Exception:
+                pass  # TODO
+
+        self._sql.executemany(
+            "INSERT INTO raw (img, addr, data) VALUES (?,?,?)",
+            ((img, addr, data) for (addr, data) in raws),
+        )
+
+    def name_strings(self):
+        with self.batch() as batch:
+            for orig_addr, recomp_addr, raw, is_wide in self._sql.execute(
+                """
+                SELECT orig_addr, recomp_addr, raw.data, coalesce(json_extract(kvstore, '$.wide'), 0)
+                FROM entities INNER JOIN raw ON
+                (raw.img = 0 and raw.addr = orig_addr) or (raw.img = 1 and raw.addr = recomp_addr)
+                WHERE json_extract(kvstore, '$.type') = ?
+                """,
+                (EntityType.STRING,),
+            ):
+                # Strip off null terminator
+                try:
+                    if is_wide:
+                        text = raw[:-2].decode("utf-16le")
+                    else:
+                        text = raw[:-1].decode("latin1")
+                except UnicodeDecodeError:
+                    continue  # TODO
+
+                if orig_addr is not None:
+                    batch.set_orig(
+                        orig_addr, name=entity_name_from_string(text, is_wide)
+                    )
+                elif recomp_addr is not None:
+                    batch.set_recomp(
+                        recomp_addr, name=entity_name_from_string(text, is_wide)
+                    )

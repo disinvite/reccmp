@@ -3,14 +3,10 @@ import logging
 import difflib
 from pathlib import Path
 import struct
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 from reccmp.project.detect import RecCmpTarget
 from reccmp.isledecomp.difflib import get_grouped_opcodes
 from reccmp.isledecomp.compare.functions import FunctionComparator
-from reccmp.isledecomp.formats.exceptions import (
-    InvalidVirtualReadError,
-    InvalidStringError,
-)
 from reccmp.isledecomp.formats.detect import detect_image
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.cvdump.demangler import (
@@ -43,7 +39,7 @@ from .match_msvc import (
     match_strings,
     match_ref,
 )
-from .db import EntityDb, ReccmpEntity, ReccmpMatch, entity_name_from_string
+from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport, combined_diff
 from .lines import LinesDb
 from .queries import get_overloaded_functions, get_named_thunks
@@ -111,6 +107,24 @@ class Compare:
         self._unique_names_for_overloaded_functions()
         self._name_thunks()
         self._match_vtordisp()
+
+        def create_string_read_func(
+            image: PEImage,
+        ) -> Callable[[int, int | None, bool], bytes]:
+            def read_func(addr: int, size: int | None, is_wide: bool) -> bytes:
+                if size is not None:
+                    return image.read(addr, size)
+
+                if is_wide:
+                    return image.read_widechar(addr)
+
+                return image.read_string(addr)
+
+            return read_func
+
+        self._db.read_strings(0, create_string_read_func(self.orig_bin))
+        self._db.read_strings(1, create_string_read_func(self.recomp_bin))
+        self._db.name_strings()
 
         match_strings(self._db, report)
 
@@ -204,65 +218,30 @@ class Compare:
                         )
                         continue
 
-                    try:
-                        # Use the section contribution size if we have it. It is more accurate
-                        # than the number embedded in the string symbol:
-                        #
-                        #     e.g. ??_C@_0BA@EFDM@MxObjectFactory?$AA@
-                        #     reported length: 16 (includes null terminator)
-                        #     c.f. ??_C@_03DPKJ@enz?$AA@
-                        #     reported length: 3 (does NOT include terminator)
-                        #
-                        # Using a known length enables us to read strings that include null bytes.
-                        # string_size is the total memory footprint, including null-terminator.
-                        if string_info.is_utf16:
-                            if sym.section_contribution is not None:
-                                string_size = sym.section_contribution
-                                # Remove 2-byte null-terminator before decoding
-                                raw = self.recomp_bin.read(addr, string_size)[:-2]
-                            else:
-                                raw = self.recomp_bin.read_widechar(addr)
-                                string_size = len(raw) + 2
+                    # Use the section contribution size if we have it. It is more accurate
+                    # than the number embedded in the string symbol:
+                    #
+                    #     e.g. ??_C@_0BA@EFDM@MxObjectFactory?$AA@
+                    #     reported length: 16 (includes null terminator)
+                    #     c.f. ??_C@_03DPKJ@enz?$AA@
+                    #     reported length: 3 (does NOT include terminator)
+                    #
+                    # Using a known length enables us to read strings that include null bytes.
+                    # string_size is the total memory footprint, including null-terminator.
+                    if sym.section_contribution is not None:
+                        string_size = sym.section_contribution
+                    else:
+                        string_size = None
 
-                            decoded_string = raw.decode("utf-16-le")
-                        else:
-                            if sym.section_contribution is not None:
-                                string_size = sym.section_contribution
-                                # Remove 1-byte null-terminator before decoding
-                                raw = self.recomp_bin.read(addr, string_size)[:-1]
-                            else:
-                                raw = self.recomp_bin.read_string(addr)
-                                string_size = len(raw) + 1
-
-                            decoded_string = raw.decode("latin1")
-
-                    except (InvalidVirtualReadError, InvalidStringError):
-                        logger.warning(
-                            "Could not read string from recomp 0x%x, wide=%s",
-                            addr,
-                            string_info.is_utf16,
-                        )
-
-                    except UnicodeDecodeError:
-                        logger.debug(
-                            "Could not decode string: %s, wide=%s",
-                            raw,
-                            string_info.is_utf16,
-                        )
-                        continue
-
-                    # Special handling for string entities.
-                    # Make sure the entity size includes the string null-terminator.
                     batch.set_recomp(
                         addr,
-                        type=sym.node_type,
-                        name=entity_name_from_string(
-                            decoded_string, wide=string_info.is_utf16
-                        ),
+                        type=EntityType.STRING,
                         symbol=sym.decorated_name,
                         size=string_size,
+                        wide=string_info.is_utf16,
                         verified=True,
                     )
+
                 else:
                     # Non-string entities.
                     batch.set_recomp(
@@ -364,43 +343,16 @@ class Compare:
                 )
 
             for string in codebase.iter_strings():
-                # Not that we don't trust you, but we're checking the string
-                # annotation to make sure it is accurate.
-                try:
-                    if string.is_widechar:
-                        raw = self.orig_bin.read_widechar(string.offset)
-                        orig = raw.decode("utf-16-le")
-                        string_size = len(raw) + 2
-                    else:
-                        raw = self.orig_bin.read_string(string.offset)
-                        orig = raw.decode("latin1")
-                        string_size = len(raw) + 1
+                # Just set up the entity.
+                string_size = len(string.name)
+                string_size += 2 if string.is_widechar else 1
 
-                    string_correct = string.name == orig
-
-                except InvalidStringError:
-                    logger.warning(
-                        "Could not read string from orig 0x%x, wide=%s",
-                        string.offset,
-                        string.is_widechar,
-                    )
-
-                except UnicodeDecodeError:
-                    string_correct = False
-
-                if not string_correct:
-                    report(
-                        ReccmpEvent.INVALID_USER_DATA,
-                        string.offset,
-                        msg=f"Data at 0x{string.offset:x} does not match string {repr(string.name)}",
-                    )
-                    continue
-
+                # expected = string.name
                 batch.set_orig(
                     string.offset,
-                    name=entity_name_from_string(string.name, wide=string.is_widechar),
                     type=EntityType.STRING,
                     size=string_size,
+                    wide=string.is_widechar,
                     verified=True,
                 )
 
@@ -513,7 +465,6 @@ class Compare:
                     batch.insert_orig(
                         addr,
                         type=EntityType.STRING,
-                        name=entity_name_from_string(string),
                         size=len(string) + 1,  # including null-terminator
                     )
 
@@ -525,7 +476,6 @@ class Compare:
                     batch.insert_recomp(
                         addr,
                         type=EntityType.STRING,
-                        name=entity_name_from_string(string),
                         size=len(string) + 1,  # including null-terminator
                     )
 

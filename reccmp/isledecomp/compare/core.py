@@ -344,8 +344,10 @@ class Compare:
 
             for string in codebase.iter_strings():
                 # Just set up the entity.
-                string_size = len(string.name)
-                string_size += 2 if string.is_widechar else 1
+                if string.is_widechar:
+                    string_size = 2 * len(string.name) + 2
+                else:
+                    string_size = len(string.name) + 1
 
                 # expected = string.name
                 batch.set_orig(

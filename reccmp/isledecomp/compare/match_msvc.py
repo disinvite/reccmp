@@ -317,18 +317,15 @@ def match_strings(db: EntityDb, _: ReccmpReportProtocol = reccmp_report_nop):
         for orig_addr, recomp_addr in db.sql.execute(
             """
         WITH candidates AS
-            (SELECT img, addr, data FROM raw
-            INNER JOIN entities e
-            ON (img = 0 AND addr = e.orig_addr AND e.recomp_addr IS NULL)
-            OR (img = 1 AND addr = e.recomp_addr AND e.orig_addr IS NULL)
-            WHERE json_extract(e.kvstore, '$.type') = ?)
+            (SELECT img, addr, data, row_number() over (partition by img, data order by addr) nth
+            FROM raw
+            )
         SELECT x.addr, y.addr FROM
-            (SELECT addr, data, row_number() over (partition by data order by addr) nth from candidates WHERE img = 0) x
+            (SELECT addr, data, nth from candidates WHERE img = 0) x
             INNER JOIN
-            (SELECT addr, data, row_number() over (partition by data order by addr) nth from candidates WHERE img = 1) y
+            (SELECT addr, data, nth from candidates WHERE img = 1) y
             ON x.data = y.data AND x.nth = y.nth
         """,
-            (EntityType.STRING,),
         ):
             batch.match(orig_addr, recomp_addr)
 

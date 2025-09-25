@@ -317,8 +317,10 @@ def match_strings(db: EntityDb, _: ReccmpReportProtocol = reccmp_report_nop):
         for orig_addr, recomp_addr in db.sql.execute(
             """
         WITH candidates AS
-            (SELECT img, addr, data, row_number() over (partition by img, data order by addr) nth
-            FROM raw
+            (SELECT r.img, r.addr, data, row_number() over (partition by r.img, data order by r.addr) nth
+            FROM raw r
+            INNER JOIN types ON types.img = r.img AND types.addr = r.addr
+            WHERE types.type = ?
             )
         SELECT x.addr, y.addr FROM
             (SELECT addr, data, nth from candidates WHERE img = 0) x
@@ -326,6 +328,7 @@ def match_strings(db: EntityDb, _: ReccmpReportProtocol = reccmp_report_nop):
             (SELECT addr, data, nth from candidates WHERE img = 1) y
             ON x.data = y.data AND x.nth = y.nth
         """,
+            (EntityType.STRING,),
         ):
             batch.match(orig_addr, recomp_addr)
 

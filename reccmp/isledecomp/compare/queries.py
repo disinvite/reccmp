@@ -79,3 +79,16 @@ def get_named_thunks(db: EntityDb):
         assert isinstance(orig_addr, int) or isinstance(recomp_addr, int)
         assert isinstance(name, str)
         yield ThunkWithName(orig_addr, recomp_addr, name)
+
+
+def get_unmatched_verified_strings(db: EntityDb) -> Iterable[tuple[int, str]]:
+    for addr, text in db.sql.execute(
+        """SELECT orig_addr, json_extract(kvstore, '$.name') as name
+        from orig_unmatched where name is not null
+        and json_extract(kvstore,'$.type') = ?
+        and coalesce(json_extract(kvstore,'$.verified'), 0) = 1""",
+        (EntityType.STRING,),
+    ):
+        assert isinstance(addr, int)
+        assert isinstance(text, str)
+        yield (addr, text)

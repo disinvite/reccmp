@@ -42,7 +42,11 @@ from .match_msvc import (
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport, combined_diff
 from .lines import LinesDb
-from .queries import get_overloaded_functions, get_named_thunks
+from .queries import (
+    get_overloaded_functions,
+    get_named_thunks,
+    get_unmatched_verified_strings,
+)
 
 
 # pylint: disable=too-many-lines
@@ -127,6 +131,13 @@ class Compare:
         self._db.name_strings()
 
         match_strings(self._db, report)
+
+        for addr, text in get_unmatched_verified_strings(self._db):
+            report(
+                ReccmpEvent.NO_MATCH,
+                addr,
+                msg=f"Failed to match string {text} at 0x{addr:x}",
+            )
 
         self.function_comparator = FunctionComparator(
             self._db, self._lines_db, self.orig_bin, self.recomp_bin, report

@@ -312,34 +312,25 @@ def match_variables(db: EntityDb, report: ReccmpReportProtocol = reccmp_report_n
                 )
 
 
-def match_strings(db: EntityDb, report: ReccmpReportProtocol = reccmp_report_nop):
-    string_index = EntityIndex()
-
-    for recomp_addr, text in db.sql.execute(
-        """SELECT recomp_addr, json_extract(kvstore, '$.name') as name
-        from recomp_unmatched where name is not null
-        and json_extract(kvstore,'$.type') = ?""",
-        (EntityType.STRING,),
-    ):
-        string_index.add(text, recomp_addr)
-
+def match_strings(db: EntityDb, _: ReccmpReportProtocol = reccmp_report_nop):
     with db.batch() as batch:
-        for orig_addr, text, verified in db.sql.execute(
-            """SELECT orig_addr, json_extract(kvstore, '$.name') as name,
-            coalesce(json_extract(kvstore,'$.verified'), 0)
-            from orig_unmatched where name is not null
-            and json_extract(kvstore,'$.type') = ?""",
+        for orig_addr, recomp_addr in db.sql.execute(
+            """
+        WITH candidates AS
+            (SELECT img, addr, data FROM raw
+            INNER JOIN entities e
+            ON (img = 0 AND addr = e.orig_addr AND e.recomp_addr IS NULL)
+            OR (img = 1 AND addr = e.recomp_addr AND e.orig_addr IS NULL)
+            WHERE json_extract(e.kvstore, '$.type') = ?)
+        SELECT x.addr, y.addr FROM
+            (SELECT addr, data, row_number() over (partition by data order by addr) nth from candidates WHERE img = 0) x
+            INNER JOIN
+            (SELECT addr, data, row_number() over (partition by data order by addr) nth from candidates WHERE img = 1) y
+            ON x.data = y.data AND x.nth = y.nth
+        """,
             (EntityType.STRING,),
         ):
-            if text in string_index:
-                recomp_addr = string_index.pop(text)
-                batch.match(orig_addr, recomp_addr)
-            elif verified:
-                report(
-                    ReccmpEvent.NO_MATCH,
-                    orig_addr,
-                    msg=f"Failed to match string {text} at 0x{orig_addr:x}",
-                )
+            batch.match(orig_addr, recomp_addr)
 
 
 def match_lines(

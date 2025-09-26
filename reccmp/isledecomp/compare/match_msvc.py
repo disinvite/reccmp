@@ -1,3 +1,4 @@
+from typing import Iterator
 from reccmp.isledecomp.types import EntityType
 from reccmp.isledecomp.compare.db import EntityDb
 from reccmp.isledecomp.compare.lines import LinesDb
@@ -86,81 +87,66 @@ def match_symbols(
                 )
 
 
+def get_matches_for_type_and_label(
+    db: EntityDb, entity_type: EntityType, *, truncate: bool = False
+) -> Iterator[tuple[int, int, str, bool]]:
+    for orig_addr, recomp_addr, label, is_unique in db.sql.execute(
+        """
+        WITH trunc AS (
+            SELECT img, addr, case ? when 0 then label else substr(label, 0, 255) end label
+            FROM labels
+        ),
+        candidates AS (
+            SELECT l.img, l.addr, l.label, t.type,
+                row_number() over (partition by l.img, l.label order by l.addr) nth,
+                count(l.label) over (partition by l.img, l.label) cnt
+            FROM trunc l
+            LEFT JOIN types t ON l.img = t.img AND l.addr = t.addr
+            WHERE
+                t.type is null or t.type = ?
+            AND
+            (
+                (l.img = 0 AND l.addr not in matched0)
+                OR
+                (l.img = 1 AND l.addr not in matched1)
+            )
+        )
+        SELECT x.addr, y.addr, x.label, x.cnt = 1 and y.cnt = 1
+        FROM
+            (select * from candidates where img = 0) x
+        INNER JOIN
+            (select * from candidates where img = 1) y
+        ON x.label = y.label AND x.nth = y.nth AND coalesce(x.type, y.type) IS NOT NULL
+    """,
+        (
+            truncate,
+            entity_type,
+        ),
+    ):
+        assert isinstance(orig_addr, int)
+        assert isinstance(recomp_addr, int)
+        assert isinstance(label, str)
+
+        yield (orig_addr, recomp_addr, label, bool(is_unique))
+
+
 def match_functions(
     db: EntityDb,
     report: ReccmpReportProtocol = reccmp_report_nop,
     *,
     truncate: bool = False,
 ):
-    # addr->symbol map. Used later in error message for non-unique match.
-    recomp_symbols: dict[int, str] = {}
-
-    name_index = EntityIndex()
-
-    # TODO: We allow a match if entity_type is null.
-    # This can be removed if we can more confidently declare a symbol is a function
-    # when adding from the PDB.
-    for recomp_addr, name, symbol in db.sql.execute(
-        """SELECT recomp_addr, json_extract(kvstore, '$.name') as name, json_extract(kvstore, '$.symbol')
-        from recomp_unmatched where name is not null
-        and (json_extract(kvstore, '$.type') = ? or json_extract(kvstore, '$.type') is null)""",
-        (EntityType.FUNCTION,),
-    ):
-        # Truncate function name to 255 chars for older MSVC. See also: Warning C4786.
-        if truncate:
-            name = name[:255]
-
-        name_index.add(name, recomp_addr)
-
-        # Get the symbol for the error message later.
-        if symbol is not None:
-            recomp_symbols[recomp_addr] = symbol
-
-    # Report if the name used in the match is not unique.
-    # If the name list contained multiple addresses at the start,
-    # we should report even for the last address in the list.
-    non_unique_names = set()
-
     with db.batch() as batch:
-        for orig_addr, name in db.sql.execute(
-            """SELECT orig_addr, json_extract(kvstore, '$.name') as name
-            from orig_unmatched where name is not null
-            and json_extract(kvstore, '$.type') = ?""",
-            (EntityType.FUNCTION,),
+        for orig_addr, recomp_addr, name, is_unique in get_matches_for_type_and_label(
+            db, EntityType.FUNCTION, truncate=truncate
         ):
-            # Repeat the truncate for our match search
-            if truncate:
-                name = name[:255]
-
-            if name in name_index:
-                recomp_addr = name_index.pop(name)
-                # If match was not unique
-                if name in name_index:
-                    non_unique_names.add(name)
-
-                # If this name was ever matched non-uniquely
-                if name in non_unique_names:
-                    matched_symbol = recomp_symbols.get(recomp_addr, "None")
-                    other_symbols = [
-                        recomp_symbols.get(recomp_addr, "None")
-                        for recomp_addr in name_index.get(name)
-                    ]
-                    report(
-                        ReccmpEvent.AMBIGUOUS_MATCH,
-                        orig_addr,
-                        msg=f"Ambiguous match 0x{orig_addr:x} on name '{name}' to\n"
-                        + f"'{matched_symbol}'\n"
-                        + "Other candidates:\n"
-                        + ",\n".join(f"'{candidate}'" for candidate in other_symbols),
-                    )
-
-                batch.match(orig_addr, recomp_addr)
-            else:
+            if not is_unique:
                 report(
-                    ReccmpEvent.NO_MATCH,
+                    ReccmpEvent.AMBIGUOUS_MATCH,
                     orig_addr,
-                    msg=f"Failed to match function at 0x{orig_addr:x} with name '{name}'",
+                    msg=f"Ambiguous match 0x{orig_addr:x} on name '{name}'",
                 )
+            batch.match(orig_addr, recomp_addr)
 
 
 def match_vtables(db: EntityDb, report: ReccmpReportProtocol = reccmp_report_nop):

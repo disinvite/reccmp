@@ -18,11 +18,18 @@ _SETUP_SQL = """
         ref_recomp integer as (json_extract(kvstore, '$.ref_recomp'))
     );
 
+    CREATE TABLE labels (
+        img integer not null,
+        addr integer not null,
+        label text not null,
+        primary key (img, addr)
+    );
+
     CREATE TABLE types (
         img integer not null,
         addr integer not null,
         type integer not null,
-        primary key (img ,addr)
+        primary key (img, addr)
     );
 
     CREATE TABLE raw (
@@ -31,6 +38,12 @@ _SETUP_SQL = """
         data blob,
         primary key (img, addr)
     );
+
+    CREATE VIEW matched0 (addr) AS SELECT orig_addr FROM entities
+        WHERE orig_addr is not null and recomp_addr is not null;
+
+    CREATE VIEW matched1 (addr) AS SELECT recomp_addr FROM entities
+        WHERE recomp_addr is not null and orig_addr is not null;
 
     CREATE VIEW orig_refs (orig_addr, ref_id, nth) AS
         SELECT thunk.orig_addr, ref.rowid,
@@ -191,6 +204,7 @@ class EntityBatch:
     _orig_insert: dict[int, dict[str, Any]]
     _recomp_insert: dict[int, dict[str, Any]]
 
+    _labels: dict[tuple[int, int], str]
     _types: dict[tuple[int, int], EntityType]
 
     # To be upserted
@@ -210,6 +224,7 @@ class EntityBatch:
         self._recomp_insert = {}
         self._orig = {}
         self._recomp = {}
+        self._labels = {}
         self._types = {}
         self._orig_to_recomp = {}
         self._recomp_to_orig = {}
@@ -221,6 +236,7 @@ class EntityBatch:
         self._recomp_insert.clear()
         self._orig.clear()
         self._recomp.clear()
+        self._labels.clear()
         self._types.clear()
         self._orig_to_recomp.clear()
         self._recomp_to_orig.clear()
@@ -231,20 +247,32 @@ class EntityBatch:
         if kwargs.get("type"):
             self._types[(0, addr)] = EntityType(kwargs["type"])
 
+        if kwargs.get("name"):
+            self._labels[(0, addr)] = kwargs["name"]
+
     def insert_recomp(self, addr: int, **kwargs):
         self._recomp_insert.setdefault(addr, {}).update(kwargs)
         if kwargs.get("type"):
             self._types[(1, addr)] = EntityType(kwargs["type"])
+
+        if kwargs.get("name"):
+            self._labels[(1, addr)] = kwargs["name"]
 
     def set_orig(self, addr: int, **kwargs):
         self._orig.setdefault(addr, {}).update(kwargs)
         if kwargs.get("type"):
             self._types[(0, addr)] = EntityType(kwargs["type"])
 
+        if kwargs.get("name"):
+            self._labels[(0, addr)] = kwargs["name"]
+
     def set_recomp(self, addr: int, **kwargs):
         self._recomp.setdefault(addr, {}).update(kwargs)
         if kwargs.get("type"):
             self._types[(1, addr)] = EntityType(kwargs["type"])
+
+        if kwargs.get("name"):
+            self._labels[(1, addr)] = kwargs["name"]
 
     def match(self, orig: int, recomp: int):
         # Integrity check: orig and recomp addr must be used only once
@@ -282,6 +310,12 @@ class EntityBatch:
                 self.base.sql.executemany(
                     "INSERT OR REPLACE INTO types (img, addr, type) VALUES (?,?,?)",
                     ((img, addr, type_) for (img, addr), type_ in self._types.items()),
+                )
+
+            if self._types:
+                self.base.sql.executemany(
+                    "INSERT OR REPLACE INTO labels (img, addr, label) VALUES (?,?,?)",
+                    ((img, addr, label) for (img, addr), label in self._labels.items()),
                 )
 
         self.reset()

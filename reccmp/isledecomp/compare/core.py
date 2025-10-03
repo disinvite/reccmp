@@ -439,7 +439,7 @@ class Compare:
             WHERE orig_addr IS NOT NULL AND recomp_addr IS NOT NULL
             AND coalesce(json_extract(kvstore,'$.is_array'), 0) = 1
             AND name IS NOT NULL
-            AND ms.size != coalesce(json_extract(kvstore,'$.size'), 0)
+            AND ms.size < coalesce(json_extract(kvstore,'$.size'), 0)
             """,
         ).fetchall()
 

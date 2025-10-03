@@ -91,6 +91,8 @@ class Compare:
         self._load_cvdump()
         self._load_markers(report)
 
+        self._calc_max_size()
+
         # Match using PDB and annotation data
         match_symbols(self._db, report, truncate=True)
         match_functions(self._db, report, truncate=True)
@@ -99,7 +101,8 @@ class Compare:
         match_variables(self._db, report)
         match_lines(self._db, self._lines_db, report)
 
-        self._match_array_elements()
+        self._set_array_offsets()
+        self._mock_array_offsets()
         # Detect floats first to eliminate potential overlap with string data
         self._find_float_const()
         self._find_strings()
@@ -117,6 +120,8 @@ class Compare:
         self.function_comparator = FunctionComparator(
             self._db, self._lines_db, self.orig_bin, self.recomp_bin, report
         )
+
+        self._report_size_mismatch_issues()
 
     @classmethod
     def from_target(cls, target: RecCmpTarget):
@@ -413,90 +418,121 @@ class Compare:
                     type=EntityType.LINE,
                 )
 
-    def _match_array_elements(self):
+    def _calc_max_size(self):
+        self._db.sql.execute(
+            """
+            WITH naive_next AS (
+                SELECT orig_addr, lead(orig_addr) OVER (ORDER by orig_addr) AS next_addr FROM entities
+            )
+            INSERT INTO max_sizes
+                SELECT 0, orig_addr, next_addr - orig_addr
+                FROM naive_next
+                WHERE orig_addr IS NOT NULL AND next_addr IS NOT NULL
         """
-        For each matched variable, check whether it is an array.
-        If yes, adds a match for all its elements. If it is an array of structs, all fields in that struct are also matched.
-        Note that there is no recursion, so an array of arrays would not be handled entirely.
-        This step is necessary e.g. for `0x100f0a20` (LegoRacers.cpp).
-        """
-        seen_recomp = set()
-        batch = self._db.batch()
+        )
 
-        # Helper function
-        def _add_match_in_array(
-            name: str, type_id: str, orig_addr: int, recomp_addr: int, max_orig: int
-        ):
-            # pylint: disable=unused-argument
-            # TODO: Previously used scalar_type_pointer(type_id) to set whether this is a pointer
-            if recomp_addr in seen_recomp:
-                return
+    def _report_size_mismatch_issues(self):
+        alerts = self._db.sql.execute(
+            """SELECT orig_addr, json_extract(kvstore,'$.name') name
+            FROM entities
+            INNER JOIN max_sizes ms ON ms.img = 0 AND ms.addr = orig_addr
+            WHERE orig_addr IS NOT NULL AND recomp_addr IS NOT NULL
+            AND coalesce(json_extract(kvstore,'$.is_array'), 0) = 1
+            AND name IS NOT NULL
+            AND ms.size != coalesce(json_extract(kvstore,'$.size'), 0)
+            """,
+        ).fetchall()
 
-            seen_recomp.add(recomp_addr)
-            batch.set_recomp(recomp_addr, name=name)
-            if orig_addr < max_orig:
-                batch.match(orig_addr, recomp_addr)
+        if alerts:
+            lines = "\n".join(
+                (f"* {orig_addr:#x} .... {name}" for orig_addr, name in alerts)
+            )
+            logger.warning("These array variables are larger in recomp:\n%s", lines)
 
+    def _set_array_offsets(self):
         # Indexed by recomp addr. Need to preload this data because it is not stored alongside the db rows.
-        cvdump_lookup = {x.addr: x for x in self.cvdump_analysis.nodes}
+        cvdump_lookup = {
+            x.addr: x
+            for x in self.cvdump_analysis.nodes
+            # Must have non-scalar datatype
+            if x.data_type is not None and x.data_type.key.startswith("0x")
+        }
 
-        for match in self._db.get_matches_by_type(EntityType.DATA):
-            node = cvdump_lookup.get(match.recomp_addr)
-            if node is None or node.data_type is None:
-                continue
+        with self._db.batch() as batch:
+            for recomp_addr, name in self._db.sql.execute(
+                """SELECT recomp_addr, json_extract(kvstore, '$.name') name
+                FROM entities
+                WHERE recomp_addr IS NOT NULL
+                AND orig_addr IS NOT NULL -- to imitate previous behavior: matched entities only
+                AND name IS NOT NULL
+                AND json_extract(kvstore, '$.type') = ?""",
+                (EntityType.DATA,),
+            ):
+                if recomp_addr not in cvdump_lookup:
+                    continue
 
-            if not node.data_type.key.startswith("0x"):
-                # scalar type, so clearly not an array
-                continue
+                node = cvdump_lookup[recomp_addr]
+                assert node.data_type is not None
 
-            data_type = self.cv.types.keys[node.data_type.key.lower()]
+                data_type = self.cv.types.keys[node.data_type.key.lower()]
 
-            if data_type["type"] != "LF_ARRAY":
-                continue
+                if data_type["type"] != "LF_ARRAY":
+                    continue
 
-            # Check whether another orig variable appears before the end of the array in recomp.
-            # If this happens we can still add all the recomp offsets, but do not attach the orig address
-            # where it would extend into the next variable.
-            upper_bound = match.orig_addr + match.size
-            if (
-                next_orig := self._db.get_next_orig_addr(match.orig_addr)
-            ) is not None and next_orig < upper_bound:
-                logger.warning(
-                    "Array variable %s at 0x%x is larger in recomp",
-                    match.name,
-                    match.orig_addr,
-                )
-                upper_bound = next_orig
+                # TODO: hack?
+                batch.set_recomp(recomp_addr, is_array=True)
 
-            array_element_type = self.cv.types.get(data_type["array_type"])
+                array_element_type = self.cv.types.get(data_type["array_type"])
 
-            assert node.data_type.members is not None
+                assert node.data_type.members is not None
 
-            for array_element in node.data_type.members:
-                orig_element_base_addr = match.orig_addr + array_element.offset
-                recomp_element_base_addr = match.recomp_addr + array_element.offset
-                if array_element_type.members is None:
-                    # If array of scalars
-                    _add_match_in_array(
-                        f"{match.name}{array_element.name}",
-                        array_element_type.key,
-                        orig_element_base_addr,
-                        recomp_element_base_addr,
-                        upper_bound,
-                    )
-
-                else:
-                    # Else: multidimensional array or array of structs
-                    for member in array_element_type.members:
-                        _add_match_in_array(
-                            f"{match.name}{array_element.name}.{member.name}",
-                            array_element_type.key,
-                            orig_element_base_addr + member.offset,
-                            recomp_element_base_addr + member.offset,
-                            upper_bound,
+                for array_element in node.data_type.members:
+                    recomp_element_base_addr = recomp_addr + array_element.offset
+                    if array_element_type.members is None:
+                        # If array of scalars
+                        batch.set_recomp(
+                            recomp_element_base_addr,
+                            name=f"{name}{array_element.name}",
+                            parent_var=recomp_addr,
                         )
+                    else:
+                        # Else: multidimensional array or array of structs
+                        for member in array_element_type.members:
+                            batch.set_recomp(
+                                recomp_element_base_addr + member.offset,
+                                name=f"{name}{array_element.name}.{member.name}",
+                                parent_var=recomp_addr,
+                            )
 
-        batch.commit()
+    def _mock_array_offsets(self):
+        # TODO: For matched variables without any offsets
+
+        # FILTER (WHERE orig_addr IS NOT NULL AND json_extract(kvstore, '$.type') IS NOT NULL)
+        with self._db.batch() as batch:
+            for orig_addr, presumed_size in self._db.sql.execute(
+                """SELECT orig_addr, ms.size
+                FROM entities LEFT JOIN max_sizes ms ON ms.img = 0 AND ms.addr == orig_addr
+                WHERE orig_addr IS NOT NULL
+                AND json_extract(kvstore, '$.type') = ?""",
+                (EntityType.DATA,),
+            ):
+                # self._db.get_next_orig_addr(orig_addr)
+                for recomp_addr, offset in self._db.sql.execute(
+                    """
+                    SELECT o.parent, o.addr - o.parent
+                    FROM offsets o
+                    INNER JOIN entities e
+                    ON o.parent = e.recomp_addr AND e.orig_addr = ?
+                    WHERE o.img = 1
+                """,
+                    (orig_addr,),
+                ):
+                    # TODO: allow for presumed_size to be null.
+                    # We can fix this by adding segment boundaries to the database as overlay entities.
+                    if presumed_size is not None and offset >= presumed_size:
+                        break
+
+                    batch.match(orig_addr + offset, recomp_addr + offset)
 
     def _find_strings(self):
         """Search both binaries for Latin1 strings.

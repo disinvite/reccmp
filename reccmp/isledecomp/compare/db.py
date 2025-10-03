@@ -18,6 +18,21 @@ _SETUP_SQL = """
         ref_recomp integer as (json_extract(kvstore, '$.ref_recomp'))
     );
 
+    CREATE TABLE max_sizes (
+        img integer not null,
+        addr integer not null,
+        size integer not null,
+        primary key (img, addr)
+    );
+
+    CREATE TABLE offsets (
+        img integer not null,
+        addr integer not null,
+        parent integer not null,
+        primary key (img, addr)
+    );
+    CREATE INDEX o_parent ON offsets (parent);
+
     CREATE VIEW orig_refs (orig_addr, ref_id, nth) AS
         SELECT thunk.orig_addr, ref.rowid,
             Row_number() OVER (partition BY thunk.ref_orig order by thunk.orig_addr) nth
@@ -177,6 +192,8 @@ class EntityBatch:
     _recomp: dict[int, dict[str, Any]]
     _matches: list[tuple[int, int]]
 
+    _offsets: list[tuple[int, int, int]]
+
     # Sets the recomp_addr of an entity with only an orig_addr.
     # This isn't possible using set_orig() or by matching.
     _recomp_addr: dict[int, int]
@@ -187,6 +204,8 @@ class EntityBatch:
         self._recomp = {}
         self._matches = []
         self._recomp_addr = {}
+        #
+        self._offsets = []
 
     def reset(self):
         """Clear all pending changes"""
@@ -194,12 +213,20 @@ class EntityBatch:
         self._recomp.clear()
         self._matches.clear()
         self._recomp_addr.clear()
+        #
+        self._offsets.clear()
 
     def set_orig(self, addr: int, **kwargs):
         self._orig.setdefault(addr, {}).update(kwargs)
 
+        if "parent_var" in kwargs:
+            self._offsets.append((0, addr, kwargs["parent_var"]))
+
     def set_recomp(self, addr: int, **kwargs):
         self._recomp.setdefault(addr, {}).update(kwargs)
+
+        if "parent_var" in kwargs:
+            self._offsets.append((1, addr, kwargs["parent_var"]))
 
     def match(self, orig: int, recomp: int):
         self._matches.append((orig, recomp))
@@ -240,6 +267,12 @@ class EntityBatch:
 
             if self._recomp_addr:
                 self.base.bulk_set_recomp_addr(self._recomp_addr.items())
+
+            if self._offsets:
+                self.base.sql.executemany(
+                    "INSERT INTO offsets (img, addr, parent) VALUES (?,?,?)",
+                    self._offsets,
+                )
 
         self.reset()
 

@@ -83,7 +83,6 @@ class LinesDb:
             for line_number, address in lines:
                 self._address_to_path_and_line[address] = (sourcepath, line_number)
 
-
         self._path_queue.clear()
         self._line_queue.clear()
         self._line_queue.extend(retry_lines)

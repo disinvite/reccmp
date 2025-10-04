@@ -110,6 +110,10 @@ class Compare:
 
         match_strings(self._db, self.report)
 
+        # TODO: Hack to solve performance problem
+        # pylint: disable=protected-access
+        self._lines_db._line_queue.clear()
+
         self.function_comparator = FunctionComparator(
             self._db, self._lines_db, self.orig_bin, self.recomp_bin, self.report
         )

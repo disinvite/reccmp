@@ -3,7 +3,7 @@ import logging
 import difflib
 from pathlib import Path
 import struct
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, NamedTuple
 from reccmp.project.detect import RecCmpTarget
 from reccmp.isledecomp.difflib import get_grouped_opcodes
 from reccmp.isledecomp.compare.functions import FunctionComparator
@@ -17,7 +17,7 @@ from reccmp.isledecomp.cvdump.demangler import (
     demangle_string_const,
     get_function_arg_string,
 )
-from reccmp.isledecomp.cvdump import Cvdump, CvdumpAnalysis
+from reccmp.isledecomp.cvdump import Cvdump, CvdumpAnalysis, CvdumpTypesParser
 from reccmp.isledecomp.parser import DecompCodebase
 from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.types import EntityType
@@ -55,6 +55,10 @@ from .queries import get_overloaded_functions, get_named_thunks
 logger = logging.getLogger(__name__)
 
 
+class CompareCvShim(NamedTuple):
+    types: CvdumpTypesParser
+
+
 class Compare:
     # pylint: disable=too-many-instance-attributes
     def __init__(
@@ -65,6 +69,8 @@ class Compare:
         code_dir: Path | str,
         target_id: str | None = None,
     ):
+        self.types = CvdumpTypesParser()
+
         self.orig_bin = orig_bin
         self.recomp_bin = recomp_bin
         self.pdb_file = str(pdb_file)
@@ -145,9 +151,15 @@ class Compare:
         self._debug = debug
         self.function_comparator.debug = debug
 
+    @property
+    def cv(self) -> CompareCvShim:
+        """This is only here so you can access the types database via compare.cv.types.
+        TODO: Remove after refactoring ghidra scripts."""
+        return CompareCvShim(types=self.types)
+
     def _load_cvdump(self):
         logger.info("Parsing %s ...", self.pdb_file)
-        self.cv = (
+        cvdump = (
             Cvdump(self.pdb_file)
             .lines()
             .globals()
@@ -157,7 +169,8 @@ class Compare:
             .types()
             .run()
         )
-        self.cvdump_analysis = CvdumpAnalysis(self.cv)
+        self.cvdump_analysis = CvdumpAnalysis(cvdump)
+        self.types.keys.update(cvdump.types.keys)
 
         # Build the list of entries to insert to the DB.
         # In the rare case we have duplicate symbols for an address, ignore them.
@@ -272,6 +285,9 @@ class Compare:
                         symbol=sym.decorated_name,
                         size=sym.size(),
                     )
+
+                    if sym.node_type == EntityType.DATA and sym.data_type is not None:
+                        batch.set_recomp(addr, data_type=sym.data_type.key)
 
         for filename, values in self.cvdump_analysis.lines.items():
             lines = [
@@ -438,6 +454,7 @@ class Compare:
                 batch.match(orig_addr, recomp_addr)
 
         # Indexed by recomp addr. Need to preload this data because it is not stored alongside the db rows.
+        # TODO: refactor separately.
         cvdump_lookup = {x.addr: x for x in self.cvdump_analysis.nodes}
 
         for match in self._db.get_matches_by_type(EntityType.DATA):
@@ -449,7 +466,7 @@ class Compare:
                 # scalar type, so clearly not an array
                 continue
 
-            data_type = self.cv.types.keys[node.data_type.key.lower()]
+            data_type = self.types.keys[node.data_type.key.lower()]
 
             if data_type["type"] != "LF_ARRAY":
                 continue
@@ -468,7 +485,7 @@ class Compare:
                 )
                 upper_bound = next_orig
 
-            array_element_type = self.cv.types.get(data_type["array_type"])
+            array_element_type = self.types.get(data_type["array_type"])
 
             assert node.data_type.members is not None
 

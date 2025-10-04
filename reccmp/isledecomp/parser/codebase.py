@@ -1,5 +1,6 @@
 """For aggregating decomp markers read from an entire directory and for a single module."""
 
+from pathlib import Path
 from typing import Callable, Iterable, Iterator
 from .parser import DecompParser
 from .node import (
@@ -13,12 +14,17 @@ from .node import (
 
 
 class DecompCodebase:
-    def __init__(self, filenames: Iterable[str], module: str) -> None:
-        self._symbols: list[ParserSymbol] = []
+    _symbols: list[ParserSymbol]
+    files: list[Path]
+
+    def __init__(self, filenames: Iterable[Path], module: str) -> None:
+        self._symbols = []
+        self.files = []
 
         parser = DecompParser()
         for filename in filenames:
-            parser.reset_and_set_filename(filename)
+            self.files.append(filename)
+            parser.reset_and_set_filename(str(filename))
             with open(filename, "r", encoding="utf-8") as f:
                 parser.read(f.read())
 

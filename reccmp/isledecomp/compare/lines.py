@@ -13,18 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class LinesDb:
-    def __init__(
-        self, files: Sequence[Path] | Sequence[PurePath] | Sequence[str]
-    ) -> None:
+    def __init__(self) -> None:
         self._path_resolver = cache(convert_foreign_path)
+
+        self._path_queue: list[Path | PurePath] = []
+        self._line_queue: list[tuple[PureWindowsPath, list[tuple[int, int]]]] = []
 
         # Set up memoized map of filenames to their paths
         self._filenames: dict[str, list[PurePath]] = {}
-        for path in files:
-            if not isinstance(path, PurePath):
-                path = PurePath(path)
-
-            self._filenames.setdefault(path.name.lower(), []).append(path)
 
         # Local filename to list of (line_no, address) pairs
         # This has to be a list instead of a dict because line numbers may be used twice.
@@ -34,6 +30,13 @@ class LinesDb:
 
         # Addresses for the first line for a function
         self._function_starts: set[int] = set()
+
+    def add_files(self, files: Sequence[Path] | Sequence[PurePath] | Sequence[str]):
+        for path in files:
+            if not isinstance(path, PurePath):
+                path = PurePath(path)
+
+            self._path_queue.append(path)
 
     def add_line(self, foreign_path: PureWindowsPath, line_no: int, addr: int):
         """Connect the remote path to a line number and address pair."""
@@ -45,23 +48,45 @@ class LinesDb:
         """
         Connect the remote path to a line number and address pair.
         """
-        filename = foreign_path.name.lower()
 
-        candidates = self._filenames.get(filename)
-        if candidates is None:
-            return
-
-        # Must convert to tuple (hashable type) so we can use functools.cache
-        sourcepath = self._path_resolver(foreign_path, tuple(candidates))
-        if sourcepath is None:
-            return
-
-        self._path_to_lines_and_addresses.setdefault(sourcepath, []).extend(list(lines))
-        for line_number, address in lines:
-            self._address_to_path_and_line[address] = (sourcepath, line_number)
+        self._line_queue.append((foreign_path, list(lines)))
 
     def mark_function_starts(self, addrs: Sequence[int]):
         self._function_starts = self._function_starts.union(set(addrs))
+
+    def _process(self):
+        """Defer processing until we need results. This allows us to call add_files()
+        and add_line() or add_lines() in any order up to the point where we search."""
+        for path in self._path_queue:
+            self._filenames.setdefault(path.name.lower(), []).append(path)
+
+        # Don't remove from lines queue if we can't find a match.
+        retry_lines = []
+
+        for foreign_path, lines in self._line_queue:
+            filename = foreign_path.name.lower()
+
+            candidates = self._filenames.get(filename)
+            if candidates is None:
+                retry_lines.append((foreign_path, lines))
+                continue
+
+            # Must convert to tuple (hashable type) so we can use functools.cache
+            sourcepath = self._path_resolver(foreign_path, tuple(candidates))
+            if sourcepath is None:
+                retry_lines.append((foreign_path, lines))
+                continue
+
+            self._path_to_lines_and_addresses.setdefault(sourcepath, []).extend(
+                list(lines)
+            )
+            for line_number, address in lines:
+                self._address_to_path_and_line[address] = (sourcepath, line_number)
+
+
+        self._path_queue.clear()
+        self._line_queue.clear()
+        self._line_queue.extend(retry_lines)
 
     def search_line(
         self,
@@ -70,6 +95,7 @@ class LinesDb:
         line_end: int | None = None,
         start_only: bool = False,
     ) -> Iterator[int]:
+        self._process()
         # If there is no end line, search for a single line only
         if line_end is None:
             line_end = line_start
@@ -119,4 +145,5 @@ class LinesDb:
         return None
 
     def find_line_of_recomp_address(self, address: int) -> tuple[PurePath, int] | None:
+        self._process()
         return self._address_to_path_and_line.get(address, None)

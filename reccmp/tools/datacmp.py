@@ -161,6 +161,7 @@ def do_the_comparison(target: RecCmpTarget) -> Iterable[ComparisonItem]:
                 # If we are type-aware, we can get the precise
                 # data size for the variable.
                 data_type = isle_compare.types.get(type_name)
+                assert data_type.size is not None
                 data_size = data_type.size
             except (CvdumpKeyError, CvdumpIntegrityError) as ex:
                 yield create_comparison_item(var, error=repr(ex))

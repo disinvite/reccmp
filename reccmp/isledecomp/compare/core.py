@@ -1,4 +1,3 @@
-import os
 import logging
 import difflib
 from pathlib import Path
@@ -61,49 +60,40 @@ class CompareCvShim(NamedTuple):
 
 class Compare:
     # pylint: disable=too-many-instance-attributes
-    def __init__(
-        self,
-        orig_bin: PEImage,
-        recomp_bin: PEImage,
-        pdb_file: Path | str,
-        code_dir: Path | str,
-        target_id: str | None = None,
-    ):
+    orig_bin: PEImage
+    recomp_bin: PEImage
+    cvdump_analysis: CvdumpAnalysis  # pdb
+    codebase: DecompCodebase  # code files
+    #
+    types: CvdumpTypesParser
+    _lines_db: LinesDb
+    _db: EntityDb
+    _debug: bool
+    report: ReccmpReportProtocol
+    function_comparator: FunctionComparator
+
+    def __init__(self) -> None:
         self.types = CvdumpTypesParser()
-
-        self.orig_bin = orig_bin
-        self.recomp_bin = recomp_bin
-        self.pdb_file = str(pdb_file)
-        self.code_dir = Path(code_dir)
-        if target_id is not None:
-            self.target_id = target_id
-        else:
-            # Assume module name is the base filename of the original binary.
-            self.target_id, _ = os.path.splitext(
-                os.path.basename(self.orig_bin.filepath)
-            )
-            self.target_id = self.target_id.upper()
-            logger.warning('Assuming id="%s"', self.target_id)
-        # Controls whether we dump the asm output to a file
-        self._debug: bool = False
-
-        code_files = [Path(p) for p in walk_source_dir(self.code_dir)]
-        self._lines_db = LinesDb(code_files)
+        self._lines_db = LinesDb()
         self._db = EntityDb()
 
-        # For now, just redirect match alerts to the logger.
-        report = create_logging_wrapper(logger)
+        # Controls whether we dump the asm output to a file
+        self._debug = False
 
+        # For now, just redirect match alerts to the logger.
+        self.report = create_logging_wrapper(logger)
+
+    def go(self):
         self._load_cvdump()
-        self._load_markers(report)
+        self._load_markers(self.report)
 
         # Match using PDB and annotation data
-        match_symbols(self._db, report, truncate=True)
-        match_functions(self._db, report, truncate=True)
-        match_vtables(self._db, report)
-        match_static_variables(self._db, report)
-        match_variables(self._db, report)
-        match_lines(self._db, self._lines_db, report)
+        match_symbols(self._db, self.report, truncate=True)
+        match_functions(self._db, self.report, truncate=True)
+        match_vtables(self._db, self.report)
+        match_static_variables(self._db, self.report)
+        match_variables(self._db, self.report)
+        match_lines(self._db, self._lines_db, self.report)
 
         self._match_array_elements()
         # Detect floats first to eliminate potential overlap with string data
@@ -113,19 +103,19 @@ class Compare:
         self._match_exports()
         self._create_thunks()
         self._check_vtables()
-        match_ref(self._db, report)
+        match_ref(self._db, self.report)
         self._unique_names_for_overloaded_functions()
         self._name_thunks()
         self._match_vtordisp()
 
-        match_strings(self._db, report)
+        match_strings(self._db, self.report)
 
         self.function_comparator = FunctionComparator(
-            self._db, self._lines_db, self.orig_bin, self.recomp_bin, report
+            self._db, self._lines_db, self.orig_bin, self.recomp_bin, self.report
         )
 
     @classmethod
-    def from_target(cls, target: RecCmpTarget):
+    def from_target(cls, target: RecCmpTarget) -> "Compare":
         origfile = detect_image(filepath=target.original_path)
         if not isinstance(origfile, PEImage):
             raise ValueError(f"{target.original_path} is not a PE executable")
@@ -134,13 +124,40 @@ class Compare:
         if not isinstance(recompfile, PEImage):
             raise ValueError(f"{target.recompiled_path} is not a PE executable")
 
-        return cls(
-            origfile,
-            recompfile,
-            target.recompiled_pdb,
-            target.source_root,
-            target_id=target.target_id,
+        compare = cls()
+        compare.orig_bin = origfile
+        compare.recomp_bin = recompfile
+
+        logger.info("Parsing %s ...", target.recompiled_pdb)
+        cvdump = (
+            Cvdump(str(target.recompiled_pdb))
+            .lines()
+            .globals()
+            .publics()
+            .symbols()
+            .section_contributions()
+            .types()
+            .run()
         )
+        compare.cvdump_analysis = CvdumpAnalysis(cvdump)
+
+        # TODO: add
+        # if target_id is not None:
+        #    self.target_id = target_id
+        # else:
+        #    # Assume module name is the base filename of the original binary.
+        #    self.target_id, _ = os.path.splitext(
+        #        os.path.basename(self.orig_bin.filepath)
+        #    )
+        #    self.target_id = self.target_id.upper()
+        #    logger.warning('Assuming id="%s"', self.target_id)
+
+        codefiles = [Path(p) for p in walk_source_dir(target.source_root)]
+        compare.codebase = DecompCodebase(codefiles, target.target_id)
+
+        compare.go()
+
+        return compare
 
     @property
     def debug(self) -> bool:
@@ -158,19 +175,7 @@ class Compare:
         return CompareCvShim(types=self.types)
 
     def _load_cvdump(self):
-        logger.info("Parsing %s ...", self.pdb_file)
-        cvdump = (
-            Cvdump(self.pdb_file)
-            .lines()
-            .globals()
-            .publics()
-            .symbols()
-            .section_contributions()
-            .types()
-            .run()
-        )
-        self.cvdump_analysis = CvdumpAnalysis(cvdump)
-        self.types.keys.update(cvdump.types.keys)
+        self.types.keys.update(self.cvdump_analysis.types.keys)
 
         # Build the list of entries to insert to the DB.
         # In the rare case we have duplicate symbols for an address, ignore them.
@@ -306,15 +311,14 @@ class Compare:
             batch.match(self.orig_bin.entry, self.recomp_bin.entry)
 
     def _load_markers(self, report: ReccmpReportProtocol = reccmp_report_nop):
-        codefiles = list(walk_source_dir(self.code_dir))
-        codebase = DecompCodebase(codefiles, self.target_id)
+        self._lines_db.add_files(self.codebase.files)
 
         def orig_bin_checker(addr: int) -> bool:
             return self.orig_bin.is_valid_vaddr(addr)
 
         # If the address of any annotation would cause an exception,
         # remove it and report an error.
-        bad_annotations = codebase.prune_invalid_addrs(orig_bin_checker)
+        bad_annotations = self.codebase.prune_invalid_addrs(orig_bin_checker)
 
         for sym in bad_annotations:
             report(
@@ -324,7 +328,7 @@ class Compare:
             )
 
         # Make sure each address is used only once
-        duplicate_annotations = codebase.prune_reused_addrs()
+        duplicate_annotations = self.codebase.prune_reused_addrs()
 
         for sym in duplicate_annotations:
             report(
@@ -338,7 +342,7 @@ class Compare:
         # a lineref, we can match the nameref correctly because the lineref
         # was already removed from consideration.
         with self._db.batch() as batch:
-            for fun in codebase.iter_line_functions():
+            for fun in self.codebase.iter_line_functions():
                 batch.set_orig(
                     fun.offset, type=EntityType.FUNCTION, stub=fun.should_skip()
                 )
@@ -351,7 +355,7 @@ class Compare:
                 if recomp_addr is not None:
                     batch.match(fun.offset, recomp_addr)
 
-            for fun in codebase.iter_name_functions():
+            for fun in self.codebase.iter_name_functions():
                 batch.set_orig(
                     fun.offset,
                     type=EntityType.FUNCTION,
@@ -364,14 +368,14 @@ class Compare:
                 else:
                     batch.set_orig(fun.offset, name=fun.name)
 
-            for var in codebase.iter_variables():
+            for var in self.codebase.iter_variables():
                 batch.set_orig(var.offset, name=var.name, type=EntityType.DATA)
                 if var.is_static and var.parent_function is not None:
                     batch.set_orig(
                         var.offset, static_var=True, parent_function=var.parent_function
                     )
 
-            for tbl in codebase.iter_vtables():
+            for tbl in self.codebase.iter_vtables():
                 batch.set_orig(
                     tbl.offset,
                     name=tbl.name,
@@ -379,7 +383,7 @@ class Compare:
                     type=EntityType.VTABLE,
                 )
 
-            for string in codebase.iter_strings():
+            for string in self.codebase.iter_strings():
                 # Not that we don't trust you, but we're checking the string
                 # annotation to make sure it is accurate.
                 try:
@@ -420,7 +424,7 @@ class Compare:
                     verified=True,
                 )
 
-            for line in codebase.iter_line_symbols():
+            for line in self.codebase.iter_line_symbols():
                 batch.set_orig(
                     line.offset,
                     name=line.name,
@@ -678,6 +682,7 @@ class Compare:
                 # *is* the thunk, but it's more helpful to mark the actual function.
                 # It could be the case that only one side is a thunk, but we can
                 # deal with that.
+                # pylint: disable=consider-using-get
                 if orig_addr in orig_thunks:
                     orig_addr = orig_thunks[orig_addr]
 

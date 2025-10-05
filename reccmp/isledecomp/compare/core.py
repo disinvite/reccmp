@@ -80,7 +80,14 @@ class Compare:
         self.report = create_logging_wrapper(logger)
 
     def go(self):
-        self._load_cvdump()
+        self._match_entry()
+        self._update_entities_from_cvdump(
+            self.cvdump_analysis, self._db, self.recomp_bin
+        )
+        self._update_types_from_cvdump(self.cvdump_analysis, self.types)
+        self._update_lines_from_cvdump(
+            self.cvdump_analysis, self._lines_db, self.recomp_bin
+        )
         self._load_markers(self.report)
 
         # Match using PDB and annotation data
@@ -153,17 +160,52 @@ class Compare:
         self._debug = debug
         self.function_comparator.debug = debug
 
-    def _load_cvdump(self):
+    def _match_entry(self):
+        """The _entry symbol is referenced in the PE header so we get this match for free."""
+        with self._db.batch() as batch:
+            batch.set_recomp(self.recomp_bin.entry, type=EntityType.FUNCTION)
+            batch.match(self.orig_bin.entry, self.recomp_bin.entry)
+
+    def _update_types_from_cvdump(self, pdb: CvdumpAnalysis, types: CvdumpTypesParser):
         # TODO: Populate the universal type database here when this exists. (#106)
         # For now, just copy the keys into another CvdumpTypesParser so we can use its API.
-        self.types.keys.update(self.cvdump_analysis.types.keys)
+        types.keys.update(pdb.types.keys)
 
+    def _update_lines_from_cvdump(
+        self,
+        pdb: CvdumpAnalysis,
+        lines_db: LinesDb,
+        binfile: PEImage,
+    ):
+        for filename, values in pdb.lines.items():
+            lines = [
+                (v.line_number, binfile.get_abs_addr(v.section, v.offset))
+                for v in values
+            ]
+            lines_db.add_lines(filename, lines)
+
+        seen_addrs = set()
+
+        for node in pdb.nodes:
+            # TODO: Ideally this conversion and filtering would happen inside CvdumpAnalysis.
+            if not binfile.is_valid_section(node.section):
+                continue
+
+            seen_addrs.add(binfile.get_abs_addr(node.section, node.offset))
+
+        # The seen_addrs set has more than functions, but the intersection of
+        # these addrs and the code lines should be just the functions.
+        lines_db.mark_function_starts(tuple(seen_addrs))
+
+    def _update_entities_from_cvdump(
+        self, pdb: CvdumpAnalysis, db: EntityDb, binfile: PEImage
+    ):
         # Build the list of entries to insert to the DB.
         # In the rare case we have duplicate symbols for an address, ignore them.
         seen_addrs = set()
 
-        with self._db.batch() as batch:
-            for sym in self.cvdump_analysis.nodes:
+        with db.batch() as batch:
+            for sym in pdb.nodes:
                 # Skip nodes where we have almost no information.
                 # These probably came from SECTION CONTRIBUTIONS.
                 if sym.name() is None and sym.node_type is None:
@@ -173,10 +215,10 @@ class Compare:
                 # actual binary. The symbol "__except_list" is one example.
                 # In these cases, just skip this symbol and move on because
                 # we can't do much with it.
-                if not self.recomp_bin.is_valid_section(sym.section):
+                if not binfile.is_valid_section(sym.section):
                     continue
 
-                addr = self.recomp_bin.get_abs_addr(sym.section, sym.offset)
+                addr = binfile.get_abs_addr(sym.section, sym.offset)
                 sym.addr = addr
 
                 if addr in seen_addrs:
@@ -190,8 +232,7 @@ class Compare:
                 # the remainder of the section.
                 if sym.estimated_size is None:
                     sym.estimated_size = (
-                        self.recomp_bin.get_section_extent_by_index(sym.section)
-                        - sym.offset
+                        binfile.get_section_extent_by_index(sym.section) - sym.offset
                     )
 
                 if sym.node_type == EntityType.STRING:
@@ -218,9 +259,9 @@ class Compare:
                             if sym.section_contribution is not None:
                                 string_size = sym.section_contribution
                                 # Remove 2-byte null-terminator before decoding
-                                raw = self.recomp_bin.read(addr, string_size)[:-2]
+                                raw = binfile.read(addr, string_size)[:-2]
                             else:
-                                raw = self.recomp_bin.read_widechar(addr)
+                                raw = binfile.read_widechar(addr)
                                 string_size = len(raw) + 2
 
                             decoded_string = raw.decode("utf-16-le")
@@ -228,9 +269,9 @@ class Compare:
                             if sym.section_contribution is not None:
                                 string_size = sym.section_contribution
                                 # Remove 1-byte null-terminator before decoding
-                                raw = self.recomp_bin.read(addr, string_size)[:-1]
+                                raw = binfile.read(addr, string_size)[:-1]
                             else:
-                                raw = self.recomp_bin.read_string(addr)
+                                raw = binfile.read_string(addr)
                                 string_size = len(raw) + 1
 
                             decoded_string = raw.decode("latin1")
@@ -274,22 +315,6 @@ class Compare:
 
                     if sym.node_type == EntityType.DATA and sym.data_type is not None:
                         batch.set_recomp(addr, data_type=sym.data_type.key)
-
-        for filename, values in self.cvdump_analysis.lines.items():
-            lines = [
-                (v.line_number, self.recomp_bin.get_abs_addr(v.section, v.offset))
-                for v in values
-            ]
-            self._lines_db.add_lines(filename, lines)
-
-        # The seen_addrs set has more than functions, but the intersection of
-        # these addrs and the code lines should be just the functions.
-        self._lines_db.mark_function_starts(tuple(seen_addrs))
-
-        # The _entry symbol is referenced in the PE header so we get this match for free.
-        with self._db.batch() as batch:
-            batch.set_recomp(self.recomp_bin.entry, type=EntityType.FUNCTION)
-            batch.match(self.orig_bin.entry, self.recomp_bin.entry)
 
     def _load_markers(self, report: ReccmpReportProtocol = reccmp_report_nop):
         self._lines_db.add_files(self.codebase.files)

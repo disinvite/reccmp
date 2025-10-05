@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class LinesDb:
+    # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
+        self._new_data = False
         self._path_resolver = cache(convert_foreign_path)
 
         self._path_queue: list[Path | PurePath] = []
@@ -32,6 +34,8 @@ class LinesDb:
         self._function_starts: set[int] = set()
 
     def add_files(self, files: Sequence[Path] | Sequence[PurePath] | Sequence[str]):
+        self._new_data = True
+
         for path in files:
             if not isinstance(path, PurePath):
                 path = PurePath(path)
@@ -48,7 +52,7 @@ class LinesDb:
         """
         Connect the remote path to a line number and address pair.
         """
-
+        self._new_data = True
         self._line_queue.append((foreign_path, list(lines)))
 
     def mark_function_starts(self, addrs: Sequence[int]):
@@ -86,6 +90,7 @@ class LinesDb:
         self._path_queue.clear()
         self._line_queue.clear()
         self._line_queue.extend(retry_lines)
+        self._new_data = False
 
     def search_line(
         self,
@@ -94,7 +99,9 @@ class LinesDb:
         line_end: int | None = None,
         start_only: bool = False,
     ) -> Iterator[int]:
-        self._process()
+        if self._new_data:
+            self._process()
+
         # If there is no end line, search for a single line only
         if line_end is None:
             line_end = line_start
@@ -144,5 +151,7 @@ class LinesDb:
         return None
 
     def find_line_of_recomp_address(self, address: int) -> tuple[PurePath, int] | None:
-        self._process()
+        if self._new_data:
+            self._process()
+
         return self._address_to_path_and_line.get(address, None)

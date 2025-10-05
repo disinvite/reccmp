@@ -2,7 +2,7 @@ import logging
 import difflib
 from pathlib import Path
 import struct
-from typing import Iterable, Iterator, NamedTuple
+from typing import Iterable, Iterator
 from reccmp.project.detect import RecCmpTarget
 from reccmp.isledecomp.difflib import get_grouped_opcodes
 from reccmp.isledecomp.compare.functions import FunctionComparator
@@ -52,10 +52,6 @@ from .queries import get_overloaded_functions, get_named_thunks
 
 
 logger = logging.getLogger(__name__)
-
-
-class CompareCvShim(NamedTuple):
-    types: CvdumpTypesParser
 
 
 class Compare:
@@ -156,12 +152,6 @@ class Compare:
     def debug(self, debug: bool):
         self._debug = debug
         self.function_comparator.debug = debug
-
-    @property
-    def cv(self) -> CompareCvShim:
-        """This is only here so you can access the types database via compare.cv.types.
-        TODO: Remove after refactoring ghidra scripts."""
-        return CompareCvShim(types=self.types)
 
     def _load_cvdump(self):
         self.types.keys.update(self.cvdump_analysis.types.keys)

@@ -388,6 +388,12 @@ class RecCmpPathsAction(argparse.Action):
     ):
         assert isinstance(values, Sequence)
         original, recompiled, pdb, source_root = list(Path(o) for o in values)
+
+        # Assume module name is the base filename of the original binary.
+        target_id = original.stem.upper()
+        # This happens before argparse_parse_logging() is called, so it will not match our format.
+        logger.warning('Assuming target name is "%s"', target_id)
+
         target = RecCmpTarget(
             target_id=original.stem.upper(),
             filename=original.name,

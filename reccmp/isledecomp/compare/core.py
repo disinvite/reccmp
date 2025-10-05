@@ -145,17 +145,6 @@ class Compare:
         )
         compare.cvdump_analysis = CvdumpAnalysis(cvdump)
 
-        # TODO: add
-        # if target_id is not None:
-        #    self.target_id = target_id
-        # else:
-        #    # Assume module name is the base filename of the original binary.
-        #    self.target_id, _ = os.path.splitext(
-        #        os.path.basename(self.orig_bin.filepath)
-        #    )
-        #    self.target_id = self.target_id.upper()
-        #    logger.warning('Assuming id="%s"', self.target_id)
-
         codefiles = [Path(p) for p in walk_source_dir(target.source_root)]
         compare.codebase = DecompCodebase(codefiles, target.target_id)
 

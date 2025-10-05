@@ -154,6 +154,8 @@ class Compare:
         self.function_comparator.debug = debug
 
     def _load_cvdump(self):
+        # TODO: Populate the universal type database here when this exists. (#106)
+        # For now, just copy the keys into another CvdumpTypesParser so we can use its API.
         self.types.keys.update(self.cvdump_analysis.types.keys)
 
         # Build the list of entries to insert to the DB.
@@ -436,23 +438,28 @@ class Compare:
             if orig_addr < max_orig:
                 batch.match(orig_addr, recomp_addr)
 
-        # Indexed by recomp addr. Need to preload this data because it is not stored alongside the db rows.
-        # TODO: refactor separately.
-        cvdump_lookup = {x.addr: x for x in self.cvdump_analysis.nodes}
-
         for match in self._db.get_matches_by_type(EntityType.DATA):
-            node = cvdump_lookup.get(match.recomp_addr)
-            if node is None or node.data_type is None:
+            # TODO: The type information we need is in multiple places. (See #106)
+            type_key = match.get("data_type")
+            if type_key is None:
                 continue
 
-            if not node.data_type.key.startswith("0x"):
+            if not type_key.startswith("0x"):
                 # scalar type, so clearly not an array
                 continue
 
-            data_type = self.types.keys[node.data_type.key.lower()]
-
-            if data_type["type"] != "LF_ARRAY":
+            type_dict = self.types.keys.get(type_key.lower())
+            if type_dict is None:
                 continue
+
+            if type_dict.get("type") != "LF_ARRAY":
+                continue
+
+            array_type_key = type_dict.get("array_type")
+            if array_type_key is None:
+                continue
+
+            data_type = self.types.get(type_key.lower())
 
             # Check whether another orig variable appears before the end of the array in recomp.
             # If this happens we can still add all the recomp offsets, but do not attach the orig address
@@ -468,11 +475,11 @@ class Compare:
                 )
                 upper_bound = next_orig
 
-            array_element_type = self.types.get(data_type["array_type"])
+            array_element_type = self.types.get(array_type_key)
 
-            assert node.data_type.members is not None
+            assert data_type.members is not None
 
-            for array_element in node.data_type.members:
+            for array_element in data_type.members:
                 orig_element_base_addr = match.orig_addr + array_element.offset
                 recomp_element_base_addr = match.recomp_addr + array_element.offset
                 if array_element_type.members is None:

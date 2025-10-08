@@ -19,7 +19,7 @@ class DecompCodebase:
 
         parser = DecompParser()
         for path in paths:
-            parser.reset_and_set_filename(str(path))
+            parser.reset_and_set_filename(path)
             with open(path, "r", encoding="utf-8") as f:
                 parser.read(f.read())
 

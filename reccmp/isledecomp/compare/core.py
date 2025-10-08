@@ -289,7 +289,7 @@ class Compare:
             batch.match(self.orig_bin.entry, self.recomp_bin.entry)
 
     def _load_markers(self, report: ReccmpReportProtocol = reccmp_report_nop):
-        codefiles = [Path(p) for p in walk_source_dir(self.code_dir)]
+        codefiles = list(walk_source_dir(self.code_dir))
         self._lines_db.add_local_paths(codefiles)
         codebase = DecompCodebase(codefiles, self.target_id)
 

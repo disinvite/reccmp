@@ -134,8 +134,8 @@ class PathResolver:
         return self._memo[path_str]
 
 
-def is_file_c_like(filename: Path | str) -> bool:
-    return Path(filename).suffix.lower() in (
+def is_file_c_like(path: Path) -> bool:
+    return path.suffix.lower() in (
         ".c",
         ".h",
         ".cc",
@@ -144,18 +144,18 @@ def is_file_c_like(filename: Path | str) -> bool:
         ".hxx",
         ".cpp",
         ".hpp",
-        ".C",
     )
 
 
-def walk_source_dir(source: Path, recursive: bool = True) -> Iterator[str]:
+def walk_source_dir(source: Path, recursive: bool = True) -> Iterator[Path]:
     """Generator to walk the given directory recursively and return
     any C++ files found."""
 
-    for subdir, _, files in os.walk(source.absolute()):
-        for file in files:
-            if is_file_c_like(file):
-                yield os.path.join(subdir, file)
+    for dirpath, _, filenames in source.walk():
+        for name in filenames:
+            path = dirpath / name
+            if is_file_c_like(path):
+                yield path
 
         if not recursive:
             break

@@ -1,4 +1,3 @@
-#
 import logging
 import difflib
 from pathlib import Path

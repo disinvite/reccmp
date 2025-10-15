@@ -38,6 +38,7 @@ def test_order_out_of_order(linter: DecompLinter):
     assert linter.alerts[0].code == ParserError.FUNCTION_OUT_OF_ORDER
     # N.B. Line number given is the start of the function, not the marker
     assert linter.alerts[0].line_number == 6
+    assert linter.alerts[0].module == "TEST"
 
 
 def test_order_ignore_lookup_by_name(linter: DecompLinter):
@@ -103,6 +104,7 @@ def test_duplicate_offsets_module_scope(linter: DecompLinter):
     # Only one error because we are focused on the TEST module
     assert len(linter.alerts) == 1
     assert all(a.code == ParserError.DUPLICATE_OFFSET for a in linter.alerts)
+    assert all(a.module == "TEST" for a in linter.alerts)
 
     # Partial reset (i.e. starting a new file) will retain the list of seen offsets.
     assert linter.read(code, PurePath("test.h"), "TEST") is False
@@ -124,6 +126,7 @@ def test_duplicate_offsets_all(linter: DecompLinter):
     assert linter.read(code, PurePath("test.h"), None) is True
     assert linter.read(code, PurePath("test.h"), None) is False
     assert all(a.code == ParserError.DUPLICATE_OFFSET for a in linter.alerts)
+    assert [a.module for a in linter.alerts] == ["TEST", "HELLO"]
 
 
 def test_duplicate_offsets_isolation(linter: DecompLinter):
@@ -167,6 +170,7 @@ def test_duplicate_strings(linter: DecompLinter):
     assert linter.read(different_string, PurePath("greeting.h"), "TEST") is False
     assert len(linter.alerts) == 1
     assert linter.alerts[0].code == ParserError.WRONG_STRING
+    assert linter.alerts[0].module == "TEST"
 
     same_addr_reused = """\
         // GLOBAL:TEXT 0x1000

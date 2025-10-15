@@ -208,17 +208,18 @@ class DecompParser:
         self.var_markers.empty()
         self.tbl_markers.empty()
 
-    def _syntax_warning(self, code):
+    def _syntax_warning(self, code: ParserError, module: str | None = None):
         self.alerts.append(
             ParserAlert(
                 line_number=self.line_number,
                 code=code,
                 line=self.last_line.strip(),
+                module=module,
             )
         )
 
-    def _syntax_error(self, code):
-        self._syntax_warning(code)
+    def _syntax_error(self, code: ParserError, module: str | None = None):
+        self._syntax_warning(code, module)
         self._recover()
 
     def _function_starts_here(self):
@@ -226,13 +227,13 @@ class DecompParser:
 
     def _function_marker(self, marker: DecompMarker):
         if self.fun_markers.insert(marker):
-            self._syntax_warning(ParserError.DUPLICATE_MODULE)
+            self._syntax_warning(ParserError.DUPLICATE_MODULE, marker.module)
         self.state = ReaderState.WANT_SIG
 
     def _nameref_marker(self, marker: DecompMarker):
         """Functions explicitly referenced by name are set here"""
         if self.fun_markers.insert(marker):
-            self._syntax_warning(ParserError.DUPLICATE_MODULE)
+            self._syntax_warning(ParserError.DUPLICATE_MODULE, marker.module)
 
         if marker.is_template():
             self.state = ReaderState.IN_TEMPLATE
@@ -254,7 +255,7 @@ class DecompParser:
                 marker.extra is not None and marker.extra.lower() == "symbol"
             )
             if name_is_symbol and not lookup_by_name:
-                self._syntax_warning(ParserError.SYMBOL_OPTION_IGNORED)
+                self._syntax_warning(ParserError.SYMBOL_OPTION_IGNORED, marker.module)
                 name_is_symbol = False
 
             self._symbols.append(
@@ -277,7 +278,7 @@ class DecompParser:
 
     def _vtable_marker(self, marker: DecompMarker):
         if self.tbl_markers.insert(marker):
-            self._syntax_warning(ParserError.DUPLICATE_MODULE)
+            self._syntax_warning(ParserError.DUPLICATE_MODULE, marker.module)
         self.state = ReaderState.IN_VTABLE
 
     def _vtable_done(self, class_name: str):
@@ -299,7 +300,7 @@ class DecompParser:
 
     def _variable_marker(self, marker: DecompMarker):
         if self.var_markers.insert(marker):
-            self._syntax_warning(ParserError.DUPLICATE_MODULE)
+            self._syntax_warning(ParserError.DUPLICATE_MODULE, marker.module)
 
         if self.state in (ReaderState.IN_FUNC, ReaderState.IN_FUNC_GLOBAL):
             self.state = ReaderState.IN_FUNC_GLOBAL
@@ -340,7 +341,9 @@ class DecompParser:
                     )
 
                     if fun_marker is None:
-                        self._syntax_warning(ParserError.ORPHANED_STATIC_VARIABLE)
+                        self._syntax_warning(
+                            ParserError.ORPHANED_STATIC_VARIABLE, marker.module
+                        )
                         continue
 
                     parent_function = fun_marker.offset

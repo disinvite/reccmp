@@ -127,6 +127,7 @@ def test_different_markers_same_module(parser):
     # Should alert to this
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.DUPLICATE_MODULE
+    assert parser.alerts[0].module == "HOWDY"
 
 
 def test_unexpected_synthetic(parser):
@@ -186,6 +187,7 @@ def test_multiple_variables_same_module(parser):
     )
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.DUPLICATE_MODULE
+    assert parser.alerts[0].module == "HELLO"
     assert len(parser.variables) == 1
     assert parser.variables[0].offset == 0x1234
 
@@ -214,6 +216,7 @@ def test_multiple_vtables_same_module(parser):
     )
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.DUPLICATE_MODULE
+    assert parser.alerts[0].module == "HELLO"
     assert len(parser.vtables) == 1
     assert parser.vtables[0].offset == 0x1234
 
@@ -240,6 +243,7 @@ def test_synthetic_same_module(parser):
     )
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.DUPLICATE_MODULE
+    assert parser.alerts[0].module == "TEST"
     assert len(parser.functions) == 1
     assert parser.functions[0].offset == 0x1234
 
@@ -683,6 +687,7 @@ def test_static_variable_no_parent(parser):
     assert len(parser.variables) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.ORPHANED_STATIC_VARIABLE
+    assert parser.alerts[0].module == "TEST"
 
 
 def test_static_variable_incomplete_coverage(parser):
@@ -707,6 +712,7 @@ def test_static_variable_incomplete_coverage(parser):
     # Failed for TEST module
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == ParserError.ORPHANED_STATIC_VARIABLE
+    assert parser.alerts[0].module == "TEST"
 
 
 def test_header_function_declaration(parser):

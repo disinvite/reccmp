@@ -12,8 +12,12 @@ jobs:
     name: Download SKI
     uses: ./.github/workflows/binfile-ski.yml
 
+  dva:
+    name: Download DVA
+    uses: ./.github/workflows/binfile-dva.yml
+
   merge:
-    needs: [lego, ski]
+    needs: [lego, ski, dva]
     runs-on: ubuntu-latest
     steps:
 
@@ -29,6 +33,13 @@ jobs:
       with:
         path: binfiles
         key: skibin
+        fail-on-cache-miss: true
+
+    - name: Restore DVA
+      uses: actions/cache/restore@v3
+      with:
+        path: binfiles
+        key: dva386
         fail-on-cache-miss: true
 
     - name: Cache binfiles

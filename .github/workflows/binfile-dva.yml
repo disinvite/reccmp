@@ -1,0 +1,28 @@
+name: Download DVA binary
+
+on:
+  workflow_call:
+
+jobs:
+  dva:
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Restore original binaries
+      id: cache
+      uses: actions/cache@v3
+      with:
+        path: binfiles
+        key: dva386
+
+    - name: Download original dva binary
+      if: ${{ !steps.cache.outputs.cache-hit }}
+      run: |
+        wget -O disk.img https://archive.org/download/microsoft-video-for-windows-1994-supplemental-codec-drivers/Microsoft%20Video%20for%20Windows%20%281994%29%20-%20Runtime.img
+        mount -o loop disk.img /vfw
+        apt install -y msexpand
+        msexpand /vfw/DVA.38_ binfiles/DVA.386
+
+    - name: Verify files
+      run: |
+        echo "3bba3509733db80d6d2be08b6a70cc47f40bcbc48ca6968f9a1e42f56debaa23 binfiles/DVA.386" | sha256sum --check

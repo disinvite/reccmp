@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 import pytest
 
-from reccmp.isledecomp import Image, NEImage, PEImage, detect_image
+from reccmp.isledecomp import Image, LXImage, NEImage, PEImage, detect_image
 
 
 def pytest_addoption(parser):
@@ -75,4 +75,13 @@ def fixture_skifree(bin_loader) -> Iterator[NEImage]:
         "SKI.EXE", "0b97b99fcf34af5f5d624080417c79c7d36ae11351a7870ce6e0a476f03515c2"
     )
     assert isinstance(image, NEImage)
+    yield image
+
+
+@pytest.fixture(name="dva386", scope="session")
+def fixture_dva386(bin_loader) -> Iterator[LXImage]:
+    image = bin_loader(
+        "DVA.386", "3bba3509733db80d6d2be08b6a70cc47f40bcbc48ca6968f9a1e42f56debaa23"
+    )
+    assert isinstance(image, LXImage)
     yield image

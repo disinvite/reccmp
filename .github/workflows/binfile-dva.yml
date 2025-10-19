@@ -19,9 +19,10 @@ jobs:
       if: ${{ !steps.cache.outputs.cache-hit }}
       run: |
         wget -O disk.img https://archive.org/download/microsoft-video-for-windows-1994-supplemental-codec-drivers/Microsoft%20Video%20for%20Windows%20%281994%29%20-%20Runtime.img
-        mount -o loop disk.img /vfw
+        mkdir vfw
+        mount -o loop disk.img vfw
         apt install -y msexpand
-        msexpand /vfw/DVA.38_ binfiles/DVA.386
+        msexpand vfw/DVA.38_ binfiles/DVA.386
 
     - name: Verify files
       run: |

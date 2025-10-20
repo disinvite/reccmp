@@ -3,7 +3,6 @@ These functions load the entity and type databases with information from code an
 """
 
 import logging
-from pathlib import Path
 from reccmp.isledecomp.formats.exceptions import (
     InvalidVirtualReadError,
     InvalidStringError,
@@ -14,7 +13,6 @@ from reccmp.isledecomp.cvdump.demangler import (
 )
 from reccmp.isledecomp.cvdump import CvdumpTypesParser, CvdumpAnalysis
 from reccmp.isledecomp.parser import DecompCodebase
-from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.types import EntityType
 from reccmp.isledecomp.compare.event import (
     ReccmpEvent,
@@ -176,16 +174,13 @@ def load_cvdump_lines(
 
 
 def load_markers(
-    code_dir: Path,
+    codebase: DecompCodebase,
     lines_db: LinesDb,
     orig_bin: PEImage,
-    target_id: str,
     db: EntityDb,
     report: ReccmpReportProtocol = reccmp_report_nop,
 ):
-    codefiles = [Path(p) for p in walk_source_dir(code_dir)]
-    lines_db.add_local_paths(codefiles)
-    codebase = DecompCodebase(codefiles, target_id)
+    lines_db.add_local_paths(codebase.files.keys())
 
     # If the address of any annotation would cause an exception,
     # remove it and report an error.

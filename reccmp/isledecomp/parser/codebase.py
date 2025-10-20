@@ -1,7 +1,7 @@
 """For aggregating decomp markers read from an entire directory and for a single module."""
 
-from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from pathlib import Path, PurePath
+from typing import Callable, Iterator
 from .parser import DecompParser
 from .node import (
     ParserLineSymbol,
@@ -14,16 +14,33 @@ from .node import (
 
 
 class DecompCodebase:
-    def __init__(self, paths: Iterable[Path], module: str) -> None:
-        self._symbols: list[ParserSymbol] = []
+    files: dict[PurePath, str]
+    symbols: dict[PurePath, list[ParserSymbol]]
+    module: str
+
+    def __init__(self, module: str) -> None:
+        self.module = module
+        self.files = {}
+        self.symbols = {}
+
+    def set_file(self, path: Path, text: str):
+        self.files[path] = text
 
         parser = DecompParser()
-        for path in paths:
-            parser.reset_and_set_filename(str(path))
-            with open(path, "r", encoding="utf-8") as f:
-                parser.read(f.read())
+        parser.reset_and_set_filename(str(path))
+        parser.read(text)
 
-            self._symbols += parser.iter_symbols(module)
+        self.symbols[path] = list(parser.iter_symbols(self.module))
+
+    def read_file(self, path: Path):
+        with open(path, "r", encoding="utf-8") as f:
+            self.set_file(path, f.read())
+
+    def iter_symbols(self) -> Iterator[ParserSymbol]:
+        """To keep order consistent, sort paths and return symbols from each"""
+        paths = sorted(self.symbols.keys())
+        for path in paths:
+            yield from iter(self.symbols[path])
 
     def prune_invalid_addrs(
         self, is_valid: Callable[[int], bool]
@@ -31,8 +48,11 @@ class DecompCodebase:
         """Some decomp annotations might have an invalid address.
         Return the list of addresses where we fail the is_valid check,
         and remove those from our list of symbols."""
-        invalid_symbols = [sym for sym in self._symbols if not is_valid(sym.offset)]
-        self._symbols = [sym for sym in self._symbols if is_valid(sym.offset)]
+        invalid_symbols = []
+
+        for path, symbols in self.symbols.items():
+            invalid_symbols.extend([sym for sym in symbols if not is_valid(sym.offset)])
+            self.symbols[path] = [sym for sym in symbols if is_valid(sym.offset)]
 
         return invalid_symbols
 
@@ -42,16 +62,19 @@ class DecompCodebase:
         Return the duplicates in a list for error reporting."""
         used_addr = set()
         duplicates = []
-        unique = []
 
-        for s in self._symbols:
-            if s.offset in used_addr:
-                duplicates.append(s)
-            else:
-                unique.append(s)
-                used_addr.add(s.offset)
+        for path, symbols in self.symbols.items():
+            unique = []
 
-        self._symbols = unique
+            for s in symbols:
+                if s.offset in used_addr:
+                    duplicates.append(s)
+                else:
+                    unique.append(s)
+                    used_addr.add(s.offset)
+
+            self.symbols[path] = unique
+
         return duplicates
 
     def iter_line_functions(self) -> Iterator[ParserFunction]:
@@ -60,23 +83,25 @@ class DecompCodebase:
         multiple functions share the same name. (i.e. polymorphism)"""
         return (
             s
-            for s in self._symbols
+            for s in self.iter_symbols()
             if isinstance(s, ParserFunction) and not s.is_nameref()
         )
 
     def iter_name_functions(self) -> Iterator[ParserFunction]:
         return (
-            s for s in self._symbols if isinstance(s, ParserFunction) and s.is_nameref()
+            s
+            for s in self.iter_symbols()
+            if isinstance(s, ParserFunction) and s.is_nameref()
         )
 
     def iter_vtables(self) -> Iterator[ParserVtable]:
-        return (s for s in self._symbols if isinstance(s, ParserVtable))
+        return (s for s in self.iter_symbols() if isinstance(s, ParserVtable))
 
     def iter_variables(self) -> Iterator[ParserVariable]:
-        return (s for s in self._symbols if isinstance(s, ParserVariable))
+        return (s for s in self.iter_symbols() if isinstance(s, ParserVariable))
 
     def iter_strings(self) -> Iterator[ParserString]:
-        return (s for s in self._symbols if isinstance(s, ParserString))
+        return (s for s in self.iter_symbols() if isinstance(s, ParserString))
 
     def iter_line_symbols(self) -> Iterator[ParserLineSymbol]:
-        return (s for s in self._symbols if isinstance(s, ParserLineSymbol))
+        return (s for s in self.iter_symbols() if isinstance(s, ParserLineSymbol))

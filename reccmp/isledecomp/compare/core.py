@@ -9,6 +9,8 @@ from reccmp.isledecomp.compare.functions import FunctionComparator
 from reccmp.isledecomp.formats.detect import detect_image
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.cvdump import Cvdump, CvdumpTypesParser, CvdumpAnalysis
+from reccmp.isledecomp.dir import walk_source_dir
+from reccmp.isledecomp.parser import DecompCodebase
 from reccmp.isledecomp.types import EntityType, ImageId
 from reccmp.isledecomp.compare.event import (
     ReccmpReportProtocol,
@@ -60,7 +62,7 @@ class Compare:
     _db: EntityDb
     _debug: bool
     _lines_db: LinesDb
-    code_dir: Path
+    codebase: DecompCodebase
     cvdump_analysis: CvdumpAnalysis
     orig_bin: PEImage
     recomp_bin: PEImage
@@ -74,14 +76,12 @@ class Compare:
         orig_bin: PEImage,
         recomp_bin: PEImage,
         pdb_file: CvdumpAnalysis,
-        code_dir: Path | str,
-        target_id: str,
+        codebase: DecompCodebase,
     ):
         self.orig_bin = orig_bin
         self.recomp_bin = recomp_bin
         self.cvdump_analysis = pdb_file
-        self.code_dir = Path(code_dir)
-        self.target_id = target_id
+        self.codebase = codebase
 
         # Controls whether we dump the asm output to a file
         self._debug = False
@@ -106,10 +106,9 @@ class Compare:
         match_entry(self._db, self.orig_bin, self.recomp_bin)
 
         load_markers(
-            self.code_dir,
+            self.codebase,
             self._lines_db,
             self.orig_bin,
-            self.target_id,
             self._db,
             self.report,
         )
@@ -165,12 +164,15 @@ class Compare:
         )
         pdb_file = CvdumpAnalysis(cvdump)
 
+        codebase = DecompCodebase(target.target_id)
+        for path in walk_source_dir(target.source_root):
+            codebase.read_file(Path(path))
+
         compare = cls(
             origfile,
             recompfile,
             pdb_file,
-            target.source_root,
-            target_id=target.target_id,
+            codebase,
         )
         compare.run()
         return compare

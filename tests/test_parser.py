@@ -813,3 +813,82 @@ def test_widechar_string(parser):
     assert parser.strings[0].name == "test"
     assert parser.strings[1].is_widechar is False
     assert parser.strings[1].name == "test"
+
+
+def test_float(parser):
+    parser.read(
+        """\
+        // FLOAT: HELLO 0x1000
+
+        // FLOAT: HELLO 0x2000
+        // FLOAT: HELLO 0x3000
+        """
+    )
+
+    assert parser.floats[0].offset == 0x1000
+    assert parser.floats[1].offset == 0x2000
+    assert parser.floats[2].offset == 0x3000
+    assert parser.floats[0].double is False
+    assert parser.floats[1].double is False
+    assert parser.floats[2].double is False
+
+
+def test_double(parser):
+    parser.read(
+        """\
+        // DOUBLE: HELLO 0x1000
+
+        // DOUBLE: HELLO 0x2000
+        // DOUBLE: HELLO 0x3000
+        """
+    )
+
+    assert parser.floats[0].offset == 0x1000
+    assert parser.floats[1].offset == 0x2000
+    assert parser.floats[2].offset == 0x3000
+    assert parser.floats[0].double is True
+    assert parser.floats[1].double is True
+    assert parser.floats[2].double is True
+
+
+def test_float_mixed(parser):
+    parser.read(
+        """\
+        // FLOAT: HELLO 0x1000
+        // DOUBLE: HELLO 0x2000
+        """
+    )
+
+    assert parser.floats[0].offset == 0x1000
+    assert parser.floats[1].offset == 0x2000
+    assert parser.floats[0].double is False
+    assert parser.floats[1].double is True
+
+
+def test_float_with_function(parser):
+    parser.read(
+        """\
+        // FUNCTION: HELLO 0x1000
+        // FLOAT: HELLO 0x2000
+        void test() { }
+        """
+    )
+
+    assert len(parser.functions) == 0
+    assert len(parser.floats) == 0
+    assert parser.alerts[0].code == ParserError.INCOMPATIBLE_MARKER
+
+
+def test_float_with_global(parser):
+    parser.read(
+        """\
+        // GLOBAL: HELLO 0x1000
+        // FLOAT: HELLO 0x2000
+        char* test;
+        """
+    )
+
+    assert len(parser.variables) == 0
+    assert len(parser.floats) == 0
+    assert parser.alerts[0].code == ParserError.INCOMPATIBLE_MARKER
+

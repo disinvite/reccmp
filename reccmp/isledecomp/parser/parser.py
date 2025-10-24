@@ -27,6 +27,7 @@ from .node import (
     ParserVariable,
     ParserVtable,
     ParserString,
+    ParserFloat,
 )
 from .error import ParserAlert, ParserError
 
@@ -195,6 +196,10 @@ class DecompParser:
     @property
     def strings(self) -> list[ParserString]:
         return [s for s in self._symbols if isinstance(s, ParserString)]
+
+    @property
+    def floats(self) -> list[ParserFloat]:
+        return [s for s in self._symbols if isinstance(s, ParserFloat)]
 
     def iter_symbols(self, module: str | None = None) -> Iterator[ParserSymbol]:
         for s in self._symbols:
@@ -448,6 +453,22 @@ class DecompParser:
 
         elif marker.is_line():
             self._line_marker(marker)
+
+        elif marker.is_float():
+            if self.state in (ReaderState.SEARCH, ReaderState.IN_FUNC):
+                # Floats are a one line marker. Add them right here.
+                self._symbols.append(
+                    ParserFloat(
+                        type=marker.type,
+                        line_number=self.line_number,
+                        module=marker.module,
+                        offset=marker.offset,
+                        filename=self.filename,
+                        name="", # ?
+                    )
+                )
+            else:
+                self._syntax_error(ParserError.INCOMPATIBLE_MARKER)
 
         else:
             self._syntax_warning(ParserError.BOGUS_MARKER)

@@ -75,3 +75,10 @@ class ParserString(ParserSymbol):
 @dataclass
 class ParserLineSymbol(ParserSymbol):
     pass
+
+
+@dataclass
+class ParserFloat(ParserSymbol):
+    @property
+    def double(self) -> bool:
+        return self.type == MarkerType.DOUBLE

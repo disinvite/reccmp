@@ -13,6 +13,7 @@ class MarkerCategory(Enum):
     STRING = 3
     VTABLE = 4
     LINE = 5
+    FLOAT = 6
     ADDRESS = 100  # i.e. no comparison required or possible
 
 
@@ -27,6 +28,8 @@ class MarkerType(Enum):
     STRING = 7
     LIBRARY = 8
     LINE = 9
+    FLOAT = 10
+    DOUBLE = 11
 
 
 markerRegex = re.compile(
@@ -129,8 +132,17 @@ class DecompMarker:
     def is_line(self) -> bool:
         return self._type == MarkerType.LINE
 
+    def is_float(self) -> bool:
+        return self._type in (MarkerType.FLOAT, MarkerType.DOUBLE)
+
     def allowed_in_func(self) -> bool:
-        return self._type in (MarkerType.GLOBAL, MarkerType.STRING, MarkerType.LINE)
+        return self._type in (
+            MarkerType.GLOBAL,
+            MarkerType.STRING,
+            MarkerType.LINE,
+            MarkerType.FLOAT,
+            MarkerType.DOUBLE,
+        )
 
 
 def match_marker(line: str) -> DecompMarker | None:

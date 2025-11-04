@@ -1,5 +1,4 @@
 from pathlib import PureWindowsPath
-from typing import Callable
 from unittest.mock import Mock
 import pytest
 from reccmp.isledecomp.compare.db import EntityDb, ReccmpMatch
@@ -9,7 +8,7 @@ from reccmp.isledecomp.compare.functions import (
     FunctionCompareResult,
 )
 from reccmp.isledecomp.compare.lines import LinesDb
-from reccmp.isledecomp.types import EntityType
+from reccmp.isledecomp.types import EntityType, ImageId
 
 
 MOCK_PATH = PureWindowsPath("some/path/test.cpp")
@@ -40,7 +39,6 @@ def compare_functions(
     orig: bytes,
     recomp: bytes,
     report: ReccmpReportProtocol,
-    is_relocated_addr: Callable[[int], bool] | None = None,
 ) -> FunctionCompareResult:
     """Executes `FunctionComparator.compare_function` on the provided binary code."""
 
@@ -49,13 +47,11 @@ def compare_functions(
     orig_bin = Mock(spec=[])
     orig_bin.read = Mock(return_value=orig)
     orig_bin.imagebase = 0
-    orig_bin.is_relocated_addr = is_relocated_addr or Mock(return_value=False)
     orig_bin.is_debug = Mock(return_value=False)
 
     recomp_bin = Mock(spec=[])
     recomp_bin.read = Mock(return_value=recomp)
     recomp_bin.imagebase = 0
-    recomp_bin.is_relocated_addr = is_relocated_addr or Mock(return_value=False)
     recomp_bin.is_debug = Mock(return_value=False)
 
     comp = FunctionComparator(db, lines_db, orig_bin, recomp_bin, report, "unittest")
@@ -406,9 +402,9 @@ def test_matching_jump_table(
     orig = b"\xff\x24\x85\x07\x02\x00\x00\x33\x04\x00\x00\x43\x04\x00\x00"
     recm = b"\xff\x24\x85\x07\x04\x00\x00\x33\x06\x00\x00\x43\x06\x00\x00"
 
-    is_relocated_addr = Mock(return_value=True)
-    # is_relocated_addr = None
-    diffreport = compare_functions(db, lines_db, orig, recm, report, is_relocated_addr)
+    db.set_pointers(ImageId.ORIG, [(0x203, 0x207)])
+    db.set_pointers(ImageId.RECOMP, [(0x403, 0x407)])
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.match_ratio == 1.0
     assert diffreport.is_effective_match is False
@@ -430,8 +426,9 @@ def test_jump_table_wrong_order(
     recm = b"\xff\x24\x85\x07\x04\x00\x00" + b"\x43\x06\x00\x00\x33\x06\x00\x00"
 
     # Required to get an `<OFFSET1>` into the jump instruction
-    is_relocated_addr = Mock(return_value=True)
-    diffreport = compare_functions(db, lines_db, orig, recm, report, is_relocated_addr)
+    db.set_pointers(ImageId.ORIG, [(0x203, 0x207)])
+    db.set_pointers(ImageId.RECOMP, [(0x403, 0x407)])
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.match_ratio < 1.0
     assert diffreport.is_effective_match is False
@@ -484,8 +481,9 @@ def test_data_table_wrong_order(
     )
 
     # Required to get an `<OFFSET1>` into the jump instruction
-    is_relocated_addr = Mock(return_value=True)
-    diffreport = compare_functions(db, lines_db, orig, recm, report, is_relocated_addr)
+    db.set_pointers(ImageId.ORIG, [(0x202, 0x215), (0x20A, 0x20D)])
+    db.set_pointers(ImageId.RECOMP, [(0x402, 0x415), (0x40A, 0x40D)])
+    diffreport = compare_functions(db, lines_db, orig, recm, report)
 
     assert diffreport.match_ratio < 1.0
     assert diffreport.is_effective_match is False

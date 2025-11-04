@@ -12,3 +12,20 @@ def test_vitals(skifree: NEImage):
     assert skifree.header.ne_flags == NESegmentFlags.NEINST | NESegmentFlags.NEWINAPI
     assert skifree.header.ne_exetyp == NETargetOSFlags.NE_WINDOWS
     assert skifree.header.ne_flagsothers == 8  # according to ghidra
+
+    assert skifree.imagebase == 0x10000000
+    assert skifree.entry == 0x100051E1
+
+
+def test_reads(skifree: NEImage):
+    assert (
+        skifree.read(0x10000000, 16)
+        == b"\x1e\x58\x90\x45\x55\x8b\xec\x1e\x8e\xd8\x81\xec\x04\x01\x57\x56"
+    )
+    assert skifree.read_string(0x10080017) == b"[out o' memory]"
+
+    # Read up to end of seg.
+    # Skip relocation at 0x5a2a
+    assert (
+        skifree.read_string(0x10005A2C) == b"\x8b\xd0\x2b\xc0\x8b\xe5\x5d\x4d\xcb\x90"
+    )

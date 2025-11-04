@@ -16,6 +16,13 @@ class Image:
     view: memoryview = dataclasses.field(repr=False)
     data: bytes = dataclasses.field(repr=False)
 
+    @property
+    def imagebase(self) -> int:
+        raise NotImplementedError
+
+    def get_relative_addr(self, addr: int) -> tuple[int, int]:
+        raise NotImplementedError
+
     def seek(self, vaddr: int) -> tuple[bytes, int]:
         """Must be implemented for each image.
         1. Go to the position in virtual memory for the given address.

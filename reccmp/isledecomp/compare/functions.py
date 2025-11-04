@@ -10,7 +10,6 @@ from reccmp.isledecomp.compare.pinned_sequences import SequenceMatcherWithPins
 from reccmp.isledecomp.compare.asm.fixes import assert_fixup, find_effective_match
 from reccmp.isledecomp.compare.asm.parse import AsmExcerpt, ParseAsm
 from reccmp.isledecomp.compare.asm.replacement import (
-    AddrLookupProtocol,
     create_name_lookup,
 )
 from reccmp.isledecomp.compare.db import EntityDb, ReccmpMatch
@@ -19,7 +18,8 @@ from reccmp.isledecomp.formats.exceptions import (
     InvalidVirtualAddressError,
     InvalidVirtualReadError,
 )
-from reccmp.isledecomp.formats.pe import PEImage
+from reccmp.isledecomp.formats import Image, PEImage
+from reccmp.isledecomp.types import ImageId
 
 
 class FunctionCompareResult(NamedTuple):
@@ -35,26 +35,29 @@ def timestamp_string() -> str:
 
 
 def create_valid_addr_lookup(
-    db_getter: AddrLookupProtocol,
-    is_recomp: bool,
-    bin_file: PEImage,
+    db: EntityDb,
+    image_id: ImageId,
+    bin_file: Image,
 ) -> Callable[[int], bool]:
     """
     Function generator for a lookup whether an address from a call is valid
     (either a relocation or pointing to something else we know, like a global variable)
     """
+    assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
     @cache
     def lookup(addr: int) -> bool:
         # Check if in relocation table
-        if addr > bin_file.imagebase and bin_file.is_relocated_addr(addr):
+        if addr > bin_file.imagebase and db.is_verified_addr(image_id, addr):
             return True
 
         # Check whether the address points to valid data
-        entity = db_getter(addr, exact=False)
+        entity = db.get(image_id, addr, exact=False)
         if entity is None:
             return False
-        base_addr = entity.recomp_addr if is_recomp else entity.orig_addr
+        base_addr = (
+            entity.recomp_addr if image_id == ImageId.RECOMP else entity.orig_addr
+        )
         if base_addr is None:
             # should never happen
             return False
@@ -65,7 +68,7 @@ def create_valid_addr_lookup(
     return lookup
 
 
-def create_bin_lookup(bin_file: PEImage) -> Callable[[int], int | None]:
+def create_bin_lookup(bin_file: Image) -> Callable[[int], int | None]:
     """Function generator to read a pointer from the bin file"""
 
     def lookup(addr: int) -> int | None:
@@ -83,24 +86,22 @@ class FunctionComparator:
     # pylint: disable=too-many-instance-attributes
     db: EntityDb
     lines_db: LinesDb
-    orig_bin: PEImage
-    recomp_bin: PEImage
+    orig_bin: Image
+    recomp_bin: Image
     report: ReccmpReportProtocol
     runid: str = timestamp_string()
     debug: bool = False
 
     def __post_init__(self):
         self.orig_sanitize = ParseAsm(
-            addr_test=create_valid_addr_lookup(
-                self.db.get_by_orig, False, self.orig_bin
-            ),
+            addr_test=create_valid_addr_lookup(self.db, ImageId.ORIG, self.orig_bin),
             name_lookup=create_name_lookup(
                 self.db.get_by_orig, create_bin_lookup(self.orig_bin), "orig_addr"
             ),
         )
         self.recomp_sanitize = ParseAsm(
             addr_test=create_valid_addr_lookup(
-                self.db.get_by_recomp, True, self.recomp_bin
+                self.db, ImageId.RECOMP, self.recomp_bin
             ),
             name_lookup=create_name_lookup(
                 self.db.get_by_recomp,
@@ -168,8 +169,12 @@ class FunctionComparator:
             self._dump_asm(orig_combined, recomp_combined)
 
         # Check for assert calls only if we expect to find them
-        if self.orig_bin.is_debug or self.recomp_bin.is_debug:
+        # pylint: disable=no-member
+        if isinstance(self.orig_bin, PEImage) and self.orig_bin.is_debug:
             assert_fixup(orig_combined)
+
+        # pylint: disable=no-member
+        if isinstance(self.recomp_bin, PEImage) and self.recomp_bin.is_debug:
             assert_fixup(recomp_combined)
 
         line_annotations = self._collect_line_annotations(recomp_combined)

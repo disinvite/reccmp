@@ -30,6 +30,19 @@ def match_entry(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
         batch.match(orig_bin.entry, recomp_bin.entry)
 
 
+def read_relocations(db: EntityDb, image_id: ImageId, binfile: PEImage):
+    pointers = {}
+
+    for addr in binfile.relocations:
+        try:
+            (ptr,) = struct.unpack_from("<L", binfile.seek(addr)[0])
+            pointers[addr] = ptr
+        except (struct.error, InvalidVirtualReadError):
+            pass
+
+    db.set_pointers(image_id, pointers.items())
+
+
 def create_analysis_strings(db: EntityDb, img_id: ImageId, binfile: PEImage):
     """Search both binaries for Latin1 strings.
     We use the insert_() method so that thse strings will not overwrite

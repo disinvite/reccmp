@@ -18,6 +18,14 @@ _SETUP_SQL = """
         ref_recomp integer as (json_extract(kvstore, '$.ref_recomp'))
     );
 
+    CREATE TABLE pointers (
+        img integer not null,
+        addr integer not null,
+        value integer not null,
+        primary key (img, addr)
+    );
+    CREATE INDEX ptr_value ON pointers (img, value);
+
     CREATE VIEW orig_refs (orig_addr, ref_id, nth) AS
         SELECT thunk.orig_addr, ref.rowid,
             Row_number() OVER (partition BY thunk.ref_orig order by thunk.orig_addr) nth
@@ -478,6 +486,24 @@ class EntityDb:
             return self.recomp_used(addr)
 
         assert False, "Invalid image id"
+
+    def set_pointers(self, img: ImageId, pointers: Iterable[tuple[int, int]]):
+        assert img in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
+
+        self._sql.executemany(
+            "INSERT INTO pointers (img, addr, value) VALUES (?,?,?)",
+            ((img, addr, value) for addr, value in pointers),
+        )
+
+    def is_verified_addr(self, img: ImageId, addr: int) -> bool:
+        assert img in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
+
+        if self._sql.execute(
+            "SELECT 1 FROM pointers WHERE img = ? AND value = ?", (img, addr)
+        ).fetchone():
+            return True
+
+        return False  # self.used(img, addr)
 
     def set_pair(
         self, orig: int, recomp: int, entity_type: EntityType | None = None

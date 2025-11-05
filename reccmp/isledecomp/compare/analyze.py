@@ -48,13 +48,31 @@ def create_analysis_strings(db: EntityDb, img_id: ImageId, binfile: PEImage):
     We use the insert_() method so that thse strings will not overwrite
     an existing entity. It's possible that some variables or pointers
     will be mistakenly identified as short strings."""
+    ranges = [
+        range(sect.virtual_address, sect.virtual_address + sect.extent)
+        for sect in (
+            binfile.get_section_by_name(".data"),
+            binfile.get_section_by_name(".rdata"),
+        )
+    ]
+
     with db.batch() as batch:
-        for addr, string in binfile.iter_string("latin1"):
-            # If the address is the site of a relocation, this is a pointer, not a string.
-            if addr in binfile.relocations:
+        for addr in db.get_missing_entities(img_id):
+            if not any(addr in range_ for range_ in ranges):
                 continue
 
-            if is_likely_latin1(string) and not db.used(img_id, addr):
+            raw = binfile.read_string(addr)
+            try:
+                string = raw.decode("latin1")
+            except UnicodeDecodeError:
+                continue
+
+            # TODO: redundant?
+            # If the address is the site of a relocation, this is a pointer, not a string.
+            # if db.is_pointer(img_id, addr):
+            #    continue
+
+            if is_likely_latin1(string):
                 batch.set(
                     img_id,
                     addr,

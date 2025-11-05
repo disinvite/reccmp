@@ -505,6 +505,21 @@ class EntityDb:
 
         return False  # self.used(img, addr)
 
+    def get_missing_entities(self, img: ImageId) -> Iterator[int]:
+        for (addr,) in self.sql.execute(
+            """
+            WITH used_addrs AS (
+                SELECT CASE WHEN ? = 0 THEN orig_addr ELSE recomp_addr END addr
+                FROM entities
+            )
+            SELECT distinct(value) FROM pointers WHERE img = ?
+            EXCEPT SELECT addr FROM used_addrs
+            EXCEPT SELECT addr FROM pointers WHERE img = ?
+            """,
+            (img, img, img),
+        ):
+            yield addr
+
     def set_pair(
         self, orig: int, recomp: int, entity_type: EntityType | None = None
     ) -> bool:

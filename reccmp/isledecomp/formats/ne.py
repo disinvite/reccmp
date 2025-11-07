@@ -171,6 +171,9 @@ class NEImage(Image):
         except (AssertionError, IndexError) as ex:
             raise SectionNotFoundError(index) from ex
 
+    def is_valid_vaddr(self, _: int) -> bool:
+        return True  # TODO
+
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
         assert addr >= 0x10000000
 

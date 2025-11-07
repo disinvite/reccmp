@@ -105,8 +105,15 @@ class Compare:
 
         self.types = CvdumpTypesParser()
 
+        # TODO: hack
+        is_32bit = isinstance(self.orig_bin, PEImage)
         self.function_comparator = FunctionComparator(
-            self._db, self._lines_db, self.orig_bin, self.recomp_bin, self.report
+            self._db,
+            self._lines_db,
+            self.orig_bin,
+            self.recomp_bin,
+            self.report,
+            is_32bit=is_32bit,
         )
 
     def run(self):

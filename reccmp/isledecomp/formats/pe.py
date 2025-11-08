@@ -834,7 +834,10 @@ class PEImage(Image):
     def get_abs_addr(self, section: int, offset: int) -> int:
         """Convenience function for converting section:offset pairs from cvdump
         into an absolute vaddr."""
-        return self.get_section_offset_by_index(section) + offset
+        try:
+            return self.get_section_offset_by_index(section) + offset
+        except SectionNotFoundError as ex:
+            raise InvalidVirtualAddressError from ex
 
     @cached_property
     def vaddr_ranges(self) -> list[range]:

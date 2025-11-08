@@ -4,6 +4,7 @@ These functions update the entity database based on analysis of the binary files
 
 import logging
 import struct
+from reccmp.isledecomp.formats import Image
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.formats.exceptions import (
     InvalidVirtualAddressError,
@@ -23,7 +24,7 @@ from .queries import get_floats_without_data
 logger = logging.getLogger(__name__)
 
 
-def match_entry(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
+def match_entry(db: EntityDb, orig_bin: Image, recomp_bin: Image):
     # The _entry symbol is referenced in the PE header so we get this match for free.
     with db.batch() as batch:
         batch.set_recomp(recomp_bin.entry, type=EntityType.FUNCTION)

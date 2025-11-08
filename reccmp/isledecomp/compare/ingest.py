@@ -6,9 +6,11 @@ import logging
 from pathlib import Path
 from typing import Iterable
 from reccmp.isledecomp.formats.exceptions import (
+    InvalidVirtualAddressError,
     InvalidVirtualReadError,
     InvalidStringError,
 )
+from reccmp.isledecomp.formats import Image
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.cvdump.demangler import (
     demangle_string_const,
@@ -36,7 +38,7 @@ def load_cvdump_types(cvdump_analysis: CvdumpAnalysis, types: CvdumpTypesParser)
     types.keys.update(cvdump_analysis.types.keys)
 
 
-def load_cvdump(cvdump_analysis: CvdumpAnalysis, db: EntityDb, recomp_bin: PEImage):
+def load_cvdump(cvdump_analysis: CvdumpAnalysis, db: EntityDb, recomp_bin: Image):
     # Build the list of entries to insert to the DB.
     # In the rare case we have duplicate symbols for an address, ignore them.
     seen_addrs = set()
@@ -52,10 +54,11 @@ def load_cvdump(cvdump_analysis: CvdumpAnalysis, db: EntityDb, recomp_bin: PEIma
             # actual binary. The symbol "__except_list" is one example.
             # In these cases, just skip this symbol and move on because
             # we can't do much with it.
-            if not recomp_bin.is_valid_section(sym.section):
+            try:
+                addr = recomp_bin.get_abs_addr(sym.section, sym.offset)
+            except InvalidVirtualAddressError:
                 continue
 
-            addr = recomp_bin.get_abs_addr(sym.section, sym.offset)
             sym.addr = addr
 
             if addr in seen_addrs:
@@ -67,10 +70,11 @@ def load_cvdump(cvdump_analysis: CvdumpAnalysis, db: EntityDb, recomp_bin: PEIma
             # estimate its size because we didn't have the total size of that section.
             # We can get this estimate now and assume that the final symbol occupies
             # the remainder of the section.
-            if sym.estimated_size is None:
-                sym.estimated_size = (
-                    recomp_bin.get_section_extent_by_index(sym.section) - sym.offset
-                )
+            if isinstance(recomp_bin, PEImage):
+                if sym.estimated_size is None:
+                    sym.estimated_size = (
+                        recomp_bin.get_section_extent_by_index(sym.section) - sym.offset
+                    )
 
             if sym.node_type == EntityType.STRING:
                 assert sym.decorated_name is not None
@@ -165,7 +169,7 @@ def load_cvdump(cvdump_analysis: CvdumpAnalysis, db: EntityDb, recomp_bin: PEIma
 
 
 def load_cvdump_lines(
-    cvdump_analysis: CvdumpAnalysis, lines_db: LinesDb, recomp_bin: PEImage
+    cvdump_analysis: CvdumpAnalysis, lines_db: LinesDb, recomp_bin: Image
 ):
     for filename, values in cvdump_analysis.lines.items():
         lines = [
@@ -176,12 +180,14 @@ def load_cvdump_lines(
 
     # The seen_addrs set has more than functions, but the intersection of
     # these addrs and the code lines should be just the functions.
-    seen_addrs = set(
-        # TODO: Ideally this conversion and filtering would happen inside CvdumpAnalysis.
-        recomp_bin.get_abs_addr(node.section, node.offset)
-        for node in cvdump_analysis.nodes
-        if recomp_bin.is_valid_section(node.section)
-    )
+    seen_addrs = set()
+    for node in cvdump_analysis.nodes:
+        try:
+            # TODO: Ideally this conversion and filtering would happen inside CvdumpAnalysis.
+            addr = recomp_bin.get_abs_addr(node.section, node.offset)
+            seen_addrs.add(addr)
+        except InvalidVirtualAddressError:
+            continue
 
     lines_db.mark_function_starts(tuple(seen_addrs))
 
@@ -189,7 +195,7 @@ def load_cvdump_lines(
 def load_markers(
     code_dir: Path,
     lines_db: LinesDb,
-    orig_bin: PEImage,
+    orig_bin: Image,
     target_id: str,
     db: EntityDb,
     report: ReccmpReportProtocol = reccmp_report_nop,

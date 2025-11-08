@@ -32,7 +32,17 @@ class Image:
     def imagebase(self) -> int:
         raise NotImplementedError
 
+    @property
+    def entry(self) -> int:
+        raise NotImplementedError
+
+    def is_valid_vaddr(self, vaddr: int) -> bool:
+        raise NotImplementedError
+
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
+        raise NotImplementedError
+
+    def get_abs_addr(self, section: int, offset: int) -> int:
         raise NotImplementedError
 
     def get_code_regions(self) -> Iterator[ImageRegion]:

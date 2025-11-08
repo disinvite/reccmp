@@ -7,13 +7,14 @@ Based on the following resources:
 import dataclasses
 import struct
 from pathlib import Path
+from typing import Iterator
 from enum import IntEnum, IntFlag
 
 from .exceptions import (
     InvalidVirtualAddressError,
     SectionNotFoundError,
 )
-from .image import Image
+from .image import Image, ImageRegion
 from .mz import ImageDosHeader
 
 
@@ -202,3 +203,12 @@ class NEImage(Image):
         start = 16 * seg.ns_sector
         end = start + physical_size
         return (self.view[start + offset : end], virtual_size - offset)
+
+    def get_code_regions(self) -> Iterator[ImageRegion]:
+        raise NotImplementedError
+
+    def get_data_regions(self) -> Iterator[ImageRegion]:
+        raise NotImplementedError
+
+    def get_const_regions(self) -> Iterator[ImageRegion]:
+        raise NotImplementedError

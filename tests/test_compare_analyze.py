@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 import pytest
 from reccmp.isledecomp.compare.db import EntityDb
 from reccmp.isledecomp.formats import PEImage
+from reccmp.isledecomp.formats.image import ImageRegion
 from reccmp.isledecomp.types import EntityType, ImageId
 from reccmp.isledecomp.compare.analyze import (
     create_analysis_floats,
@@ -18,9 +19,11 @@ def fixture_db():
 
 def test_create_analysis_strings(db: EntityDb):
     """Should add this ordinary string to the database."""
+    db.set_pointers(ImageId.ORIG, [(0, 100)])
+
     binfile = Mock(spec=[])
-    binfile.iter_string = Mock(return_value=[(100, "Hello")])
-    binfile.relocations = set()
+    binfile.get_data_regions = Mock(return_value=[ImageRegion(100, 10, b"")])
+    binfile.read_string = Mock(return_value=b"Hello")
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
@@ -30,14 +33,42 @@ def test_create_analysis_strings(db: EntityDb):
     assert e.get("size") == 6
 
 
+def test_create_analysis_strings_not_pointer(db: EntityDb):
+    """Should not add the string unless its location is a known pointer."""
+    binfile = Mock(spec=[])
+    binfile.get_data_regions = Mock(return_value=[ImageRegion(100, 10, b"")])
+    binfile.read_string = Mock(return_value=b"Hello")
+
+    create_analysis_strings(db, ImageId.ORIG, binfile)
+
+    e = db.get_by_orig(100)
+    assert e is None
+
+
+def test_create_analysis_strings_out_of_range(db: EntityDb):
+    """Should not add the string unless the address is in a known data region/section."""
+    db.set_pointers(ImageId.ORIG, [(0, 100)])
+
+    binfile = Mock(spec=[])
+    binfile.get_data_regions = Mock(return_value=[])
+    binfile.read_string = Mock(return_value=b"Hello")
+
+    create_analysis_strings(db, ImageId.ORIG, binfile)
+
+    e = db.get_by_orig(100)
+    assert e is None
+
+
 def test_create_analysis_strings_do_not_replace(db: EntityDb):
     """Should not replace user data with the string found by automated search."""
     with db.batch() as batch:
         batch.set(ImageId.ORIG, 100, type=EntityType.FLOAT)
 
+    db.set_pointers(ImageId.ORIG, [(0, 100)])
+
     binfile = Mock(spec=[])
-    binfile.iter_string = Mock(return_value=[(100, "Hello")])
-    binfile.relocations = set()
+    binfile.get_data_regions = Mock(return_value=[ImageRegion(100, 10, b"")])
+    binfile.read_string = Mock(return_value=b"Hello")
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
@@ -49,9 +80,14 @@ def test_create_analysis_strings_do_not_replace(db: EntityDb):
 def test_create_analysis_strings_not_relocated(db: EntityDb):
     """Should not add the string if its address is the site of a relocation.
     i.e. We know this is a pointer, despite how it appears."""
+
+    # Address   0 points to address 100
+    # Address 100 points to address 200
+    # Meaning: address 100 is a pointer, not the start of a string.
+    db.set_pointers(ImageId.ORIG, [(0, 100), (100, 200)])
     binfile = Mock(spec=[])
-    binfile.iter_string = Mock(return_value=[(100, "Hello")])
-    binfile.relocations = {100}
+    binfile.get_data_regions = Mock(return_value=[ImageRegion(100, 10, b"")])
+    binfile.read_string = Mock(return_value=b"Hello")
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
@@ -60,10 +96,12 @@ def test_create_analysis_strings_not_relocated(db: EntityDb):
 
 def test_create_analysis_strings_not_latin1(db: EntityDb):
     """Should not add the string if our heuristic check for Latin1 (ANSI) fails."""
+    db.set_pointers(ImageId.ORIG, [(0, 100)])
+
     binfile = Mock(spec=[])
+    binfile.get_data_regions = Mock(return_value=[ImageRegion(100, 10, b"")])
     # Starts with BEL character to play the Windows chord sound
-    binfile.iter_string = Mock(return_value=[(100, "\x07Alert!")])
-    binfile.relocations = set()
+    binfile.read_string = Mock(return_value=b"\x07Alert!")
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 

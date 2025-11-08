@@ -16,7 +16,7 @@ from .exceptions import (
     InvalidVirtualAddressError,
     SectionNotFoundError,
 )
-from .image import Image
+from .image import Image, ImageRegion
 from .mz import ImageDosHeader
 
 # pylint: disable=too-many-lines
@@ -872,6 +872,21 @@ class PEImage(Image):
         # Use max here just in case the section headers are not ordered by v.addr
         last_range = max(self.vaddr_ranges, key=lambda r: r.stop)
         return self.imagebase <= vaddr < last_range.stop
+
+    def get_code_regions(self) -> Iterator[ImageRegion]:
+        for sect in (self.get_section_by_name(".text"),):
+            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
+
+    def get_data_regions(self) -> Iterator[ImageRegion]:
+        for sect in (
+            self.get_section_by_name(".rdata"),
+            self.get_section_by_name(".data"),
+        ):
+            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
+
+    def get_const_regions(self) -> Iterator[ImageRegion]:
+        for sect in (self.get_section_by_name(".rdata"),):
+            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
 
     @cached_property
     def uninitialized_ranges(self) -> list[range]:

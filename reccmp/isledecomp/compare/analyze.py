@@ -48,17 +48,11 @@ def create_analysis_strings(db: EntityDb, img_id: ImageId, binfile: PEImage):
     We use the insert_() method so that thse strings will not overwrite
     an existing entity. It's possible that some variables or pointers
     will be mistakenly identified as short strings."""
-    ranges = [
-        range(sect.virtual_address, sect.virtual_address + sect.extent)
-        for sect in (
-            binfile.get_section_by_name(".data"),
-            binfile.get_section_by_name(".rdata"),
-        )
-    ]
+    regions = list(binfile.get_data_regions())
 
     with db.batch() as batch:
         for addr in db.get_missing_entities(img_id):
-            if not any(addr in range_ for range_ in ranges):
+            if not any(addr in region.range for region in regions):
                 continue
 
             raw = binfile.read_string(addr)

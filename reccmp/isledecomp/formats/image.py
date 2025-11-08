@@ -1,6 +1,7 @@
 import re
 import dataclasses
 from pathlib import Path
+from typing import Iterator
 from .exceptions import InvalidVirtualReadError, InvalidStringError
 
 # Matches 0-to-N non-null bytes.
@@ -8,6 +9,17 @@ r_szstring = re.compile(rb"[^\x00]*")
 
 # Matches pairs of bytes until both are null.
 r_widestring = re.compile(rb"(?:(?:[^\x00]\x00)|(?:\x00[^\x00])|(?:[^\x00][^\x00]))*")
+
+
+@dataclasses.dataclass(frozen=True)
+class ImageRegion:
+    addr: int
+    size: int
+    data: bytes
+
+    @property
+    def range(self) -> range:
+        return range(self.addr, self.addr + self.size)
 
 
 @dataclasses.dataclass
@@ -21,6 +33,15 @@ class Image:
         raise NotImplementedError
 
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
+        raise NotImplementedError
+
+    def get_code_regions(self) -> Iterator[ImageRegion]:
+        raise NotImplementedError
+
+    def get_data_regions(self) -> Iterator[ImageRegion]:
+        raise NotImplementedError
+
+    def get_const_regions(self) -> Iterator[ImageRegion]:
         raise NotImplementedError
 
     def seek(self, vaddr: int) -> tuple[bytes, int]:

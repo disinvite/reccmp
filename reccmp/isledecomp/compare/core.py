@@ -42,6 +42,7 @@ from .ingest import (
     load_cvdump,
     load_cvdump_types,
     load_cvdump_lines,
+    load_map_file,
     load_markers,
     load_data_sources,
 )
@@ -72,6 +73,7 @@ class Compare:
     types: CvdumpTypesParser
     function_comparator: FunctionComparator
     data_sources: list[TextFile]
+    map_file: TextFile | None
 
     # pylint: disable=too-many-arguments
     def __init__(
@@ -82,6 +84,7 @@ class Compare:
         code_dir: Path | str,
         target_id: str,
         data_sources: list[TextFile] | None = None,
+        map_file: TextFile | None = None,
     ):
         self.orig_bin = orig_bin
         self.recomp_bin = recomp_bin
@@ -93,6 +96,8 @@ class Compare:
             self.data_sources = data_sources
         else:
             self.data_sources = []
+
+        self.map_file = map_file
 
         # Controls whether we dump the asm output to a file
         self._debug = False
@@ -117,21 +122,20 @@ class Compare:
         )
 
     def run(self):
-        try:
-            assert isinstance(self.orig_bin, PEImage)
-            assert isinstance(self.recomp_bin, PEImage)
-        except AssertionError:
-            return
-
         for img_id, binfile in (
             (ImageId.ORIG, self.orig_bin),
             (ImageId.RECOMP, self.recomp_bin),
         ):
-            read_relocations(self._db, img_id, binfile)
+            if isinstance(binfile, PEImage):
+                read_relocations(self._db, img_id, binfile)
 
         load_cvdump_types(self.cvdump_analysis, self.types)
         load_cvdump(self.cvdump_analysis, self._db, self.recomp_bin)
         load_cvdump_lines(self.cvdump_analysis, self._lines_db, self.recomp_bin)
+
+        if self.map_file:
+            # TODO
+            load_map_file(self.map_file, self._db, self._lines_db, self.recomp_bin)
 
         match_entry(self._db, self.orig_bin, self.recomp_bin)
 
@@ -145,6 +149,12 @@ class Compare:
         )
 
         load_data_sources(self._db, self.data_sources)
+
+        try:
+            assert isinstance(self.orig_bin, PEImage)
+            assert isinstance(self.recomp_bin, PEImage)
+        except AssertionError:
+            return
 
         # Match using PDB and annotation data
         match_symbols(self._db, self.report, truncate=True)
@@ -201,6 +211,11 @@ class Compare:
             except FileNotFoundError:
                 logger.error("Could not open data source file %s", str(path))
 
+        if target.recompiled_map:
+            map_file = TextFile.from_file(target.recompiled_map)
+        else:
+            map_file = None
+
         compare = cls(
             origfile,
             recompfile,
@@ -208,6 +223,7 @@ class Compare:
             target.source_root,
             target_id=target.target_id,
             data_sources=data_sources,
+            map_file=map_file,
         )
         compare.run()
         return compare

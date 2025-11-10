@@ -148,6 +148,7 @@ class RecCmpPartialTarget:
     original_path: Path | None = None
     recompiled_path: Path | None = None
     recompiled_pdb: Path | None = None
+    recompiled_map: Path | None = None
 
     # Data to set directly in the database (addresses refer to orig binary)
     data_sources: list[Path] | None = None
@@ -184,6 +185,7 @@ class RecCmpTarget:
     original_path: Path
     recompiled_path: Path
     recompiled_pdb: Path
+    recompiled_map: Path | None = None
 
     # Data to set directly in the database (addresses refer to orig binary)
     data_sources: list[Path] = field(default_factory=list)
@@ -259,6 +261,7 @@ class RecCmpProject:
             original_path=target.original_path,
             recompiled_path=target.recompiled_path,
             recompiled_pdb=target.recompiled_pdb,
+            recompiled_map=target.recompiled_map,
             source_root=target.source_root,
             ghidra_config=ghidra,
             data_sources=data_sources,
@@ -393,6 +396,11 @@ class RecCmpProject:
                 project.targets[target_id].recompiled_pdb = build_directory.joinpath(
                     build_target.pdb
                 )
+
+                if build_target.map:
+                    project.targets[target_id].recompiled_map = (
+                        build_directory.joinpath(build_target.map)
+                    )
 
         return project
 

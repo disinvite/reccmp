@@ -12,6 +12,7 @@ from reccmp.isledecomp.formats.exceptions import (
 )
 from reccmp.isledecomp.formats import Image
 from reccmp.isledecomp.formats.pe import PEImage
+from reccmp.isledecomp.formats.msvc_map import MsvcMap
 from reccmp.isledecomp.cvdump.demangler import (
     demangle_string_const,
 )
@@ -366,3 +367,38 @@ def load_csv(db: EntityDb, csv_file: TextFile):
     with db.batch() as batch:
         for addr, values in rows:
             batch.set_orig(addr, **values)
+
+
+def load_map_file(file: TextFile, db: EntityDb, lines_db: LinesDb, recomp_bin: Image):
+    msvc_map = MsvcMap(file.text)
+
+    with db.batch() as batch:
+        for (section, offset), symbol in msvc_map.symbols.items():
+            addr = recomp_bin.get_abs_addr(section, offset)
+            batch.set_recomp(addr, symbol=symbol, name=symbol)
+
+    for line_section in msvc_map.lines:
+        if line_section.segment.endswith("_TEXT"):
+            continue
+
+        output_lines = []
+        sizes = {}
+        last_start = None
+
+        for (section, offset), line in line_section.lines:
+            addr = recomp_bin.get_abs_addr(section, offset)
+            if last_start is None:
+                last_start = addr
+
+            if line == 0:
+                sizes[last_start] = addr - last_start
+                last_start = None
+            else:
+                output_lines.append((line, addr))
+
+            lines_db.add_lines(line_section.path, output_lines)
+            lines_db.mark_function_starts(sizes.keys())
+
+            with db.batch() as batch:
+                for addr, size in sizes.items():
+                    batch.set_recomp(addr, size=size)

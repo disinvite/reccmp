@@ -552,10 +552,14 @@ def detect_project(
             for search_path_folder in search_path:
                 binary = search_path_folder / filename
                 pdb = binary.with_suffix(".pdb")
+                map_ = binary.with_suffix(".map")
+
                 if binary.is_file():
                     if pdb.is_file():
+                        map_path = map_ if map_.is_file() else None
                         build_data.targets.setdefault(
-                            target_id, BuildFileTarget(path=binary, pdb=pdb)
+                            target_id,
+                            BuildFileTarget(path=binary, pdb=pdb, map=map_path),
                         )
                         logger.info("Found %s -> %s", target_id, binary)
                         logger.info("Found %s -> %s", target_id, pdb)

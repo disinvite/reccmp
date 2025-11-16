@@ -42,7 +42,7 @@ def test_reloc_patching_import_ordinal(skifree: NEImage):
 
 def test_reloc_patching_internalref(skifree: NEImage):
     # Internalref reloc has all zeroes for the pointer.
-    assert skifree.read(0x10003c92, 5) != b"\x9a\x00\x00\x00\x00"
+    assert skifree.read(0x10003C92, 5) != b"\x9a\x00\x00\x00\x00"
 
     # Should replace with 0001:3c92.
-    assert skifree.read(0x10003c92, 5) == b"\x9a\x6e\x52\x00\x10"
+    assert skifree.read(0x10003C92, 5) == b"\x9a\x6e\x52\x00\x10"

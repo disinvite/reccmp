@@ -29,3 +29,20 @@ def test_reads(skifree: NEImage):
     assert (
         skifree.read_string(0x10005A2C) == b"\x8b\xd0\x2b\xc0\x8b\xe5\x5d\x4d\xcb\x90"
     )
+
+
+def test_reloc_patching_import_ordinal(skifree: NEImage):
+    # Source chain of one: the reloc location is 0xffff.
+    # Just assert that we changed it to something else.
+    assert skifree.read(0x10000049, 5) != b"\x9a\xff\xff\x00\x00"
+
+    # USER::LOADSTRING -> import_seg::000f8
+    assert skifree.read(0x10000049, 3) == b"\x9a\xf8\x00"
+
+
+def test_reloc_patching_internalref(skifree: NEImage):
+    # Internalref reloc has all zeroes for the pointer.
+    assert skifree.read(0x10003c92, 5) != b"\x9a\x00\x00\x00\x00"
+
+    # Should replace with 0001:3c92.
+    assert skifree.read(0x10003c92, 5) == b"\x9a\x6e\x52\x00\x10"

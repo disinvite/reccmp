@@ -69,6 +69,9 @@ class ModuleMap:
         ]
 
     def get_module(self, addr: int) -> tuple[str, str] | None:
+        if not self.section_contrib:
+            return None
+
         i = bisect.bisect_left(self.contrib_starts, addr)
         # If the addr matches the section contribution start, we are in the
         # right spot. Otherwise, we need to subtract one here.
@@ -397,6 +400,9 @@ def main() -> int:
         """Compare the section name instead of the index.
         LEGO1.dll adds extra sections for some reason. (Smacker library?)"""
 
+        if not isinstance(orig_bin, PEImage) or not isinstance(recomp_bin, PEImage):
+            return False
+
         try:
             orig_name = orig_bin.sections[orig - 1].name
             recomp_name = recomp_bin.sections[recomp - 1].name
@@ -472,11 +478,12 @@ def main() -> int:
 
     if args.csv is None:
         if args.verbose:
-            print("ORIG sections:")
-            print_sections(orig_bin.sections)
+            if isinstance(orig_bin, PEImage) and isinstance(recomp_bin, PEImage):
+                print("ORIG sections:")
+                print_sections(orig_bin.sections)
 
-            print("RECOMP sections:")
-            print_sections(recomp_bin.sections)
+                print("RECOMP sections:")
+                print_sections(recomp_bin.sections)
 
             print_text_report(results)
         else:

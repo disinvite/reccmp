@@ -404,9 +404,9 @@ class NEImage(Image):
 
             # Now apply the patches
             for offset, patch in reloc_values:
-                print(
-                    f"{seg.address + offset:8x}:  {seg_data[offset : offset + len(patch)].hex()}  {patch.hex()}"
-                )
+                # print(
+                #     f"{seg.address + offset:8x}:  {seg_data[offset : offset + len(patch)].hex()}  {patch.hex()}"
+                # )
                 seg_data[offset : offset + len(patch)] = patch
 
         # The data has been changed: update underlying value.

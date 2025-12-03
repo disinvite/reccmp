@@ -150,12 +150,6 @@ class Compare:
 
         load_data_sources(self._db, self.data_sources)
 
-        try:
-            assert isinstance(self.orig_bin, PEImage)
-            assert isinstance(self.recomp_bin, PEImage)
-        except AssertionError:
-            return
-
         # Match using PDB and annotation data
         match_symbols(self._db, self.report, truncate=True)
         match_functions(self._db, self.report, truncate=True)
@@ -163,6 +157,12 @@ class Compare:
         match_static_variables(self._db, self.report)
         match_variables(self._db, self.report)
         match_lines(self._db, self._lines_db, self.report)
+
+        try:
+            assert isinstance(self.orig_bin, PEImage)
+            assert isinstance(self.recomp_bin, PEImage)
+        except AssertionError:
+            return
 
         match_array_elements(self._db, self.types)
         # Detect floats first to eliminate potential overlap with string data

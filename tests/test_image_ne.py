@@ -46,3 +46,7 @@ def test_reloc_patching_internalref(skifree: NEImage):
 
     # Should replace with 0001:3c92.
     assert skifree.read(0x10003C92, 5) == b"\x9a\x6e\x52\x00\x10"
+
+    # Separate relocs for seg and offset.
+    assert skifree.read(0x10003E71, 2) == b"\x3c\x51"
+    assert skifree.read(0x10003E76, 2) == b"\x00\x10"

@@ -8,7 +8,7 @@ import dataclasses
 import struct
 from pathlib import Path
 from typing import Iterator
-from enum import IntEnum, IntFlag
+from enum import Enum, IntEnum, IntFlag
 
 from .exceptions import (
     InvalidVirtualAddressError,
@@ -16,6 +16,10 @@ from .exceptions import (
 )
 from .image import Image, ImageRegion
 from .mz import ImageDosHeader
+
+
+def index_to_seg(index: int) -> int:
+    return 0x1000 + (8 * (index - 1))
 
 
 class NESegmentFlags(IntFlag):
@@ -71,7 +75,14 @@ class NESegmentTableEntry:
         return items, offset + count * struct_size
 
 
-class NERelocationFlag(IntEnum):
+class NERelocationType(Enum):
+    LOBYTE = 0x00
+    SEGMENT = 0x02
+    FAR_ADDR = 0x03
+    OFFSET = 0x05
+
+
+class NERelocationFlag(Enum):
     INTERNALREF = 0
     IMPORTORDINAL = 1
     IMPORTNAME = 2
@@ -80,31 +91,87 @@ class NERelocationFlag(IntEnum):
 
 
 @dataclasses.dataclass(frozen=True)
-class NESegmentRelocation:
-    type: int
+class NERelocation:
+    type: NERelocationType
     flag: NERelocationFlag
-    offset: int
+    offsets: tuple[int, ...]
     value0: int
     value1: int
 
-    @classmethod
-    def from_memory(cls, data: bytes, offset: int) -> tuple["NESegmentRelocation", ...]:
-        (n_reloc,) = struct.unpack_from("<H", data, offset=offset)
-        offset += 2
 
-        relocs: list[tuple[int, int, int, int, int]] = [
-            struct.unpack_from("<BBHHH", data, offset + 8 * i) for i in range(n_reloc)
-        ]
+@dataclasses.dataclass(frozen=True)
+class NESegment:
+    address: int
+    physical_offset: int
+    physical_size: int
+    virtual_size: int
+    relocations: tuple[NERelocation, ...]
+    mock: bool = False  # ?
 
-        return tuple(
-            cls(
-                type=type_,
-                flag=NERelocationFlag(flag),
-                offset=offset,
-                value0=value0,
-                value1=value1,
+
+def iter_relocations(
+    data: bytes, offset: int = 0
+) -> Iterator[tuple[int, int, int, int, int]]:
+    (n_reloc,) = struct.unpack_from("<H", data, offset=offset)
+    offset += 2
+
+    for _ in range(n_reloc):
+        yield struct.unpack_from("<BBHHH", data, offset=offset)
+        offset += 8
+
+
+def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
+    value = start
+    while value != 0xFFFF:
+        yield value
+        (value,) = struct.unpack_from("<H", data, offset=value)
+
+
+def iter_segments(
+    data: bytes, seg_tab_offset: int, seg_count: int
+) -> Iterator[NESegment]:
+    segment_table, _ = NESegmentTableEntry.from_memory(
+        data, offset=seg_tab_offset, count=seg_count
+    )
+
+    for i, entry in enumerate(segment_table):
+        # Per ghidra
+        virtual_address = (0x1000 + 8 * i) << 16
+        physical_offset = entry.ns_sector * 16
+
+        # TODO: entry.ns_sector == 0
+
+        # 64k if either value is 0
+        physical_size = entry.ns_cbseg if entry.ns_cbseg else 0x10000
+        virtual_size = entry.ns_minalloc if entry.ns_minalloc else 0x10000
+
+        seg_data = data[physical_offset:][:physical_size]
+
+        if entry.has_reloc():
+            reloc_table = data[physical_offset + physical_size :]
+
+            relocs = tuple(
+                NERelocation(
+                    type=NERelocationType(reloc_type),
+                    flag=NERelocationFlag(reloc_flag),
+                    offsets=tuple(iter_reloc_chain(seg_data, start)),
+                    value0=value0,
+                    value1=value1,
+                )
+                for reloc_type, reloc_flag, start, value0, value1 in iter_relocations(
+                    reloc_table
+                )
             )
-            for type_, flag, offset, value0, value1 in relocs
+        else:
+            relocs = tuple()
+
+        yield NESegment(
+            address=virtual_address,
+            physical_offset=physical_offset,
+            physical_size=physical_size,
+            virtual_size=virtual_size,
+            relocations=relocs,
+            mock=False,
         )
 
 
@@ -231,7 +298,7 @@ class NewExeHeader:
 class NEImage(Image):
     mz_header: ImageDosHeader
     header: NewExeHeader
-    segments: tuple[NESegmentTableEntry, ...]
+    segments: tuple[NESegment, ...]
 
     @classmethod
     def from_memory(
@@ -241,79 +308,109 @@ class NEImage(Image):
         # n.b. The memoryview must be writeable for reloc replacement.
         view = memoryview(bytearray(data))
         header, _ = NewExeHeader.from_memory(data, offset=offset)
-        segments, _ = NESegmentTableEntry.from_memory(
-            data, offset=offset + header.ne_segtab, count=header.ne_cseg
+        segments = tuple(
+            iter_segments(
+                view, seg_tab_offset=offset + header.ne_segtab, seg_count=header.ne_cseg
+            )
         )
-
-        # Hack. There is no 'self' at this stage.
-        def get_abs_addr(section: int, offset: int) -> int:
-            return ((0x1000 + (8 * (section - 1))) << 16) + offset
-
-        entry_table = NEEntry.from_memory(view, offset + header.ne_enttab)
-
-        # TODO: We just need something. Recalculate later using Ghidra technique.
-        import_seg = 0x2000
-
-        for segment in segments:
-            if segment.has_reloc():
-                seg_data = view[segment.ns_sector * 16 :][: segment.ns_cbseg]
-
-                reloc = NESegmentRelocation.from_memory(
-                    view, segment.ns_sector * 16 + segment.ns_cbseg
-                )
-
-                # Sorted by import module number, ordinal number.
-                reloc_ordinals = sorted(
-                    (r for r in reloc if r.flag == NERelocationFlag.IMPORTORDINAL),
-                    key=lambda v: (v.value0, v.value1),
-                )
-
-                for i, r in enumerate(reloc_ordinals):
-                    # print(f"{r.type:02x} {r.flag:1x}   {r.offset:4x} {r.value0:4x} {r.value1:4x}")
-
-                    # Walk linked list of import offsets in this seg.
-                    value = r.offset
-                    while value != 0xFFFF:
-                        # print(hex(value))
-                        (next_value,) = struct.unpack_from("<H", seg_data, value)
-                        # TODO: patch with whatever mock address we are using for the import.
-                        seg_data[value : value + 4] = struct.pack(
-                            "<HH", 4 * i, import_seg
-                        )
-                        value = next_value
-
-                    # All the offset we just printed correspond to this import:
-                    # print(f" --> {r.value0:4x} {r.value1:4x}")
-
-                ####
-
-                reloc_internals = sorted(
-                    (r for r in reloc if r.flag == NERelocationFlag.INTERNALREF),
-                    key=lambda v: (v.value0, v.value1),
-                )
-
-                for i, r in enumerate(reloc_internals):
-                    if r.value0 == 255:
-                        # Movable segment. Lookup using 1-based ordinal number.
-                        entry = entry_table[r.value1 - 1]
-                        seg_data[r.offset : r.offset + 4] = struct.pack(
-                            "<I", get_abs_addr(entry.segment, entry.offset)
-                        )
-                    else:
-                        seg_data[r.offset : r.offset + 4] = struct.pack(
-                            "<I", get_abs_addr(r.value0, r.value1)
-                        )
 
         return cls(
             filepath=filepath,
-            # We made a copy of the view and made changes.
-            # Therefore we need to use that as our data member.
-            data=bytes(view),
-            view=view.toreadonly(),
+            data=data,
+            view=view,
             mz_header=mz_header,
             header=header,
             segments=segments,
         )
+
+    def __post_init__(self):
+        entry_table = NEEntry.from_memory(
+            self.view, self.mz_header.e_lfanew + self.header.ne_enttab
+        )
+
+        # TODO: We just need something. Recalculate later using Ghidra technique.
+        import_seg = 0x2000
+
+        for seg in self.segments:
+            seg_data = self.view[seg.physical_offset :][: seg.physical_size]
+
+            reloc_values: list[tuple[int, bytes]] = []
+
+            # Sorted by import module number, ordinal number.
+            reloc_ordinals = sorted(
+                (
+                    r
+                    for r in seg.relocations
+                    if r.flag == NERelocationFlag.IMPORTORDINAL
+                ),
+                key=lambda v: (v.value0, v.value1),
+            )
+
+            for i, reloc in enumerate(reloc_ordinals):
+                reloc_values.extend(
+                    [
+                        (offset, struct.pack("<HH", 4 * i, import_seg))
+                        for offset in reloc.offsets
+                    ]
+                )
+
+            reloc_internals = sorted(
+                (r for r in seg.relocations if r.flag == NERelocationFlag.INTERNALREF),
+                key=lambda v: (v.value0, v.value1),
+            )
+
+            for reloc in reloc_internals:
+                if reloc.value0 == 255:
+                    # Movable segment. Lookup using 1-based ordinal number.
+                    entry = entry_table[reloc.value1 - 1]
+
+                    if reloc.type == NERelocationType.OFFSET:
+                        reloc_values.extend(
+                            [
+                                (offset, struct.pack("<H", entry.offset))
+                                for offset in reloc.offsets
+                            ]
+                        )
+
+                    elif reloc.type == NERelocationType.SEGMENT:
+                        reloc_values.extend(
+                            [
+                                (offset, struct.pack("<H", index_to_seg(entry.segment)))
+                                for offset in reloc.offsets
+                            ]
+                        )
+
+                    elif reloc.type == NERelocationType.FAR_ADDR:
+                        reloc_values.extend(
+                            [
+                                (
+                                    offset,
+                                    struct.pack(
+                                        "<I",
+                                        self.get_abs_addr(entry.segment, entry.offset),
+                                    ),
+                                )
+                                for offset in reloc.offsets
+                            ]
+                        )
+
+                else:
+                    reloc_values.extend(
+                        [
+                            (offset, struct.pack("<H", index_to_seg(reloc.value0)))
+                            for offset in reloc.offsets
+                        ]
+                    )
+
+            # Now apply the patches
+            for offset, patch in reloc_values:
+                print(
+                    f"{seg.address + offset:8x}:  {seg_data[offset : offset + len(patch)].hex()}  {patch.hex()}"
+                )
+                seg_data[offset : offset + len(patch)] = patch
+
+        # The data has been changed: update underlying value.
+        self.data = bytes(self.view)
 
     @property
     def imagebase(self):
@@ -323,7 +420,7 @@ class NEImage(Image):
     def entry(self) -> int:
         return self.get_abs_addr(*self.header.ne_csip)
 
-    def _get_segment(self, index: int) -> NESegmentTableEntry:
+    def _get_segment(self, index: int) -> NESegment:
         try:
             assert index > 0
             return self.segments[index - 1]
@@ -347,20 +444,15 @@ class NEImage(Image):
         (segment, offset) = self.get_relative_addr(vaddr)
         seg = self._get_segment(segment)
 
-        # 64k if either value is 0
-        physical_size = seg.ns_cbseg if seg.ns_cbseg else 0x10000
-        virtual_size = seg.ns_minalloc if seg.ns_minalloc else 0x10000
-
-        if offset > virtual_size:
+        if offset > seg.virtual_size:
             raise InvalidVirtualAddressError(f"{segment:04x}:{offset:04x}")
 
-        if seg.ns_sector == 0:
-            # No physical data
-            return (b"", virtual_size - offset)
+        if seg.physical_size == 0:
+            return (b"", seg.virtual_size - offset)
 
-        start = 16 * seg.ns_sector
-        end = start + physical_size
-        return (self.view[start + offset : end], virtual_size - offset)
+        start = seg.physical_offset
+        end = start + seg.physical_size
+        return (self.view[start + offset : end], seg.virtual_size - offset)
 
     def get_code_regions(self) -> Iterator[ImageRegion]:
         raise NotImplementedError

@@ -360,47 +360,25 @@ class NEImage(Image):
             )
 
             for reloc in reloc_internals:
+                (replacement_seg, replacement_ofs) = (reloc.value0, reloc.value1)
+
                 if reloc.value0 == 255:
                     # Movable segment. Lookup using 1-based ordinal number.
                     entry = entry_table[reloc.value1 - 1]
+                    (replacement_seg, replacement_ofs) = (entry.segment, entry.offset)
 
-                    if reloc.type == NERelocationType.OFFSET:
-                        reloc_values.extend(
-                            [
-                                (offset, struct.pack("<H", entry.offset))
-                                for offset in reloc.offsets
-                            ]
-                        )
+                if reloc.type == NERelocationType.OFFSET:
+                    replacement = struct.pack("<H", replacement_ofs)
 
-                    elif reloc.type == NERelocationType.SEGMENT:
-                        reloc_values.extend(
-                            [
-                                (offset, struct.pack("<H", index_to_seg(entry.segment)))
-                                for offset in reloc.offsets
-                            ]
-                        )
+                elif reloc.type == NERelocationType.SEGMENT:
+                    replacement = struct.pack("<H", index_to_seg(replacement_seg))
 
-                    elif reloc.type == NERelocationType.FAR_ADDR:
-                        reloc_values.extend(
-                            [
-                                (
-                                    offset,
-                                    struct.pack(
-                                        "<I",
-                                        self.get_abs_addr(entry.segment, entry.offset),
-                                    ),
-                                )
-                                for offset in reloc.offsets
-                            ]
-                        )
-
-                else:
-                    reloc_values.extend(
-                        [
-                            (offset, struct.pack("<H", index_to_seg(reloc.value0)))
-                            for offset in reloc.offsets
-                        ]
+                elif reloc.type == NERelocationType.FAR_ADDR:
+                    replacement = struct.pack(
+                        "<I", self.get_abs_addr(replacement_seg, replacement_ofs)
                     )
+
+                reloc_values.extend([(offset, replacement) for offset in reloc.offsets])
 
             # Now apply the patches
             for offset, patch in reloc_values:

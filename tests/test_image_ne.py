@@ -1,3 +1,4 @@
+import pytest
 from reccmp.isledecomp.formats import NEImage
 from reccmp.isledecomp.formats.ne import NESegmentFlags, NETargetOSFlags
 
@@ -29,6 +30,32 @@ def test_reads(skifree: NEImage):
     assert (
         skifree.read_string(0x10005A2C) == b"\x8b\xd0\x2b\xc0\x8b\xe5\x5d\x4d\xcb\x90"
     )
+
+
+ADDR_CONVERSION_SAMPLES = (
+    # Section starts
+    ((1, 0), 0x10000000),
+    ((2, 0), 0x10080000),
+    # Section ends (virtual size - 1)
+    ((1, 0x5A35), 0x10005A35),
+    ((2, 0x0BC7), 0x10080BC7),
+)
+
+
+@pytest.mark.parametrize("relative, absolute", ADDR_CONVERSION_SAMPLES)
+def test_addr_conversion_absolute(
+    skifree: NEImage, relative: tuple[int, int], absolute: int
+):
+    """Testing conversion from seg:offset to absolute address."""
+    assert skifree.get_abs_addr(*relative) == absolute
+
+
+@pytest.mark.parametrize("relative, absolute", ADDR_CONVERSION_SAMPLES)
+def test_addr_conversion_relative(
+    skifree: NEImage, relative: tuple[int, int], absolute: int
+):
+    """Testing conversion from absolute address to seg:offset."""
+    assert skifree.get_relative_addr(absolute) == relative
 
 
 def test_reloc_patching_import_ordinal(skifree: NEImage):

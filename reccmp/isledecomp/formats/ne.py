@@ -108,6 +108,12 @@ class NESegment:
     relocations: tuple[NERelocation, ...]
     mock: bool = False  # ?
 
+    @property
+    def range(self) -> range:
+        return range(
+            self.address, self.address + max(self.physical_size, self.virtual_size)
+        )
+
 
 def iter_relocations(
     data: bytes, offset: int = 0
@@ -409,14 +415,18 @@ class NEImage(Image):
         return True  # TODO
 
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
-        assert addr >= 0x10000000
+        for i, segment in enumerate(self.segments):
+            if addr in segment.range:
+                return (i + 1, addr - segment.address)
 
-        segment = (addr >> 19) & 0x1FF
-        offset = addr & 0xFFFF
-        return (segment + 1, offset)
+        raise InvalidVirtualAddressError(f"{self.filepath} : 0x{addr:x}")
 
     def get_abs_addr(self, section: int, offset: int) -> int:
-        return ((0x1000 + (8 * (section - 1))) << 16) + offset
+        try:
+            segment = self.segments[section - 1]
+            return segment.address + offset
+        except IndexError as ex:
+            raise InvalidVirtualAddressError(f"{section:04x}:{offset:04x}") from ex
 
     def seek(self, vaddr: int) -> tuple[bytes, int]:
         (segment, offset) = self.get_relative_addr(vaddr)

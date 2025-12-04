@@ -19,6 +19,8 @@ ptr_replace_regex = re.compile(r"(?<=\[)(0x[0-9a-f]+)(?=\])")
 
 displace_replace_regex = re.compile(r"(?<= )(0x[0-9a-f]+)(?=\])")
 
+lcall_replace_regex = re.compile(r"((?:0x)?[0-9a-f]{1,4}, (?:0x)?[0-9a-f]{1,4})")
+
 # For matching an immediate value operand
 immediate_replace_regex = re.compile(r"(?<=, )(0x[0-9a-f]+)")
 
@@ -100,6 +102,16 @@ class ParseAsm:
         self.indirect_replacements[addr] = placeholder
         return placeholder
 
+    def lcall_replace(self, match: re.Match) -> str:
+        (seg_str, _, ofs_str) = match.group(1).partition(", ")
+        value = (int(seg_str, 16) << 16) + int(ofs_str, 16)
+        # return self.replace(value, exact=True)
+        placeholder = self.lookup(value, exact=True)
+        if placeholder is not None:
+            return placeholder
+
+        return match.group(0)
+
     def hex_replace_always(self, match: re.Match) -> str:
         """If a pointer value was matched, always insert a placeholder"""
         value = int(match.group(1), 16)
@@ -142,6 +154,12 @@ class ParseAsm:
         # Providing the starting address of the function to capstone.disasm has
         # automatically resolved relative offsets to an absolute address.
         # We will have to undo this for some of the jumps or they will not match.
+
+        if inst.mnemonic == "lcall" and "," in inst.op_str:
+            return (
+                inst.mnemonic,
+                lcall_replace_regex.sub(self.lcall_replace, inst.op_str),
+            )
 
         if (
             inst.mnemonic in SINGLE_OPERAND_INSTS

@@ -82,8 +82,9 @@ class LfMethod:
     vbaseoff: int
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> Iterator["LfMethod"]:
-        offset = 0
+    def from_bytes(
+        cls, data: bytes, offset: int = 0, *, is32: bool = False
+    ) -> Iterator["LfMethod"]:
         while offset < len(data):
             if is32:
                 (attr, index) = unpack_from("<H2xI", data, offset=offset)
@@ -109,8 +110,14 @@ class LfMethodList:
     methods: tuple[LfMethod, ...]
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfMethodList":
-        methods = tuple(LfMethod.from_bytes(data, is32=is32))
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfMethodList":
+        (leaf_size, leaf_type) = unpack_from("<2H", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
+        methods = tuple(
+            LfMethod.from_bytes(data[: leaf_size + 2], offset=offset, is32=is32)
+        )
         return cls(methods)
 
 
@@ -124,13 +131,17 @@ class LfArray:
     name: str
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfArray":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfArray":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
-            (elemtype, idxtype) = unpack_from("<2I", data)
-            offset = 8
+            (elemtype, idxtype) = unpack_from("<2I", data, offset=offset)
+            offset += 8
         else:
-            (elemtype, idxtype) = unpack_from("<2H", data)
-            offset = 4
+            (elemtype, idxtype) = unpack_from("<2H", data, offset=offset)
+            offset += 4
 
         (count, offset) = read_packed_value(data, offset)
         (name, _) = read_pascal_string(data, offset)
@@ -149,13 +160,17 @@ class LfUnion:
     name: str
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfUnion":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfUnion":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
-            (count, prop, field) = unpack_from("<2HI", data)
-            offset = 8
+            (count, prop, field) = unpack_from("<2HI", data, offset=offset)
+            offset += 8
         else:
-            (count, field, prop) = unpack_from("<3H", data)
-            offset = 6
+            (count, field, prop) = unpack_from("<3H", data, offset=offset)
+            offset += 6
 
         (length, offset) = read_packed_value(data, offset)
         (name, _) = read_pascal_string(data, offset)
@@ -171,11 +186,15 @@ class LfModifier:
     index: int
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfModifier":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfModifier":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
-            (index, attr) = unpack_from("<IH", data)
+            (index, attr) = unpack_from("<IH", data, offset=offset)
         else:
-            (attr, index) = unpack_from("<2H", data)
+            (attr, index) = unpack_from("<2H", data, offset=offset)
 
         return cls(attr, index)
 
@@ -200,11 +219,15 @@ class LfPointer:
         return LfPointerAttr((self.attr & 0x700) >> 8)
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfPointer":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfPointer":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
-            (index, attr) = unpack_from("<2I", data)
+            (index, attr) = unpack_from("<2I", data, offset=offset)
         else:
-            (attr, index) = unpack_from("<2H", data)
+            (attr, index) = unpack_from("<2H", data, offset=offset)
 
         return cls(attr, index)
 
@@ -250,13 +273,19 @@ class LfMFunction:
         return FuncAttr(self.raw_attr)
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfMFunction":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfMFunction":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
             fmt = "<3I2BH2I"
         else:
             fmt = "<3H2B2HI"
 
-        raw: tuple[int, int, int, int, int, int, int, int] = unpack_from(fmt, data)
+        raw: tuple[int, int, int, int, int, int, int, int] = unpack_from(
+            fmt, data, offset=offset
+        )
         return cls(*raw)
 
 
@@ -275,13 +304,17 @@ class LfProcedure:
         return FuncAttr(self.raw_attr)
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfProcedure":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfProcedure":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         if is32:
             fmt = "<I2BHI"
         else:
             fmt = "<H2B2H"
 
-        raw: tuple[int, int, int, int, int] = unpack_from(fmt, data)
+        raw: tuple[int, int, int, int, int] = unpack_from(fmt, data, offset=offset)
         return cls(*raw)
 
 
@@ -324,17 +357,25 @@ class LfClass:
         return PropAttr(self.raw_prop_attr)
 
     @classmethod
-    def from_bytes(cls, data: bytes, is32: bool = False) -> "LfClass":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfClass":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
         # Derivation list type always zero?
         if is32:
             fmt = "<2H3I"
-            (count, attr, field, derived, vshape) = unpack_from(fmt, data)
+            (count, attr, field, derived, vshape) = unpack_from(
+                fmt, data, offset=offset
+            )
         else:
             fmt = "<5H"
-            (count, field, attr, derived, vshape) = unpack_from(fmt, data)
+            (count, field, attr, derived, vshape) = unpack_from(
+                fmt, data, offset=offset
+            )
 
         # Pascal string with the name of the class follows the leaf data.
-        offset = calcsize(fmt)
+        offset += calcsize(fmt)
         (size, offset) = read_packed_value(data, offset)
         (name, _) = read_pascal_string(data, offset)
 
@@ -351,9 +392,13 @@ class LfArglist:
     args: tuple[int, ...]
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "LfArglist":
-        (count,) = unpack_from("<H", data)
-        arg_data = data[2 : 2 + 2 * count]
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfArglist":
+        (_,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+
+        (count,) = unpack_from("<H", data, offset=offset)
+        offset += 2
+        arg_data = data[offset : offset + 2 * count]
         args = tuple(arg for arg, in iter_unpack("<H", arg_data))
         return cls(args)
 
@@ -372,36 +417,34 @@ def parse_types(data: bytes):
         leaf: Any = None  # TODO
 
         try:
-            is32 = record.type & 0x1000 == 0x1000  # oversimplified?
-
             match record.type:
                 case 1 | 0x1001:
-                    leaf = LfModifier.from_bytes(record.data, is32=is32)
+                    leaf = LfModifier.from_bytes(leaves, record.offset)
                 case 2 | 0x1002:
-                    leaf = LfPointer.from_bytes(record.data, is32=is32)
+                    leaf = LfPointer.from_bytes(leaves, record.offset)
                 case 3 | 0x1003:
-                    leaf = LfArray.from_bytes(record.data, is32=is32)
+                    leaf = LfArray.from_bytes(leaves, record.offset)
                 case 4 | 5 | 0x1004 | 0x1005:
-                    leaf = LfClass.from_bytes(record.data, is32=is32)
+                    leaf = LfClass.from_bytes(leaves, record.offset)
                 case 6 | 0x1006:
-                    leaf = LfUnion.from_bytes(record.data, is32=is32)
+                    leaf = LfUnion.from_bytes(leaves, record.offset)
                 case 8 | 0x1008:
-                    leaf = LfProcedure.from_bytes(record.data, is32=is32)
+                    leaf = LfProcedure.from_bytes(leaves, record.offset)
                 case 9 | 0x1009:
-                    leaf = LfMFunction.from_bytes(record.data, is32=is32)
+                    leaf = LfMFunction.from_bytes(leaves, record.offset)
                 case 0x201 | 0x1201:
-                    leaf = LfArglist.from_bytes(record.data)
+                    leaf = LfArglist.from_bytes(leaves, record.offset)
                 case 0x204 | 0x1203:
-                    leaf = LfFieldList.from_bytes(record.data, is32=is32)
+                    leaf = LfFieldList.from_bytes(leaves, record.offset)
                 case 0x207 | 0x1206:
-                    leaf = LfMethodList.from_bytes(record.data, is32=is32)
+                    leaf = LfMethodList.from_bytes(leaves, record.offset)
 
                 case _:
                     unhandled_types.setdefault(record.type, set()).add(i)
 
         except Exception as ex:
             print("FAILED ON THIS DATA:")
-            debug_print(record.data)
+            debug_print(leaves[record.offset : record.offset + record.size])
             raise ex
 
         if leaf:

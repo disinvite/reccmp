@@ -2,13 +2,13 @@ from struct import calcsize, unpack_from
 
 
 PACKED_VALUE_MAP = {
-    0x8000: "b",  # LF_CHAR
-    0x8001: "h",  # LF_SHORT
-    0x8002: "H",  # LF_USHORT
-    0x8003: "l",  # LF_LONG
-    0x8004: "L",  # LF_ULONG
-    0x8005: "f",  # LF_REAL32
-    0x8006: "d",  # LF_REAL64
+    0x8000: "<b",  # LF_CHAR
+    0x8001: "<h",  # LF_SHORT
+    0x8002: "<H",  # LF_USHORT
+    0x8003: "<l",  # LF_LONG
+    0x8004: "<L",  # LF_ULONG
+    0x8005: "<f",  # LF_REAL32
+    0x8006: "<d",  # LF_REAL64
 }
 
 

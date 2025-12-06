@@ -112,7 +112,7 @@ class LfVBClass(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LFEnumerate(FieldListLeaf):
+class LfEnumerate(FieldListLeaf):
     """0403: lfEnumerate, cvinfo.h"""
 
     attr: FieldAttr
@@ -120,7 +120,7 @@ class LFEnumerate(FieldListLeaf):
     name: str
 
     @classmethod
-    def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LFEnumerate", int]:
+    def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfEnumerate", int]:
         (leaf_type,) = unpack_from("<H", data, offset=offset)
         offset += 2
 
@@ -325,7 +325,7 @@ class LfFieldList:
                     case 0x401 | 0x402 | 0x1401 | 0x1402:
                         (leaf, offset) = LfVBClass.from_bytes(data, offset=offset)
                     case 0x403 | 0x1502:
-                        (leaf, offset) = LFEnumerate.from_bytes(data, offset=offset)
+                        (leaf, offset) = LfEnumerate.from_bytes(data, offset=offset)
                     case 0x406 | 0x1405:
                         (leaf, offset) = LfMember.from_bytes(data, offset=offset)
                     case 0x407 | 0x1406:

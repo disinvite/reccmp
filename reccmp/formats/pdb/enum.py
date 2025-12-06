@@ -1,0 +1,25 @@
+from enum import IntEnum
+
+
+class LeafEnum(IntEnum):
+    # pylint:disable=invalid-name
+    LF_BCLASS_16t = 0x400
+    LF_VBCLASS_16t = 0x401
+    LF_IVBCLASS_16t = 0x402
+    LF_ENUMERATE_ST = 0x403
+    LF_MEMBER_16t = 0x406
+    LF_STMEMBER_16t = 0x407
+    LF_METHOD_16t = 0x408
+    LF_NESTTYPE_16t = 0x409
+    LF_VFUNCTAB_16t = 0x40A
+    LF_ONEMETHOD_16t = 0x40C
+    LF_BCLASS = 0x1400
+    LF_VBCLASS = 0x1401
+    LF_IVBCLASS = 0x1402
+    LF_MEMBER_ST = 0x1405
+    LF_STMEMBER_ST = 0x1406
+    LF_METHOD_ST = 0x1407
+    LF_NESTTYPE_ST = 0x1408
+    LF_VFUNCTAB = 0x1409
+    LF_ONEMETHOD_ST = 0x140B
+    LF_ENUMERATE = 0x1502

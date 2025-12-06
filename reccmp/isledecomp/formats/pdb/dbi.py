@@ -113,6 +113,10 @@ class SectionContribution:
 class ModuleInfo:
     # MODI50
     sc: SectionContribution
+    stream_id: int
+    symbol_size: int
+    c11_lines_size: int
+    c13_lines_size: int
     module_name: str
     obj_name: str
 
@@ -125,14 +129,32 @@ class ModuleInfo:
         (sc, offset) = SectionContribution.from_bytes(data, offset=offset, new=new)
 
         if new:
+            (stream_id, symbol_size, c11_lines_size, c13_lines_size) = unpack_from(
+                "<2xh2x3I", data, offset=offset
+            )
             offset += 32  # skip TODO
         else:
+            (stream_id, symbol_size, c11_lines_size) = unpack_from(
+                "<2xh2x2I", data, offset=offset
+            )
+            c13_lines_size = 0
             offset += 24  # skip TODO
 
         (module_name, offset) = read_sz_string(data, offset)
         (obj_name, offset) = read_sz_string(data, offset)
 
-        return (cls(sc=sc, module_name=module_name, obj_name=obj_name), offset)
+        return (
+            cls(
+                sc,
+                stream_id,
+                symbol_size,
+                c11_lines_size,
+                c13_lines_size,
+                module_name,
+                obj_name,
+            ),
+            offset,
+        )
 
 
 def parse_modules(data: bytes):
@@ -150,5 +172,7 @@ def parse_modules(data: bytes):
         (module, offset) = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
         # print()
         # debug_print(data, offset=start, size=offset-start)
-        print(f'{idx:04X} "{module.obj_name}" "{module.module_name}"')
+        print(
+            f'{idx:04X} {module.stream_id} {max(module.c11_lines_size, module.c13_lines_size)} "{module.obj_name}" "{module.module_name}"'
+        )
         idx += 1

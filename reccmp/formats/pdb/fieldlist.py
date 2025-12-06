@@ -45,7 +45,12 @@ class FieldAttr:
 
 
 @dataclass(frozen=True)
-class LfBClass:
+class FieldListLeaf:
+    leaf_type: int
+
+
+@dataclass(frozen=True)
+class LfBClass(FieldListLeaf):
     """0400: lfBClass / lfBClass_16t, cvinfo.h"""
 
     index: int
@@ -70,11 +75,11 @@ class LfBClass:
 
         (base_offset, offset) = read_packed_value(data, offset)
 
-        return (cls(index, attr, base_offset), offset)
+        return (cls(leaf_type, index, attr, base_offset), offset)
 
 
 @dataclass(frozen=True)
-class LfVBClass:
+class LfVBClass(FieldListLeaf):
     """0401/0402: lfVBClass / lfVBClass_16t, cvinfo.h"""
 
     index: int
@@ -103,11 +108,11 @@ class LfVBClass:
         (vbpoff, offset) = read_packed_value(data, offset)
         (vbind, offset) = read_packed_value(data, offset)
 
-        return (cls(index, attr, vbptr, vbpoff, vbind), offset)
+        return (cls(leaf_type, index, attr, vbptr, vbpoff, vbind), offset)
 
 
 @dataclass(frozen=True)
-class LFEnumerate:
+class LFEnumerate(FieldListLeaf):
     """0403: lfEnumerate, cvinfo.h"""
 
     attr: FieldAttr
@@ -116,18 +121,18 @@ class LFEnumerate:
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LFEnumerate", int]:
-        (_,) = unpack_from("<H", data, offset=offset)
+        (leaf_type,) = unpack_from("<H", data, offset=offset)
         offset += 2
 
         (attr, offset) = FieldAttr.from_bytes(data, offset)
         (value, offset) = read_packed_value(data, offset)
         (name, offset) = read_pascal_string(data, offset)
 
-        return (cls(attr, value, name), offset)
+        return (cls(leaf_type, attr, value, name), offset)
 
 
 @dataclass(frozen=True)
-class LfMember:
+class LfMember(FieldListLeaf):
     """0406: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
@@ -154,11 +159,11 @@ class LfMember:
         (field_offset, offset) = read_packed_value(data, offset)
         (name, offset) = read_pascal_string(data, offset)
 
-        return (cls(index, attr, field_offset, name), offset)
+        return (cls(leaf_type, index, attr, field_offset, name), offset)
 
 
 @dataclass(frozen=True)
-class LfStaticMember:
+class LfStaticMember(FieldListLeaf):
     """0407: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
@@ -183,11 +188,11 @@ class LfStaticMember:
 
         (name, offset) = read_pascal_string(data, offset)
 
-        return (cls(index, attr, name), offset)
+        return (cls(leaf_type, index, attr, name), offset)
 
 
 @dataclass(frozen=True)
-class LfMethod:
+class LfMethod(FieldListLeaf):
     """0408: lfMethod / lfMethod_16t, cvinfo.h"""
 
     count: int
@@ -205,11 +210,11 @@ class LfMethod:
         offset += calcsize(fmt)
         (name, offset) = read_pascal_string(data, offset)
 
-        return (cls(count, index, name), offset)
+        return (cls(leaf_type, count, index, name), offset)
 
 
 @dataclass(frozen=True)
-class LfNestType:
+class LfNestType(FieldListLeaf):
     """0409: lfNestType / lfNestType_16t, cvinfo.h"""
 
     index: int
@@ -226,11 +231,11 @@ class LfNestType:
         offset += calcsize(fmt)
         (name, offset) = read_pascal_string(data, offset)
 
-        return (cls(index, name), offset)
+        return (cls(leaf_type, index, name), offset)
 
 
 @dataclass(frozen=True)
-class LfVFuncTab:
+class LfVFuncTab(FieldListLeaf):
     """040a: lfVFuncTab / lfVFuncTab_16t, cvinfo.h"""
 
     index: int
@@ -245,11 +250,11 @@ class LfVFuncTab:
         (index,) = unpack_from(fmt, data, offset=offset)
         offset += calcsize(fmt)
 
-        return (cls(index), offset)
+        return (cls(leaf_type, index), offset)
 
 
 @dataclass(frozen=True)
-class LfOneMethod:
+class LfOneMethod(FieldListLeaf):
     """040c: lfOneMethod / lfOneMethod_16t, cvinfo.h"""
 
     attr: FieldAttr
@@ -265,7 +270,7 @@ class LfOneMethod:
 
         (attr, offset) = FieldAttr.from_bytes(data, offset)
 
-        fmt = "I" if is32 else "H"
+        fmt = "<I" if is32 else "<H"
         (index,) = unpack_from(fmt, data, offset=offset)
         offset += calcsize(fmt)
 
@@ -281,7 +286,7 @@ class LfOneMethod:
             debug_print(data[offset:])
             raise ex
 
-        return (cls(attr, index, vbaseoff, name), offset)
+        return (cls(leaf_type, attr, index, vbaseoff, name), offset)
 
 
 @dataclass(frozen=True)

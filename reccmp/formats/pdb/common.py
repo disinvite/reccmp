@@ -12,6 +12,10 @@ PACKED_VALUE_MAP = {
 }
 
 
+def align_to(offset: int, align: int = 4) -> int:
+    return offset + (-offset % align)
+
+
 def read_packed_value(data: bytes, offset: int) -> tuple[int, int]:
     """CbExtractNumeric? No code available in the microsoft-pdb repo.
     Returns (value, new_offset)"""
@@ -30,3 +34,13 @@ def read_pascal_string(data: bytes, offset: int) -> tuple[str, int]:
     strlen = data[offset]
     value = data[offset + 1 : offset + 1 + strlen].decode("ascii")
     return (value, offset + strlen + 1)
+
+
+def read_sz_string(data: bytes, offset: int) -> tuple[str, int]:
+    start = offset
+
+    # offset = data.index(0, offset)
+    while data[offset] != 0:
+        offset += 1
+
+    return (data[start:offset].decode("ascii"), offset + 1)

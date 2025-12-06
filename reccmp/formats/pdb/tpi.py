@@ -386,6 +386,34 @@ class LfClass:
 
 
 @dataclass(frozen=True)
+class LfEnum:
+    """lfEnum_16t / lfEnum, cvinfo.h"""
+
+    count: int
+    prop: int
+    utype: int
+    index: int
+    name: str
+
+    @classmethod
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfEnum":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
+        if is32:
+            (count, prop, utype, index) = unpack_from("<2H2I", data, offset=offset)
+            offset += 12
+        else:
+            (count, utype, index, prop) = unpack_from("<4H", data, offset=offset)
+            offset += 8
+
+        (name, _) = read_pascal_string(data, offset)
+
+        return cls(count, prop, utype, index, name)
+
+
+@dataclass(frozen=True)
 class LfArglist:
     """lfArgList_16t, cvinfo.h"""
 
@@ -428,6 +456,8 @@ def parse_types(data: bytes):
                     leaf = LfClass.from_bytes(leaves, record.offset)
                 case 6 | 0x1006:
                     leaf = LfUnion.from_bytes(leaves, record.offset)
+                case 7 | 0x1007:
+                    leaf = LfEnum.from_bytes(leaves, record.offset)
                 case 8 | 0x1008:
                     leaf = LfProcedure.from_bytes(leaves, record.offset)
                 case 9 | 0x1009:

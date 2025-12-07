@@ -89,7 +89,7 @@ class SectionContribution:
             offset += 28
         else:
             (section, sc_offset, size, characteristics, moduleindex) = unpack_from(
-                "<4IH2x", data, offset=offset
+                "<2IiIH2x", data, offset=offset
             )
             data_crc = 0
             reloc_crc = 0
@@ -117,7 +117,7 @@ class ModuleInfo:
     symbol_size: int
     c11_lines_size: int
     c13_lines_size: int
-    module_name: str
+    name: str
     obj_name: str
 
     @classmethod
@@ -130,17 +130,17 @@ class ModuleInfo:
 
         if new:
             (stream_id, symbol_size, c11_lines_size, c13_lines_size) = unpack_from(
-                "<2xh2x3I", data, offset=offset
+                "<2xh3I", data, offset=offset
             )
             offset += 32  # skip TODO
         else:
             (stream_id, symbol_size, c11_lines_size) = unpack_from(
-                "<2xh2x2I", data, offset=offset
+                "<2xh2I", data, offset=offset
             )
             c13_lines_size = 0
             offset += 24  # skip TODO
 
-        (module_name, offset) = read_sz_string(data, offset)
+        (name, offset) = read_sz_string(data, offset)
         (obj_name, offset) = read_sz_string(data, offset)
 
         return (
@@ -150,11 +150,28 @@ class ModuleInfo:
                 symbol_size,
                 c11_lines_size,
                 c13_lines_size,
-                module_name,
+                name,
                 obj_name,
             ),
             offset,
         )
+
+
+@dataclass(frozen=True)
+class DebugInfomation:
+    header: DBIHeader
+    modules: tuple[ModuleInfo, ...]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "DebugInfomation":
+        (header, offset) = DBIHeader.from_bytes(data)
+        new_modi = header.version >= 19970606
+        modules = []
+        while offset < header.module_info_size:
+            (module, offset) = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
+            modules.append(module)
+
+        return cls(header, tuple(modules))
 
 
 def parse_modules(data: bytes):
@@ -173,6 +190,6 @@ def parse_modules(data: bytes):
         # print()
         # debug_print(data, offset=start, size=offset-start)
         print(
-            f'{idx:04X} {module.stream_id} {max(module.c11_lines_size, module.c13_lines_size)} "{module.obj_name}" "{module.module_name}"'
+            f'{idx:04X} {module.stream_id} {max(module.c11_lines_size, module.c13_lines_size)} "{module.obj_name}" "{module.name}"'
         )
         idx += 1

@@ -1,7 +1,7 @@
 import re
 import dataclasses
-from pathlib import Path
 from typing import Iterator
+from pathlib import Path
 from .exceptions import InvalidVirtualReadError, InvalidStringError
 
 # Matches 0-to-N non-null bytes.
@@ -33,6 +33,15 @@ class Image:
     view: memoryview = dataclasses.field(repr=False)
     data: bytes = dataclasses.field(repr=False)
 
+    def seek(self, vaddr: int) -> tuple[bytes, int]:
+        """Must be implemented for each image.
+        1. Go to the position in virtual memory for the given address.
+        2. If it is valid, return a tuple with:
+            a. bytes or memoryview with the relevant stream of data that begins at the address.
+            b. number of valid bytes remaining (including the size of whatever is in 'a').
+        3. If the address is not valid, raise InvalidVirtualAddressError"""
+        raise NotImplementedError
+
     @property
     def imagebase(self) -> int:
         raise NotImplementedError
@@ -60,15 +69,6 @@ class Image:
         raise NotImplementedError
 
     def get_const_regions(self) -> Iterator[ImageRegion]:
-        raise NotImplementedError
-
-    def seek(self, vaddr: int) -> tuple[bytes, int]:
-        """Must be implemented for each image.
-        1. Go to the position in virtual memory for the given address.
-        2. If it is valid, return a tuple with:
-            a. bytes or memoryview with the relevant stream of data that begins at the address.
-            b. number of valid bytes remaining (including the size of whatever is in 'a').
-        3. If the address is not valid, raise InvalidVirtualAddressError"""
         raise NotImplementedError
 
     def read_string(self, vaddr: int) -> bytes:

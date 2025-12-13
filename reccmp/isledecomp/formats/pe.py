@@ -575,8 +575,8 @@ class PEImage(Image):
     def get_relocated_addresses(self) -> list[int]:
         return sorted(self._relocated_addrs)
 
-    def is_relocated_addr(self, vaddr) -> bool:
-        return vaddr in self._relocated_addrs
+    def is_relocated_addr(self, addr: int) -> bool:
+        return addr in self._relocated_addrs
 
     def get_sections_in_data_directory(
         self, t: PEDataDirectoryItemType
@@ -858,19 +858,22 @@ class PEImage(Image):
         return self.imagebase <= vaddr < last_range.stop
 
     def get_code_regions(self) -> Iterator[ImageRegion]:
+        # TODO: Don't depend on section names. (#72)
         for sect in (self.get_section_by_name(".text"),):
-            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
+            yield ImageRegion(sect.virtual_address, sect.view, sect.extent)
 
     def get_data_regions(self) -> Iterator[ImageRegion]:
+        # TODO: Don't depend on section names. (#72)
         for sect in (
             self.get_section_by_name(".rdata"),
             self.get_section_by_name(".data"),
         ):
-            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
+            yield ImageRegion(sect.virtual_address, sect.view, sect.extent)
 
     def get_const_regions(self) -> Iterator[ImageRegion]:
+        # TODO: Don't depend on section names. (#72)
         for sect in (self.get_section_by_name(".rdata"),):
-            yield ImageRegion(sect.virtual_address, sect.extent, sect.view)
+            yield ImageRegion(sect.virtual_address, sect.view, sect.extent)
 
     @cached_property
     def uninitialized_ranges(self) -> list[range]:

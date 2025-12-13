@@ -232,7 +232,9 @@ class ParseAsm:
                     # The exception is jumps which are as small as 2 bytes
                     # but are still useful to sanitize.
                     if "0x" in inst.op_str and (
-                        inst.mnemonic in JUMP_MNEMONICS or inst.size > 4
+                        inst.mnemonic in JUMP_MNEMONICS
+                        or inst.size > 4
+                        or not self.is_32bit
                     ):
                         result = self.sanitize(inst)
                     else:

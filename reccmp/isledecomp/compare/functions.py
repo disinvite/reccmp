@@ -34,6 +34,13 @@ def timestamp_string() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def has_asserts(image: Image) -> bool:
+    if isinstance(image, PEImage):
+        return image.is_debug
+
+    return False
+
+
 def create_valid_addr_lookup(
     db: EntityDb,
     image_id: ImageId,
@@ -172,12 +179,10 @@ class FunctionComparator:
             self._dump_asm(orig_combined, recomp_combined)
 
         # Check for assert calls only if we expect to find them
-        # pylint: disable=no-member
-        if isinstance(self.orig_bin, PEImage) and self.orig_bin.is_debug:
+        if has_asserts(self.orig_bin):
             assert_fixup(orig_combined)
 
-        # pylint: disable=no-member
-        if isinstance(self.recomp_bin, PEImage) and self.recomp_bin.is_debug:
+        if has_asserts(self.recomp_bin):
             assert_fixup(recomp_combined)
 
         line_annotations = self._collect_line_annotations(recomp_combined)

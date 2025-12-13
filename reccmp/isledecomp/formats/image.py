@@ -14,8 +14,13 @@ r_widestring = re.compile(rb"(?:(?:[^\x00]\x00)|(?:\x00[^\x00])|(?:[^\x00][^\x00
 @dataclasses.dataclass(frozen=True)
 class ImageRegion:
     addr: int
-    size: int
     data: bytes
+    size: int = 0
+
+    def __post_init__(self):
+        """The optional size parameter allows you to set virtual size for the region
+        if this is larger than the number of physical bytes."""
+        object.__setattr__(self, "size", max(len(self.data), self.size))
 
     @property
     def range(self) -> range:
@@ -40,6 +45,9 @@ class Image:
         raise NotImplementedError
 
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
+        raise NotImplementedError
+
+    def is_relocated_addr(self, addr: int) -> bool:
         raise NotImplementedError
 
     def get_abs_addr(self, section: int, offset: int) -> int:

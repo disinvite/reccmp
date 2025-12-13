@@ -147,6 +147,7 @@ class ParseAsm:
         return self.indirect_replace(value)
 
     def sanitize(self, inst: DisasmLiteInst) -> tuple[str, str]:
+        # pylint: disable=too-many-return-statements
         # For jumps or calls, if the entire op_str is a hex number, the value
         # is a relative offset.
         # Otherwise (i.e. it looks like `dword ptr [address]`) it is an

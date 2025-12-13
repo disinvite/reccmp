@@ -1,6 +1,11 @@
 import difflib
 import pytest
-from reccmp.isledecomp.compare.asm.fixes import find_effective_match
+from reccmp.isledecomp.compare.asm.fixes import (
+    find_effective_match,
+    patch_cmp_jmp,
+    patch_mov_cmp_jmp,
+    patch_fld_fmul,
+)
 
 
 def test_fix_cmp_jmp():
@@ -241,3 +246,27 @@ def test_this_should_not_be_marked_as_effective():
     is_effective = find_effective_match(diff.get_opcodes(), orig_asm, recomp_asm)
 
     assert is_effective is False
+
+
+def test_fix_cmp_jmp_recomp_stub():
+    """Don't raise IndexError if the recomp instruction list is smaller than orig."""
+    orig_asm = ["cmp eax, ebx", "jg 0x1"]
+    recomp_asm = ["nop"]
+
+    assert patch_cmp_jmp(orig_asm, recomp_asm) == set()
+
+
+def test_fix_mov_cmp_jmp_recomp_stub():
+    """Don't raise IndexError if the recomp instruction list is smaller than orig."""
+    orig_asm = ["mov eax, 1", "cmp eax, ebx", "jg 0x1"]
+    recomp_asm = ["nop"]
+
+    assert patch_mov_cmp_jmp(orig_asm, recomp_asm) == set()
+
+
+def test_fix_fld_mul_recomp_stub():
+    """Don't raise IndexError if the recomp instruction list is smaller than orig."""
+    orig_asm = ["mov eax, 1", "fld dword ptr [ebp - 0x18]", "fadd dword ptr [ebp - 8]"]
+    recomp_asm = ["nop"]
+
+    assert patch_fld_fmul(orig_asm, recomp_asm) == set()

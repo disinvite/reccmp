@@ -55,6 +55,11 @@ def get_patched_jump(a: str, b: str) -> str:
     return mnemonic_a + " " + operand_b
 
 
+def get_first_index_with_opcode(instructions: list[str], opcode: str) -> int | None:
+    """Return the index of the first instruction with the given opcode, or None."""
+    return next((i for i, s in enumerate(instructions) if s.startswith(opcode)), None)
+
+
 def patch_mov_cmp_jmp(orig: list[str], recomp: list[str]) -> set[int]:
     """Can we resolve the diffs between orig and recomp by patching
     swapped cmp instructions?
@@ -67,15 +72,20 @@ def patch_mov_cmp_jmp(orig: list[str], recomp: list[str]) -> set[int]:
     """
 
     # find the first "cmp" instruction
-    cmp_index = next((i for i, s in enumerate(orig) if s.startswith("cmp")), -1)
-
     # return if not found, or only found on first or last line
+    cmp_index = get_first_index_with_opcode(orig, "cmp")
+    if cmp_index is None or cmp_index in (0, len(orig) - 1):
+        return set()
+
+    recomp_index = get_first_index_with_opcode(recomp, "cmp")
+    if recomp_index is None or recomp_index in (0, len(recomp) - 1):
+        return set()
+
+    # recomp should also have a cmp in the same line
+    if cmp_index != recomp_index:
+        return set()
+
     if (
-        cmp_index in (-1, 0, len(orig) - 1)
-        or
-        # recomp should also have a cmp in the same line
-        not recomp[cmp_index].startswith("cmp")
-        or
         # line before cmp must be a mov
         not orig[cmp_index - 1].startswith("mov")
         or not recomp[cmp_index - 1].startswith("mov")
@@ -94,7 +104,7 @@ def patch_mov_cmp_jmp(orig: list[str], recomp: list[str]) -> set[int]:
         if orig[cmp_index + 1] == get_patched_jump(
             orig[cmp_index + 1], recomp[cmp_index + 1]
         ):
-            return {0, 1, 2}
+            return {cmp_index - 1, cmp_index, cmp_index + 1}
     return set()
 
 
@@ -112,17 +122,21 @@ def patch_cmp_jmp(orig: list[str], recomp: list[str]) -> set[int]:
     """
 
     # find the first "cmp" instruction
-    cmp_index = next((i for i, s in enumerate(orig) if s.startswith("cmp")), -1)
-    # return if not found, or only found on the last line
-    if (
-        cmp_index in (-1, len(orig) - 1)
-        or
-        # recomp should also have a cmp in the same line
-        not recomp[cmp_index].startswith("cmp")
-        or
-        # if the last lines are not a compatible jump difference
-        not jump_swap_ok(orig[cmp_index + 1], recomp[cmp_index + 1])
-    ):
+    # return if not found, or only found on last line
+    cmp_index = get_first_index_with_opcode(orig, "cmp")
+    if cmp_index is None or cmp_index == len(orig) - 1:
+        return set()
+
+    recomp_index = get_first_index_with_opcode(recomp, "cmp")
+    if recomp_index is None or recomp_index == len(recomp) - 1:
+        return set()
+
+    # recomp should also have a cmp in the same line
+    if cmp_index != recomp_index:
+        return set()
+
+    # if the last lines are not a compatible jump difference
+    if not jump_swap_ok(orig[cmp_index + 1], recomp[cmp_index + 1]):
         return set()
 
     # Checking two things:
@@ -148,15 +162,18 @@ def patch_fld_fmul(orig: list[str], recomp: list[str]) -> set[int]:
 
     valid_following_ops = ["fmul", "fadd"]
 
-    # find the first "cmp" instruction
-    fld_index = next((i for i, s in enumerate(orig) if s.startswith("fld")), -1)
-    # return if not found, or only found on the last line
-    if (
-        fld_index in (-1, len(orig) - 1)
-        or
-        # recomp should also have a fld in the same line
-        not recomp[fld_index].startswith("fld")
-    ):
+    # find the first "fld" instruction
+    # return if not found, or only found on last line
+    fld_index = get_first_index_with_opcode(orig, "fld")
+    if fld_index is None or fld_index == len(orig) - 1:
+        return set()
+
+    recomp_index = get_first_index_with_opcode(recomp, "fld")
+    if recomp_index is None or recomp_index == len(recomp) - 1:
+        return set()
+
+    # recomp should also have an fld in the same line
+    if fld_index != recomp_index:
         return set()
 
     (_, _, orig_operand_a) = orig[fld_index].partition(" ")

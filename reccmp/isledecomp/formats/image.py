@@ -52,6 +52,9 @@ class Image:
     def is_relocated_addr(self, addr: int) -> bool:
         raise NotImplementedError
 
+    def is_valid_vaddr(self, vaddr: int) -> bool:
+        raise NotImplementedError
+
     def get_code_regions(self) -> Iterator[ImageRegion]:
         raise NotImplementedError
 

@@ -3,23 +3,13 @@ These functions load the entity and type databases with information from code an
 """
 
 import logging
-from pathlib import Path
 from typing import Iterable
-from reccmp.isledecomp.formats.exceptions import (
-    InvalidStringError,
-)
 from reccmp.isledecomp.formats.pe import PEImage
 from reccmp.isledecomp.cvdump import CvdumpTypesParser, CvdumpAnalysis
 from reccmp.isledecomp.parser import DecompCodebase
-from reccmp.isledecomp.dir import walk_source_dir
 from reccmp.isledecomp.types import EntityType, TextFile
-from reccmp.isledecomp.compare.event import (
-    ReccmpEvent,
-    ReccmpReportProtocol,
-    reccmp_report_nop,
-)
 from .csv import ReccmpCsvParserError, ReccmpCsvFatalParserError, csv_parse
-from .db import EntityDb, entity_name_from_string
+from .db import EntityDb
 from .lines import LinesDb
 
 
@@ -137,43 +127,13 @@ def load_cvdump_lines(
     lines_db.mark_function_starts(tuple(seen_addrs))
 
 
-def load_markers(
-    code_dir: Path,
+def load_code_lines(
+    codebase: DecompCodebase,
     lines_db: LinesDb,
-    orig_bin: PEImage,
-    target_id: str,
     db: EntityDb,
-    report: ReccmpReportProtocol = reccmp_report_nop,
 ):
-    codefiles = [Path(p) for p in walk_source_dir(code_dir)]
-    lines_db.add_local_paths(codefiles)
-    codebase = DecompCodebase(codefiles, target_id)
+    lines_db.add_local_paths(codebase.iter_paths())
 
-    # If the address of any annotation would cause an exception,
-    # remove it and report an error.
-    bad_annotations = codebase.prune_invalid_addrs(orig_bin.is_valid_vaddr)
-
-    for sym in bad_annotations:
-        report(
-            ReccmpEvent.INVALID_USER_DATA,
-            sym.offset,
-            msg=f"Invalid address 0x{sym.offset:x} on {sym.type.name} annotation in file: {sym.filename}",
-        )
-
-    # Make sure each address is used only once
-    duplicate_annotations = codebase.prune_reused_addrs()
-
-    for sym in duplicate_annotations:
-        report(
-            ReccmpEvent.INVALID_USER_DATA,
-            sym.offset,
-            msg=f"Dropped duplicate address 0x{sym.offset:x} on {sym.type.name} annotation in file: {sym.filename}",
-        )
-
-    # Match lineref functions first because this is a guaranteed match.
-    # If we have two functions that share the same name, and one is
-    # a lineref, we can match the nameref correctly because the lineref
-    # was already removed from consideration.
     with db.batch() as batch:
         for fun in codebase.iter_line_functions():
             batch.set_orig(fun.offset, type=EntityType.FUNCTION, stub=fun.should_skip())
@@ -186,6 +146,9 @@ def load_markers(
             if recomp_addr is not None:
                 batch.match(fun.offset, recomp_addr)
 
+
+def load_code_markers(codebase: DecompCodebase, db: EntityDb):
+    with db.batch() as batch:
         for fun in codebase.iter_name_functions():
             batch.set_orig(
                 fun.offset,
@@ -215,48 +178,16 @@ def load_markers(
             )
 
         for string in codebase.iter_strings():
-            # Not that we don't trust you, but we're checking the string
-            # annotation to make sure it is accurate.
-            try:
-                if string.is_widechar:
-                    string_size = 2 * len(string.name) + 2
-                    raw = orig_bin.read(string.offset, string_size)
-                    orig = raw.decode("utf-16-le")
-                else:
-                    string_size = len(string.name) + 1
-                    raw = orig_bin.read(string.offset, string_size)
-                    orig = raw.decode("latin1")
-
-                string_correct = orig[-1] == "\0" and string.name == orig[:-1]
-
-            except InvalidStringError:
-                logger.warning(
-                    "Could not read string from orig 0x%x, wide=%s",
-                    string.offset,
-                    string.is_widechar,
-                )
-                string_correct = False
-
-            except UnicodeDecodeError:
-                logger.warning(
-                    "Could not decode string: %s, wide=%s",
-                    raw,
-                    string.is_widechar,
-                )
-                string_correct = False
-
-            if not string_correct:
-                report(
-                    ReccmpEvent.INVALID_USER_DATA,
-                    string.offset,
-                    msg=f"Data at 0x{string.offset:x} does not match string {repr(string.name)}",
-                )
-                continue
+            if string.is_widechar:
+                string_type = EntityType.WIDECHAR
+                string_size = 2 * len(string.name) + 2
+            else:
+                string_type = EntityType.STRING
+                string_size = len(string.name) + 1
 
             batch.set_orig(
                 string.offset,
-                name=entity_name_from_string(string.name, wide=string.is_widechar),
-                type=EntityType.STRING,
+                type=string_type,
                 size=string_size,
                 verified=True,
             )

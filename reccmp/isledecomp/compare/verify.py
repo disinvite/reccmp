@@ -4,9 +4,15 @@ These functions report problems with the current entities that limit or block fu
 
 import logging
 import struct
+from reccmp.isledecomp.compare.event import (
+    ReccmpEvent,
+    ReccmpReportProtocol,
+    reccmp_report_nop,
+)
 from reccmp.isledecomp.formats.pe import PEImage
+from reccmp.isledecomp.parser import DecompCodebase
 from reccmp.isledecomp.types import EntityType
-from .db import EntityDb
+from .db import EntityDb, entity_name_from_string
 
 
 logger = logging.getLogger(__name__)
@@ -51,3 +57,29 @@ def check_vtables(db: EntityDb, orig_bin: PEImage):
             logger.warning(
                 "Recomp vtable is larger than orig vtable for %s", match.name
             )
+
+
+def check_code_strings(
+    codebase: DecompCodebase,
+    db: EntityDb,
+    report: ReccmpReportProtocol = reccmp_report_nop,
+):
+    """Not that we don't trust you, but we're checking each string
+    annotation to make sure it is accurate."""
+    for string in codebase.iter_strings():
+        # TODO: not ideal
+        value = entity_name_from_string(string.name, wide=string.is_widechar)
+        e = db.get_by_orig(string.offset)
+        if e is None:
+            continue
+
+        if (
+            e.get("type") in (EntityType.STRING, EntityType.WIDECHAR)
+            and e.get("name") != value
+        ):
+            report(
+                ReccmpEvent.INVALID_USER_DATA,
+                string.offset,
+                msg=f"Data at 0x{string.offset:x} does not match string {repr(string.name)}",
+            )
+            # TODO: DQ

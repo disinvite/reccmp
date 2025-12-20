@@ -3,7 +3,6 @@ import pytest
 from reccmp.isledecomp.compare.db import EntityDb
 from reccmp.isledecomp.formats.image import ImageImport, ImageRegion
 from reccmp.isledecomp.formats import PEImage
-from reccmp.isledecomp.formats.image import ImageRegion
 from reccmp.isledecomp.types import EntityType, ImageId
 from reccmp.isledecomp.formats.exceptions import (
     InvalidVirtualAddressError,

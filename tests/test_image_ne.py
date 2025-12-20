@@ -1,5 +1,6 @@
 import pytest
 from reccmp.isledecomp.formats import NEImage
+from reccmp.isledecomp.formats.image import ImageImport
 from reccmp.isledecomp.formats.ne import NESegmentFlags, NETargetOSFlags
 
 
@@ -77,3 +78,15 @@ def test_reloc_patching_internalref(skifree: NEImage):
     # Separate relocs for seg and offset.
     assert skifree.read(0x10003E71, 2) == b"\x3c\x51"
     assert skifree.read(0x10003E76, 2) == b"\x00\x10"
+
+
+IMPORT_REFS = (
+    ImageImport(module="GDI", ordinal=34, addr=0x2000004C),
+    ImageImport(module="KERNEL", ordinal=137, addr=0x20000040),
+    ImageImport(module="USER", ordinal=420, addr=0x20000100),
+)
+
+
+@pytest.mark.parametrize("import_ref", IMPORT_REFS)
+def test_imports(import_ref: tuple[ImageImport, ...], skifree: NEImage):
+    assert import_ref in tuple(skifree.imports)

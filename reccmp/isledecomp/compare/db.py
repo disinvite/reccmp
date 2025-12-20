@@ -596,7 +596,7 @@ class EntityDb:
         return result[0] if result is not None else None
 
     def populate_names_table(self):
-        """Copy the name/computed_name of non-thunk function entities into the NAMES table.
+        """Copy the name/computed_name of non-thunk functions or imports into the NAMES table.
         NAMES is keyed by (image, addr), unlike the ENTITIES table."""
         self._sql.execute(
             """INSERT INTO names (img, addr, name, computed_name)
@@ -606,9 +606,13 @@ class EntityDb:
                 SELECT 1 img, recomp_addr addr, kvstore FROM entities WHERE recomp_addr IS NOT NULL
             )
             WHERE name IS NOT NULL
-            AND json_extract(kvstore, '$.type') = ?
+            AND json_extract(kvstore, '$.type') IN (?, ?)
             """,
-            (EntityType.FUNCTION,),
+            # These types are chosen because they are the possible sources for the name of a thunk function.
+            (
+                EntityType.FUNCTION,
+                EntityType.IMPORT,
+            ),
         )
 
     def propagate_thunk_names(self) -> bool:

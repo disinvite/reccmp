@@ -3,34 +3,58 @@
   <head>
     <title>Decompilation Status</title>
     <style>
+      :root {
+        --main-bg-color: #202020;
+        --main-text-color: #f0f0f0;
+        --diff-neg: #ff8080;
+        --diff-pos: #80ff80;
+        --diff-range: #8080ff;
+
+        --border-color: var(--main-text-color);
+        --search-bg-color: lch(from var(--main-bg-color) calc(l + 7.5) c h);
+        --placeholder-text-color: lch(from var(--main-text-color) calc(l - 25) c h);
+      }
+
       body {
-        background: #202020;
-        color: #f0f0f0;
+        background: var(--main-bg-color);
+        color: var(--main-text-color);
         font-family: sans-serif;
+        margin: 0;
+        padding: 0;
       }
 
       h1 {
         text-align: center;
       }
 
+      .background {
+        height: 100vh;
+        position: fixed;
+        width: 100vw;
+        z-index: -1000;
+      }
+
       .main {
+        background: var(--main-bg-color);
         width: 800px;
         max-width: 100%;
-        margin: auto;
+        margin: 0 auto;
+        padding: 0 20px 20px 20px;
+        overflow: auto; /* contain margin collapsing */
       }
 
       search-bar > input {
         width: 100%;
         box-sizing: border-box;
-        background: #303030;
-        color: #f0f0f0;
-        border: 1px #f0f0f0 solid;
+        background: var(--search-bg-color);
+        color: var(--main-text-color);
+        border: 1px var(--border-color) solid;
         padding: 0.5em;
         border-radius: 0.5em;
       }
 
       search-bar > input::placeholder {
-        color: #b0b0b0;
+        color: var(--placeholder-text-color);
       }
 
       #listing {
@@ -52,7 +76,7 @@
       }
 
       table#listing {
-        border: 1px #f0f0f0 solid;
+        border: 1px var(--border-color) solid;
         table-layout: fixed;
       }
 
@@ -193,7 +217,7 @@
       }
 
       tr[data-diff] > td {
-        border: 1px #f0f0f0 solid;
+        border: 1px var(--border-color) solid;
         border-bottom: 0px none;
         display: table-cell;
         padding: 0.5em;
@@ -216,7 +240,7 @@
       }
 
       tr[data-address] > td {
-        border-top: 1px #f0f0f0 solid;
+        border-top: 1px var(--border-color) solid;
         display: table-cell;
         padding: 0.5em;
         vertical-align: top;
@@ -270,6 +294,7 @@
     <script>{{{reccmp_js}}}</script>
   </head>
   <body>
+    <div class="background"></div>
     <div class="main">
       <h1>Decompilation Status</h1>
       <reccmp-provider>

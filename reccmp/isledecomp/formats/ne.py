@@ -92,7 +92,7 @@ class NERelocationFlag(Enum):
     IMPORTORDINAL = 1
     IMPORTNAME = 2
     OSFIXUP = 3
-    ADDITIVE = 4
+    ADDITIVE = 4  # TODO: This is not an enum but a flag.
 
 
 @dataclasses.dataclass(frozen=True)
@@ -139,7 +139,7 @@ def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
 
 
 def iter_segments(
-    data: bytes, seg_tab_offset: int, seg_count: int
+    data: bytes, seg_tab_offset: int, seg_count: int, sector_size: int
 ) -> Iterator[NESegment]:
     segment_table, _ = NESegmentTableEntry.from_memory(
         data, offset=seg_tab_offset, count=seg_count
@@ -148,7 +148,7 @@ def iter_segments(
     for i, entry in enumerate(segment_table):
         # Per ghidra
         virtual_address = (0x1000 + 8 * i) << 16
-        physical_offset = entry.ns_sector * 16
+        physical_offset = entry.ns_sector * sector_size
 
         # TODO: entry.ns_sector == 0
 
@@ -196,7 +196,7 @@ class NEEntry:
     offset: int
 
     @classmethod
-    def from_memory(cls, data: bytes, offset: int) -> tuple["NEEntry", ...]:
+    def from_memory(cls, data: bytes, offset: int = 0) -> tuple["NEEntry", ...]:
         ordinal = 0
         entries = []
 
@@ -221,10 +221,13 @@ class NEEntry:
                         offset=entry_ofs,
                     )
                     entries.append(entry)
-                    # print(ordinal, "mov", entry_seg, hex(entry_ofs))
                     offset += 6
 
-                elif indicator > 0:
+                elif indicator == 0:
+                    # Skip this ordinal number.
+                    offset += 1
+
+                else:
                     # Indicator is the segment number for all in this bundle.
                     (flag, entry_ofs) = struct.unpack_from("<BH", data, offset)
                     entry = cls(
@@ -236,7 +239,6 @@ class NEEntry:
                         offset=entry_ofs,
                     )
                     entries.append(entry)
-                    # print(ordinal, "fix", indicator, hex(entry_ofs))
                     offset += 3
 
         return tuple(entries)
@@ -267,7 +269,7 @@ class NewExeHeader:
     ne_imptab: int  # Offset of Imported Names Table (Relative to NE header)
     ne_nrestab: int  # Offset of Non-resident Names Table (File offset)
     ne_cmovent: int  # Count of movable entries
-    ne_align: int  # Segment alignment shift count
+    ne_align: int  # Segment alignment shift count (Sector size is 1 << ne_align)
     ne_cres: int  # Count of resource entries
     ne_exetyp: NETargetOSFlags  # Target operating system
     ne_flagsothers: int  # Other .EXE flags
@@ -322,7 +324,10 @@ class NEImage(Image):
         header, _ = NewExeHeader.from_memory(data, offset=offset)
         segments = tuple(
             iter_segments(
-                view, seg_tab_offset=offset + header.ne_segtab, seg_count=header.ne_cseg
+                view,
+                seg_tab_offset=offset + header.ne_segtab,
+                seg_count=header.ne_cseg,
+                sector_size=(1 << header.ne_align),
             )
         )
 
@@ -339,6 +344,8 @@ class NEImage(Image):
         entry_table = NEEntry.from_memory(
             self.view, self.mz_header.e_lfanew + self.header.ne_enttab
         )
+
+        entry_map = {entry.ordinal: entry for entry in entry_table}
 
         modules_raw = self.view[
             self.mz_header.e_lfanew
@@ -414,7 +421,10 @@ class NEImage(Image):
 
                 if reloc.value0 == 255:
                     # Movable segment. Lookup using 1-based ordinal number.
-                    entry = entry_table[reloc.value1 - 1]
+                    if reloc.value1 not in entry_map:
+                        raise ValueError  # TODO
+
+                    entry = entry_map[reloc.value1]
                     (replacement_seg, replacement_ofs) = (entry.segment, entry.offset)
 
                 if reloc.type == NERelocationType.OFFSET:

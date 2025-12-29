@@ -34,6 +34,7 @@ from .analyze import (
     create_analysis_floats,
     create_analysis_strings,
     create_analysis_vtordisps,
+    create_seh_entities,
     complete_partial_floats,
     complete_partial_strings,
     read_relocations,
@@ -176,6 +177,7 @@ class Compare:
             create_import_thunks(self._db, img_id, binfile)
             create_analysis_floats(self._db, img_id, binfile)
             create_analysis_strings(self._db, img_id, binfile)
+            create_seh_entities(self._db, img_id, binfile)
             create_thunks(self._db, img_id, binfile)
             create_analysis_vtordisps(self._db, img_id, binfile)
             complete_partial_floats(self._db, img_id, binfile)

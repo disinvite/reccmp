@@ -92,7 +92,6 @@ class NERelocationFlag(Enum):
     IMPORTORDINAL = 1
     IMPORTNAME = 2
     OSFIXUP = 3
-    ADDITIVE = 4  # TODO: This is not an enum but a flag.
 
 
 @dataclasses.dataclass(frozen=True)
@@ -158,30 +157,38 @@ def iter_segments(
 
         seg_data = data[physical_offset:][:physical_size]
 
+        relocs = []
+
         if entry.has_reloc():
             reloc_table = data[physical_offset + physical_size :]
 
-            relocs = tuple(
-                NERelocation(
+            for reloc_type, reloc_flag, start, value0, value1 in iter_relocations(
+                reloc_table
+            ):
+                additive = reloc_flag & 4 == 4
+
+                # Do not follow the chain if the additive flag is set.
+                if additive:
+                    # TODO: Skip this for now. Even Ghidra doesn't handle it.
+                    offsets = tuple()
+                else:
+                    offsets = tuple(iter_reloc_chain(seg_data, start))
+
+                reloc = NERelocation(
                     type=NERelocationType(reloc_type),
-                    flag=NERelocationFlag(reloc_flag),
-                    offsets=tuple(iter_reloc_chain(seg_data, start)),
+                    flag=NERelocationFlag(reloc_flag & 3),
+                    offsets=offsets,
                     value0=value0,
                     value1=value1,
                 )
-                for reloc_type, reloc_flag, start, value0, value1 in iter_relocations(
-                    reloc_table
-                )
-            )
-        else:
-            relocs = tuple()
+                relocs.append(reloc)
 
         yield NESegment(
             address=virtual_address,
             physical_offset=physical_offset,
             physical_size=physical_size,
             virtual_size=virtual_size,
-            relocations=relocs,
+            relocations=tuple(relocs),
             mock=False,
         )
 

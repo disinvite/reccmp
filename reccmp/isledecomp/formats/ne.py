@@ -167,6 +167,7 @@ def iter_segments(
             ):
                 additive = reloc_flag & 4 == 4
 
+                offsets: tuple[int, ...]
                 # Do not follow the chain if the additive flag is set.
                 if additive:
                     # TODO: Skip this for now. Even Ghidra doesn't handle it.

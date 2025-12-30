@@ -1,13 +1,22 @@
 from unittest.mock import Mock, patch
 import pytest
 from reccmp.isledecomp.compare.db import EntityDb
+from reccmp.isledecomp.formats.image import ImageImport, ImageRegion
 from reccmp.isledecomp.formats import PEImage
 from reccmp.isledecomp.types import EntityType, ImageId
+from reccmp.isledecomp.formats.exceptions import (
+    InvalidVirtualAddressError,
+    InvalidVirtualReadError,
+    InvalidStringError,
+)
 from reccmp.isledecomp.compare.analyze import (
     create_analysis_floats,
     create_analysis_strings,
     create_thunks,
     create_analysis_vtordisps,
+    complete_partial_strings,
+    create_imports,
+    create_import_thunks,
 )
 
 
@@ -190,3 +199,165 @@ def test_create_analysis_vtordisps_no_overwrite(db: EntityDb, binfile: PEImage):
     e = db.get_by_orig(0x1000FB60)
     assert e is not None
     assert e.get("type") != EntityType.FUNCTION
+
+
+def test_complete_partial_strings(db: EntityDb):
+    """Should read data for a partially-initialized string entity."""
+    binfile = Mock(spec=[])
+    binfile.read_string = Mock(return_value=b"Hello")
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.STRING)
+
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    # Entity size set according to string length plus null-terminator.
+    e = db.get_by_orig(100)
+    assert e is not None
+    assert e.get("size") == 6
+    assert e.name == '"Hello"'
+
+    # Do not report a failed match if this string does not exist in both binaries.
+    assert not e.get("verified")
+
+
+def test_complete_partial_strings_with_nulls(db: EntityDb):
+    """Should read a string with nulls if we provide the size."""
+    binfile = Mock(spec=[])
+    binfile.read = Mock(return_value=b"\x00test\x00")
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.STRING, size=6)
+
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    e = db.get_by_orig(100)
+    assert e is not None
+    assert e.name == '"\\x00test"'
+
+
+def test_complete_partial_strings_widechar(db: EntityDb):
+    """Should read data for a partially-initialized widechar entity."""
+    binfile = Mock(spec=[])
+    binfile.read_widechar = Mock(return_value="Hello".encode("utf-16-le"))
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.WIDECHAR)
+
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    # Entity size set according to string length plus null-terminator.
+    e = db.get_by_orig(100)
+    assert e is not None
+    assert e.get("size") == 12
+    assert e.name == 'L"Hello"'
+
+
+PARTIAL_STRING_EXCEPTIONS = (
+    InvalidVirtualAddressError,
+    InvalidVirtualReadError,
+    InvalidStringError,
+)
+
+
+@pytest.mark.parametrize("ex_type", PARTIAL_STRING_EXCEPTIONS)
+def test_complete_partial_strings_exceptions(db: EntityDb, ex_type: Exception):
+    """Should handle various exceptions while reading string data."""
+
+    def exception(*_):
+        raise ex_type
+
+    binfile = Mock(spec=[])
+    binfile.read_string = Mock(side_effect=exception)
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.STRING)
+
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    # Should not modify the entity.
+    e = db.get_by_orig(100)
+    assert e is not None
+    assert e.name is None
+
+
+def test_complete_partial_strings_unicode_exception(db: EntityDb):
+    """Should handle a UnicodeDecodeError."""
+
+    # This value cannot be decoded as UTF-16LE.
+    value = b"\x00\xd8\x8c"
+    with pytest.raises(UnicodeDecodeError):
+        value.decode("utf-16-le")
+
+    binfile = Mock(spec=[])
+    binfile.read_widechar = Mock(return_value=value)
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.WIDECHAR)
+
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    # Should not modify the entity.
+    e = db.get_by_orig(100)
+    assert e is not None
+    assert e.name is None
+
+
+def test_create_imports(db: EntityDb):
+    """Should create IMPORT entities for imported functions using names or ordinals."""
+    binfile = Mock(spec=[])
+    binfile.imports = (
+        ImageImport(addr=0x1000, module="TEST", name="Hello"),
+        ImageImport(addr=0x2000, module="TEST", ordinal=10),
+    )
+
+    create_imports(db, ImageId.ORIG, binfile)
+
+    e = db.get_by_orig(0x1000)
+    assert e is not None
+    assert e.get("type") == EntityType.IMPORT
+    name = e.get("name")
+    assert "TEST" in name
+    assert "Hello" in name
+
+    # Create mock name using the ordinal number.
+    e = db.get_by_orig(0x2000)
+    assert e is not None
+    assert e.get("type") == EntityType.IMPORT
+    name = e.get("name")
+    assert "TEST" in name
+    assert "10" in name
+
+
+def test_create_import_thunks(db: EntityDb):
+    """Should create IMPORT_THUNK entities for functions with an absolute JMP to an import descriptor."""
+    binfile = Mock(spec=PEImage)
+    # imports is called by find_import_thunks so we need to mock it
+    # even though we do not call create_imports or create the IMPORT entity.
+    binfile.imports = (ImageImport(addr=0x1000, module="TEST", name="Hello"),)
+    binfile.get_code_regions = Mock(
+        return_value=(ImageRegion(0x2000, b"\xff\x25\x00\x10\x00\x00"),),
+    )
+    binfile.relocations = set([0x2002])
+
+    create_import_thunks(db, ImageId.ORIG, binfile)
+
+    e = db.get(ImageId.ORIG, 0x2000)
+    assert e is not None
+    assert e.get("type") == EntityType.IMPORT_THUNK
+
+    assert get_ref_addr(db, ImageId.ORIG, 0x2000) == 0x1000
+
+
+def test_create_import_thunks_pe_only(db: EntityDb):
+    """At the moment, we have seen import thunks on PE images only.
+    create_import_thunks should be a no-op if the image is not PE."""
+    pe_image = Mock(spec=PEImage)
+    with patch("reccmp.isledecomp.compare.analyze.find_import_thunks") as find_fn:
+        create_import_thunks(db, ImageId.ORIG, pe_image)
+        find_fn.assert_called()
+
+    image = Mock()
+    with patch("reccmp.isledecomp.compare.analyze.find_import_thunks") as find_fn:
+        create_import_thunks(db, ImageId.ORIG, image)
+        find_fn.assert_not_called()

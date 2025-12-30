@@ -54,8 +54,8 @@ def get_named_thunks(db: EntityDb) -> Iterator[ThunkWithName]:
     """Return a modified name to set for each thunk and vtordisp entity.
     The name is copied from the parent function entity.
     Must run db.populate_names_table() and db,propagate_thunk_names() first."""
-    for img, addr, name, disp0, disp1 in db.sql.execute(
-        """SELECT n.img, n.addr, coalesce(n.computed_name, n.name) name, r.disp0, r.disp1
+    for img, addr, type_, name, disp0, disp1 in db.sql.execute(
+        """SELECT n.img, n.addr, json_extract(e.kvstore, '$.type') type, coalesce(n.computed_name, n.name) name, r.disp0, r.disp1
         FROM names n
         INNER JOIN refs r
             ON n.img = r.img AND n.addr = r.addr
@@ -63,20 +63,23 @@ def get_named_thunks(db: EntityDb) -> Iterator[ThunkWithName]:
             ON (r.img = 0 AND r.addr = e.orig_addr)
             OR (r.img = 1 AND r.addr = e.recomp_addr)
         -- Rename thunk and vtordisp entities only.
-        WHERE json_extract(e.kvstore, '$.type') IN (?, ?)
+        WHERE type IN (?, ?, ?)
         AND name IS NOT NULL
         -- Performance: we only need to yield one addr for a matched entity.
         GROUP BY e.rowid""",
-        (EntityType.THUNK, EntityType.VTORDISP),
+        (EntityType.THUNK, EntityType.VTORDISP, EntityType.IMPORT_THUNK),
     ):
         assert img in (ImageId.ORIG, ImageId.RECOMP)
         assert isinstance(addr, int)
         assert isinstance(name, str)
 
-        if disp0 == 0 and disp1 == 0:
+        if type_ == EntityType.THUNK:
             yield ThunkWithName(img, addr, f"Thunk of '{name}'")
-        else:
+        elif type_ == EntityType.VTORDISP:
             yield ThunkWithName(img, addr, f"{name}`vtordisp{{{disp0}, {disp1}}}'")
+        else:
+            # Copy the name only
+            yield ThunkWithName(img, addr, name)
 
 
 def get_floats_without_data(
@@ -101,6 +104,28 @@ def get_floats_without_data(
             yield (orig_addr, size == 8)
         elif image_id == ImageId.RECOMP and isinstance(recomp_addr, int):
             yield (recomp_addr, size == 8)
+
+
+def get_strings_without_data(
+    db: EntityDb, image_id: ImageId
+) -> Iterator[tuple[int, int | None, bool]]:
+    assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
+
+    for orig_addr, recomp_addr, size, type_ in db.sql.execute(
+        """SELECT orig_addr, recomp_addr, json_extract(kvstore,'$.size') size, json_extract(kvstore,'$.type') type
+        FROM entities
+        WHERE type IN (?, ?)
+        -- TODO: #27. We are using the name field to store the data for now,
+        -- but we should put this data in its own table.
+        AND json_extract(kvstore,'$.name') IS NULL
+        """,
+        (EntityType.STRING, EntityType.WIDECHAR),
+    ):
+
+        if image_id == ImageId.ORIG and isinstance(orig_addr, int):
+            yield (orig_addr, size, type_ == EntityType.WIDECHAR)
+        elif image_id == ImageId.RECOMP and isinstance(recomp_addr, int):
+            yield (recomp_addr, size, type_ == EntityType.WIDECHAR)
 
 
 def get_referencing_entity_matches(db: EntityDb) -> Iterator[tuple[int, int]]:

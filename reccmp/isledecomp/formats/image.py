@@ -27,6 +27,14 @@ class ImageRegion:
         return range(self.addr, self.addr + self.size)
 
 
+@dataclasses.dataclass(frozen=True)
+class ImageImport:
+    addr: int
+    module: str
+    ordinal: int = 0
+    name: str = ""
+
+
 @dataclasses.dataclass
 class Image:
     filepath: Path
@@ -40,6 +48,20 @@ class Image:
             a. bytes or memoryview with the relevant stream of data that begins at the address.
             b. number of valid bytes remaining (including the size of whatever is in 'a').
         3. If the address is not valid, raise InvalidVirtualAddressError"""
+        raise NotImplementedError
+
+    @property
+    def imports(self) -> Iterator[ImageImport]:
+        raise NotImplementedError
+
+    @property
+    def imagebase(self) -> int:
+        raise NotImplementedError
+
+    def get_relative_addr(self, addr: int) -> tuple[int, int]:
+        raise NotImplementedError
+
+    def is_relocated_addr(self, addr: int) -> bool:
         raise NotImplementedError
 
     def get_code_regions(self) -> Iterator[ImageRegion]:

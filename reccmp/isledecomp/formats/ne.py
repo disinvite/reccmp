@@ -7,14 +7,14 @@ Based on the following resources:
 import dataclasses
 import struct
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, cast
 from enum import Enum, IntEnum, IntFlag
-
+from collections.abc import Sequence
 from .exceptions import (
     InvalidVirtualAddressError,
     SectionNotFoundError,
 )
-from .image import Image, ImageImport, ImageRegion
+from .image import Image, ImageImport, ImageSection, ImageRegion
 from .mz import ImageDosHeader
 
 
@@ -104,19 +104,8 @@ class NERelocation:
 
 
 @dataclasses.dataclass(frozen=True)
-class NESegment:
-    address: int
-    physical_offset: int
-    physical_size: int
-    virtual_size: int
+class NESegment(ImageSection):
     relocations: tuple[NERelocation, ...]
-    mock: bool = False  # ?
-
-    @property
-    def range(self) -> range:
-        return range(
-            self.address, self.address + max(self.physical_size, self.virtual_size)
-        )
 
 
 def iter_relocations(
@@ -138,10 +127,10 @@ def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
 
 
 def iter_segments(
-    data: bytes, seg_tab_offset: int, seg_count: int, sector_size: int
+    view: memoryview, seg_tab_offset: int, seg_count: int, sector_size: int
 ) -> Iterator[NESegment]:
     segment_table, _ = NESegmentTableEntry.from_memory(
-        data, offset=seg_tab_offset, count=seg_count
+        view, offset=seg_tab_offset, count=seg_count
     )
 
     for i, entry in enumerate(segment_table):
@@ -155,12 +144,12 @@ def iter_segments(
         physical_size = entry.ns_cbseg if entry.ns_cbseg else 0x10000
         virtual_size = entry.ns_minalloc if entry.ns_minalloc else 0x10000
 
-        seg_data = data[physical_offset:][:physical_size]
+        seg_data = view[physical_offset:][:physical_size]
 
         relocs = []
 
         if entry.has_reloc():
-            reloc_table = data[physical_offset + physical_size :]
+            reloc_table = view[physical_offset + physical_size :]
 
             for reloc_type, reloc_flag, start, value0, value1 in iter_relocations(
                 reloc_table
@@ -185,12 +174,10 @@ def iter_segments(
                 relocs.append(reloc)
 
         yield NESegment(
-            address=virtual_address,
-            physical_offset=physical_offset,
-            physical_size=physical_size,
-            virtual_size=virtual_size,
+            virtual_range=range(virtual_address, virtual_address + virtual_size),
+            physical_range=range(physical_offset, physical_offset + physical_size),
+            view=seg_data,
             relocations=tuple(relocs),
-            mock=False,
         )
 
 
@@ -319,8 +306,12 @@ class NewExeHeader:
 class NEImage(Image):
     mz_header: ImageDosHeader
     header: NewExeHeader
-    segments: tuple[NESegment, ...]
     _imports: tuple[ImageImport, ...] = tuple()
+
+    @property
+    def ne_sections(self) -> Sequence[NESegment]:
+        # TODO: hmm
+        return cast(Sequence[NESegment], self.sections)
 
     @classmethod
     def from_memory(
@@ -330,7 +321,7 @@ class NEImage(Image):
         # n.b. The memoryview must be writeable for reloc replacement.
         view = memoryview(bytearray(data))
         header, _ = NewExeHeader.from_memory(data, offset=offset)
-        segments = tuple(
+        sections = tuple(
             iter_segments(
                 view,
                 seg_tab_offset=offset + header.ne_segtab,
@@ -345,7 +336,7 @@ class NEImage(Image):
             view=view,
             mz_header=mz_header,
             header=header,
-            segments=segments,
+            sections=sections,
         )
 
     def __post_init__(self):
@@ -381,7 +372,7 @@ class NEImage(Image):
 
         all_imports = [
             r
-            for seg in self.segments
+            for seg in self.ne_sections
             for r in seg.relocations
             # TODO: We need an example of IMPORTNAME to see how they fit into the order.
             if r.flag in (NERelocationFlag.IMPORTORDINAL,)
@@ -399,8 +390,8 @@ class NEImage(Image):
 
         self._imports = tuple(import_map.values())
 
-        for seg in self.segments:
-            seg_data = self.view[seg.physical_offset :][: seg.physical_size]
+        for seg in self.ne_sections:
+            seg_data = seg.view
 
             # Each location to patch in this segment.
             reloc_values: list[tuple[int, bytes]] = []
@@ -473,7 +464,7 @@ class NEImage(Image):
     def _get_segment(self, index: int) -> NESegment:
         try:
             assert index > 0
-            return self.segments[index - 1]
+            return self.ne_sections[index - 1]
         except (AssertionError, IndexError) as ex:
             raise SectionNotFoundError(index) from ex
 
@@ -481,16 +472,16 @@ class NEImage(Image):
         return True  # TODO
 
     def get_relative_addr(self, addr: int) -> tuple[int, int]:
-        for i, segment in enumerate(self.segments):
-            if addr in segment.range:
-                return (i + 1, addr - segment.address)
+        for i, segment in enumerate(self.sections):
+            if addr in segment.virtual_range:
+                return (i + 1, addr - segment.virtual_address)
 
         raise InvalidVirtualAddressError(f"{self.filepath} : 0x{addr:x}")
 
     def get_abs_addr(self, section: int, offset: int) -> int:
         try:
-            segment = self.segments[section - 1]
-            return segment.address + offset
+            segment = self.sections[section - 1]
+            return segment.virtual_address + offset
         except IndexError as ex:
             raise InvalidVirtualAddressError(f"{section:04x}:{offset:04x}") from ex
 
@@ -501,12 +492,10 @@ class NEImage(Image):
         if offset > seg.virtual_size:
             raise InvalidVirtualAddressError(f"{segment:04x}:{offset:04x}")
 
-        if seg.physical_size == 0:
+        if seg.size_of_raw_data == 0:
             return (b"", seg.virtual_size - offset)
 
-        start = seg.physical_offset
-        end = start + seg.physical_size
-        return (self.view[start + offset : end], seg.virtual_size - offset)
+        return (seg.view[offset:], seg.virtual_size - offset)
 
     def get_code_regions(self) -> Iterator[ImageRegion]:
         raise NotImplementedError

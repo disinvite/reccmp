@@ -1,6 +1,6 @@
 from pathlib import PureWindowsPath
-from reccmp.isledecomp.formats.msvc_map import MsvcMap
-from reccmp.isledecomp.types import EntityType
+from reccmp.formats.msvc_map import MsvcMap
+from reccmp.types import EntityType
 
 MSVC15_PUBLICS_SAMPLE = """\
 

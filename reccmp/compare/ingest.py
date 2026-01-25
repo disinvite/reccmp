@@ -5,16 +5,16 @@ These functions load the entity and type databases with information from code an
 import logging
 from typing import Iterable
 from collections.abc import Sequence
-from reccmp.isledecomp.formats.exceptions import (
+from reccmp.formats.exceptions import (
     InvalidVirtualAddressError,
     InvalidStringError,
 )
-from reccmp.isledecomp.formats.msvc_map import MsvcMap
-from reccmp.isledecomp.formats import Image, PEImage, TextFile
-from reccmp.isledecomp.cvdump import CvdumpTypesParser, CvdumpAnalysis
-from reccmp.isledecomp.parser import DecompCodebase
-from reccmp.isledecomp.types import EntityType
-from reccmp.isledecomp.compare.event import (
+from reccmp.formats.msvc_map import MsvcMap
+from reccmp.formats import Image, PEImage, TextFile
+from reccmp.cvdump import CvdumpTypesParser, CvdumpAnalysis
+from reccmp.parser import DecompCodebase
+from reccmp.types import EntityType
+from reccmp.compare.event import (
     ReccmpEvent,
     ReccmpReportProtocol,
     reccmp_report_nop,

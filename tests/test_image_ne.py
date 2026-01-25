@@ -1,7 +1,7 @@
 import pytest
-from reccmp.isledecomp.formats import NEImage
-from reccmp.isledecomp.formats.image import ImageImport
-from reccmp.isledecomp.formats.ne import NESegmentFlags, NETargetOSFlags, NEEntry
+from reccmp.formats import NEImage
+from reccmp.formats.image import ImageImport
+from reccmp.formats.ne import NESegmentFlags, NETargetOSFlags, NEEntry
 
 
 def test_vitals(skifree: NEImage):

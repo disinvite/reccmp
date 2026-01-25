@@ -1,8 +1,8 @@
 import re
 from pathlib import PureWindowsPath
 from typing import NamedTuple
-from reccmp.isledecomp.cvdump.analysis import CvdumpNode
-from reccmp.isledecomp.types import EntityType
+from reccmp.cvdump.analysis import CvdumpNode
+from reccmp.types import EntityType
 
 
 r_sections_header = re.compile(r" Start\s+Length\s+Name\s+Class\n")
@@ -61,7 +61,7 @@ class MsvcMap:
                 offset,
                 symbol,
                 func_flag,
-                module,
+                _,
             ) in r_addr_public_modern.findall(symbols_text):
                 node = self.get_node(section, offset)
                 node.decorated_name = symbol

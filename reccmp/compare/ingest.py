@@ -324,15 +324,13 @@ def load_map_file(file: TextFile, db: EntityDb, lines_db: LinesDb, recomp_bin: I
         for (section, offset), node in msvc_map.nodes.items():
             addr = recomp_bin.get_abs_addr(section, offset)
 
-            kwargs = {}
             if node.decorated_name is not None:
-                kwargs["symbol"] = node.decorated_name
-                kwargs["name"] = node.decorated_name
+                batch.set_recomp(
+                    addr, symbol=node.decorated_name, name=node.decorated_name
+                )
 
             if node.node_type is not None:
-                kwargs["type"] = node.node_type
-
-            batch.set_recomp(addr, **kwargs)
+                batch.set_recomp(addr, type=node.node_type)
 
     for line_section in msvc_map.lines:
         if line_section.segment.endswith("_TEXT"):

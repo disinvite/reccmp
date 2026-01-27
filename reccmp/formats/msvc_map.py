@@ -29,7 +29,7 @@ class MsvcMap:
     nodes: dict[tuple[int, int], CvdumpNode]
     lines: list[LineNumbers]
 
-    def get_node(self, seg_str: int, ofs_str: int) -> CvdumpNode:
+    def get_node(self, seg_str: str, ofs_str: str) -> CvdumpNode:
         seg = int(seg_str, 16)
         ofs = int(ofs_str, 16)
         if (seg, ofs) in self.nodes:

@@ -7,9 +7,8 @@ Based on the following resources:
 import dataclasses
 import struct
 from pathlib import Path
-from typing import Iterator, cast
+from typing import Iterator
 from enum import Enum, IntEnum, IntFlag
-from collections.abc import Sequence
 from .exceptions import (
     InvalidVirtualAddressError,
     SectionNotFoundError,
@@ -103,9 +102,7 @@ class NERelocation:
     value1: int
 
 
-@dataclasses.dataclass(frozen=True)
-class NESegment(ImageSection):
-    relocations: tuple[NERelocation, ...]
+NERelocations = tuple[NERelocation, ...]
 
 
 def iter_relocations(
@@ -128,7 +125,7 @@ def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
 
 def iter_segments(
     view: memoryview, seg_tab_offset: int, seg_count: int, sector_size: int
-) -> Iterator[NESegment]:
+) -> Iterator[tuple[ImageSection, NERelocations]]:
     segment_table, _ = NESegmentTableEntry.from_memory(
         view, offset=seg_tab_offset, count=seg_count
     )
@@ -173,11 +170,13 @@ def iter_segments(
                 )
                 relocs.append(reloc)
 
-        yield NESegment(
-            virtual_range=range(virtual_address, virtual_address + virtual_size),
-            physical_range=range(physical_offset, physical_offset + physical_size),
-            view=seg_data,
-            relocations=tuple(relocs),
+        yield (
+            ImageSection(
+                virtual_range=range(virtual_address, virtual_address + virtual_size),
+                physical_range=range(physical_offset, physical_offset + physical_size),
+                view=seg_data,
+            ),
+            tuple(relocs),
         )
 
 
@@ -306,12 +305,8 @@ class NewExeHeader:
 class NEImage(Image):
     mz_header: ImageDosHeader
     header: NewExeHeader
+    section_relocations: tuple[NERelocations, ...] = tuple()
     _imports: tuple[ImageImport, ...] = tuple()
-
-    @property
-    def ne_sections(self) -> Sequence[NESegment]:
-        # TODO: hmm
-        return cast(Sequence[NESegment], self.sections)
 
     @classmethod
     def from_memory(
@@ -321,8 +316,8 @@ class NEImage(Image):
         # n.b. The memoryview must be writeable for reloc replacement.
         view = memoryview(bytearray(data))
         header, _ = NewExeHeader.from_memory(data, offset=offset)
-        sections = tuple(
-            iter_segments(
+        (sections, section_relocations) = zip(
+            *iter_segments(
                 view,
                 seg_tab_offset=offset + header.ne_segtab,
                 seg_count=header.ne_cseg,
@@ -337,6 +332,7 @@ class NEImage(Image):
             mz_header=mz_header,
             header=header,
             sections=sections,
+            section_relocations=section_relocations,
         )
 
     def __post_init__(self):
@@ -372,8 +368,8 @@ class NEImage(Image):
 
         all_imports = [
             r
-            for seg in self.ne_sections
-            for r in seg.relocations
+            for relocations in self.section_relocations
+            for r in relocations
             # TODO: We need an example of IMPORTNAME to see how they fit into the order.
             if r.flag in (NERelocationFlag.IMPORTORDINAL,)
         ]
@@ -390,7 +386,7 @@ class NEImage(Image):
 
         self._imports = tuple(import_map.values())
 
-        for seg in self.ne_sections:
+        for seg, relocations in zip(self.sections, self.section_relocations):
             seg_data = seg.view
 
             # Each location to patch in this segment.
@@ -404,14 +400,14 @@ class NEImage(Image):
                             "<I", import_map[(reloc.value0, reloc.value1)].addr
                         ),
                     )
-                    for reloc in seg.relocations
+                    for reloc in relocations
                     for offset in reloc.offsets
                     if reloc.flag == NERelocationFlag.IMPORTORDINAL
                 ]
             )
 
             reloc_internals = sorted(
-                (r for r in seg.relocations if r.flag == NERelocationFlag.INTERNALREF),
+                (r for r in relocations if r.flag == NERelocationFlag.INTERNALREF),
                 key=lambda v: (v.value0, v.value1),
             )
 
@@ -461,10 +457,10 @@ class NEImage(Image):
     def entry(self) -> int:
         return self.get_abs_addr(*self.header.ne_csip)
 
-    def _get_segment(self, index: int) -> NESegment:
+    def _get_segment(self, index: int) -> ImageSection:
         try:
             assert index > 0
-            return self.ne_sections[index - 1]
+            return self.sections[index - 1]
         except (AssertionError, IndexError) as ex:
             raise SectionNotFoundError(index) from ex
 

@@ -1,5 +1,5 @@
-# from reccmp.isledecomp.formats.pdb.enum import LeafEnum
-from reccmp.isledecomp.formats.pdb.tpi import (
+# from reccmp.formats.pdb.enum import LeafEnum
+from reccmp.formats.pdb.tpi import (
     LfArray,
     LfEnum,
 )

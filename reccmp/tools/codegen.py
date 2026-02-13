@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import reccmp
 from reccmp.cvdump import Cvdump, CvdumpAnalysis
-from reccmp.cvdump.types import CvdumpTypeKey, normalize_type_id
+from reccmp.cvdump.cvinfo import CVInfoTypeEnum, CvdumpTypeKey, CvdumpTypeMap
 from reccmp.formats import detect_image, PEImage
 
 
@@ -13,43 +13,39 @@ from reccmp.formats import detect_image, PEImage
 logging.getLogger("reccmp.cvdump").addHandler(logging.NullHandler())
 
 
-SCALAR_TYPE_TRANSLATE_RAW = {
-    "T_32PBOOL08(0430)": "bool *",
-    "T_32PINT4(0474)": "int *",
-    "T_32PLONG(0412)": "long *",
-    "T_32PQUAD(0413)": "long long *",
-    "T_32PRCHAR(0470)": "char *",
-    "T_32PREAL32(0440)": "float *",
-    "T_32PREAL64(0441)": "double *",
-    "T_32PUCHAR(0420)": "unsigned char *",
-    "T_32PUINT4(0475)": "unsigned int *",
-    "T_32PULONG(0422)": "unsigned long *",
-    "T_32PUSHORT(0421)": "unsigned short *",
-    "T_32PVOID(0403)": "void *",
-    "T_32PWCHAR(0471)": "wchar_t *",
-    "T_BOOL08(0030)": "bool",
-    "T_HRESULT(0008)": "HRESULT",
-    "T_INT4(0074)": "int",
-    "T_LONG(0012)": "long",
-    "T_QUAD(0013)": "long long",
-    "T_RCHAR(0070)": "char",
-    "T_REAL32(0040)": "float",
-    "T_REAL64(0041)": "double",
-    "T_SHORT(0011)": "short",
-    "T_UCHAR(0020)": "unsigned char",
-    "T_UINT4(0075)": "unsigned int",
-    "T_ULONG(0022)": "unsigned long",
-    "T_UQUAD(0023)": "unsigned long long",
-    "T_USHORT(0021)": "unsigned short",
-    "T_VOID(0003)": "void",
-    "T_WCHAR(0071)": "wchar_t",
+# fmt:off
+SCALAR_TYPE_TRANSLATE = {
+    CVInfoTypeEnum.T_32PBOOL08:  "bool *",
+    CVInfoTypeEnum.T_32PINT4:    "int *",
+    CVInfoTypeEnum.T_32PLONG:    "long *",
+    CVInfoTypeEnum.T_32PQUAD:    "long long *",
+    CVInfoTypeEnum.T_32PRCHAR:   "char *",
+    CVInfoTypeEnum.T_32PREAL32:  "float *",
+    CVInfoTypeEnum.T_32PREAL64:  "double *",
+    CVInfoTypeEnum.T_32PUCHAR:   "unsigned char *",
+    CVInfoTypeEnum.T_32PUINT4:   "unsigned int *",
+    CVInfoTypeEnum.T_32PULONG:   "unsigned long *",
+    CVInfoTypeEnum.T_32PUSHORT:  "unsigned short *",
+    CVInfoTypeEnum.T_32PVOID:    "void *",
+    CVInfoTypeEnum.T_32PWCHAR:   "wchar_t *",
+    CVInfoTypeEnum.T_BOOL08:     "bool",
+    CVInfoTypeEnum.T_HRESULT:    "HRESULT",
+    CVInfoTypeEnum.T_INT4:       "int",
+    CVInfoTypeEnum.T_LONG:       "long",
+    CVInfoTypeEnum.T_QUAD:       "long long",
+    CVInfoTypeEnum.T_RCHAR:      "char",
+    CVInfoTypeEnum.T_REAL32:     "float",
+    CVInfoTypeEnum.T_REAL64:     "double",
+    CVInfoTypeEnum.T_SHORT:      "short",
+    CVInfoTypeEnum.T_UCHAR:      "unsigned char",
+    CVInfoTypeEnum.T_UINT4:      "unsigned int",
+    CVInfoTypeEnum.T_ULONG:      "unsigned long",
+    CVInfoTypeEnum.T_UQUAD:      "unsigned long long",
+    CVInfoTypeEnum.T_USHORT:     "unsigned short",
+    CVInfoTypeEnum.T_VOID:       "void",
+    CVInfoTypeEnum.T_WCHAR:      "wchar_t",
 }
-
-# The types database chops off the hex ID for scalar types.
-# Do the same here by calling normalize_type_id().
-SCALAR_TYPE_TRANSLATE: dict[CvdumpTypeKey, str] = {
-    normalize_type_id(key): name for key, name in SCALAR_TYPE_TRANSLATE_RAW.items()
-}
+# fmt:on
 
 
 def call_convention(call_type: str) -> str:
@@ -81,12 +77,12 @@ class ReccmpFertilizer:
         # self.types.keys.update(pdb.types.keys)
         # self.seen_types = set()
         self.name_cache = {}
-        self.name_cache.update(SCALAR_TYPE_TRANSLATE)
+        self.name_cache.update(SCALAR_TYPE_TRANSLATE.items())
 
     def get_names_for_types(self):
         # Avoids "optimization" that assumes modifiers and pointers are forward refs.
         forwards = {
-            normalize_type_id(key): normalize_type_id(leaf["udt"])
+            key: leaf["udt"]
             for key, leaf in self.types.keys.items()
             if leaf["type"] not in ("LF_MODIFIER", "LF_POINTER")
             and leaf.get("is_forward_ref", False)
@@ -109,14 +105,13 @@ class ReccmpFertilizer:
             else:
                 continue
 
-            r_key = normalize_type_id(r_key)
             # Resolve forward reference
             r_key = forwards.get(r_key, r_key)
-            if r_key.startswith("T_"):
+            if r_key.is_scalar():
                 backrefs.setdefault(r_key, []).append(key)
 
             # Excludes leaves we have ignored. (e.g. LF_VTSHAPE)
-            elif r_key.lower() in self.types.keys:
+            elif r_key in self.types.keys:
                 backrefs.setdefault(r_key, []).append(key)
 
         # What would the text look like for this type?
@@ -163,7 +158,7 @@ class ReccmpFertilizer:
                 # TODO: wonky
                 continue
 
-            name_components[normalize_type_id(key)] = (prefix, name, suffix)
+            name_components[key] = (prefix, name, suffix)
 
         self.name_cache.update(
             {key: name for key, (_, name, __) in name_components.items() if name}
@@ -204,14 +199,22 @@ class ReccmpFertilizer:
         #     print(f"{key} : {name}")
 
     def get_type_name(self, key: CvdumpTypeKey) -> str:
-        key = normalize_type_id(key)
-
         if key in self.name_cache:
             return self.name_cache[key]
 
+        if key.is_scalar():
+            ptype = CvdumpTypeMap[key]
+            if ptype.pointer is not None:
+                name = self.get_type_name(ptype.pointer) + " *"
+            else:
+                name = ptype.name
+
+            self.name_cache[key] = name
+            return name
+
         t = self.types.keys.get(key)
         if t is None or not t.get("name"):
-            return key
+            return "???"  # TODO
 
         name = t["name"]
         self.name_cache[key] = name
@@ -225,7 +228,8 @@ class ReccmpFertilizer:
             (self.get_type_name(k), f"p_{i}") for i, k in enumerate(args, start=1)
         ]
 
-        if params[-1][0].startswith("T_NOTYPE"):
+        # Variadic args
+        if args[-1] == CVInfoTypeEnum.T_NOTYPE:
             params[-1] = ("", "...")
 
         arg_string = ", ".join(" ".join(filter(lambda _: _, p)) for p in params)
@@ -238,11 +242,16 @@ class ReccmpFertilizer:
             if sym is not None and sym.type == "S_GPROC32":
                 addr = self.binfile.get_abs_addr(node.section, node.offset)
                 # Not converting to int, so convert string to lower case to match type leaves.
-                func_type_key = normalize_type_id(sym.func_type)
+                func_type_key = sym.func_type
+                if func_type_key == CVInfoTypeEnum.T_NOTYPE:
+                    # TODO: Found for scalar deleting destructor
+                    # Can still annotate the function
+                    continue
+
                 func_type = self.types.keys[func_type_key]
 
                 return_type_name = self.get_type_name(func_type["return_type"])
-                arg_list_key = normalize_type_id(func_type["arg_list_type"])
+                arg_list_key = func_type["arg_list_type"]
                 arg_list = self.types.keys[arg_list_key]
 
                 convention = call_convention(func_type["call_type"])

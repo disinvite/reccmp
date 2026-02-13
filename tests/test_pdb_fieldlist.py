@@ -1,5 +1,5 @@
-from reccmp.isledecomp.formats.pdb.enum import LeafEnum
-from reccmp.isledecomp.formats.pdb.fieldlist import (
+from reccmp.formats.pdb.enum import LeafEnum
+from reccmp.formats.pdb.fieldlist import (
     LfEnumerate,
     LfNestType,
     LfOneMethod,

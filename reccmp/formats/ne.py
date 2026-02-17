@@ -7,7 +7,8 @@ Based on the following resources:
 import dataclasses
 import struct
 from pathlib import Path
-from typing import Iterator
+from types import MappingProxyType
+from typing import Iterator, Mapping
 from enum import Enum, IntEnum, IntFlag
 from .exceptions import (
     InvalidVirtualAddressError,
@@ -21,9 +22,9 @@ def index_to_seg(index: int) -> int:
     return 0x1000 + (8 * (index - 1))
 
 
-def pascal_string(data: bytes) -> str:
-    strlen = data[0]
-    return bytes(data[1 : strlen + 1]).decode("ascii")
+def pascal_string(data: bytes, offset: int = 0) -> str:
+    strlen = data[offset]
+    return bytes(data[offset + 1 : offset + strlen + 1]).decode("ascii")
 
 
 class NESegmentFlags(IntFlag):
@@ -335,6 +336,68 @@ class NEImage(Image):
             section_relocations=section_relocations,
         )
 
+    def get_module_name(self, index: int) -> str:
+        modules_raw = self.view[
+            self.mz_header.e_lfanew
+            + self.header.ne_modtab : self.mz_header.e_lfanew
+            + self.header.ne_imptab
+        ]
+        modules = tuple(v for v, in struct.iter_unpack("<H", modules_raw))
+        return self.get_imported_name(modules[index - 1])
+
+    def get_imported_name(self, offset: int) -> str:
+        import_names_raw = self.view[
+            self.mz_header.e_lfanew
+            + self.header.ne_imptab : self.mz_header.e_lfanew
+            + self.header.ne_enttab
+        ]
+        return pascal_string(import_names_raw, offset)
+
+    def get_import_mapping(self) -> Mapping[tuple[int, int | str], ImageImport]:
+        # Flatten the list of relocations across all sections
+        # to collect each import by ordinal or name.
+
+        def import_tuple_generator() -> Iterator[tuple[int, int | str]]:
+            for relocations in self.section_relocations:
+                for r in relocations:
+                    if r.flag == NERelocationFlag.IMPORTORDINAL:
+                        yield (r.value0, r.value1)
+
+                    elif r.flag == NERelocationFlag.IMPORTNAME:
+                        yield (r.value0, self.get_imported_name(r.value1))
+
+        all_imports = set(import_tuple_generator())
+
+        def ordinal_name_keyfn(imp: tuple[int, int | str]) -> tuple[int, str]:
+            if isinstance(imp[1], int):
+                return (imp[0], f"Ordinal_{imp[1]:05}")
+
+            return (imp[0], imp[1])
+
+        sorted_imports = sorted(all_imports, key=ordinal_name_keyfn)
+
+        def generator() -> Iterator[tuple[tuple[int, int | str], ImageImport]]:
+            # TODO: We just need something. Recalculate later using Ghidra technique.
+            import_seg = 0x2000
+
+            for i, reloc_key in enumerate(sorted_imports):
+                (module_id, func_id) = reloc_key
+                module_name = self.get_module_name(module_id)
+                addr = (import_seg << 16) + (4 * i)
+
+                if isinstance(func_id, int):
+                    yield (
+                        reloc_key,
+                        ImageImport(module=module_name, ordinal=func_id, addr=addr),
+                    )
+                else:
+                    yield (
+                        reloc_key,
+                        ImageImport(module=module_name, name=func_id, addr=addr),
+                    )
+
+        return MappingProxyType(dict(generator()))
+
     def __post_init__(self):
         entry_table = NEEntry.from_memory(
             self.view, self.mz_header.e_lfanew + self.header.ne_enttab
@@ -342,48 +405,7 @@ class NEImage(Image):
 
         entry_map = {entry.ordinal: entry for entry in entry_table}
 
-        modules_raw = self.view[
-            self.mz_header.e_lfanew
-            + self.header.ne_modtab : self.mz_header.e_lfanew
-            + self.header.ne_imptab
-        ]
-
-        import_names_raw = self.view[
-            self.mz_header.e_lfanew
-            + self.header.ne_imptab : self.mz_header.e_lfanew
-            + self.header.ne_enttab
-        ]
-
-        imported_names = [
-            # Reloc lookups are 1-based, so add a blank for alignment.
-            "",
-            *(
-                pascal_string(import_names_raw[ofs:])
-                for ofs, in struct.iter_unpack("<H", modules_raw)
-            ),
-        ]
-
-        # TODO: We just need something. Recalculate later using Ghidra technique.
-        import_seg = 0x2000
-
-        all_imports = [
-            r
-            for relocations in self.section_relocations
-            for r in relocations
-            # TODO: We need an example of IMPORTNAME to see how they fit into the order.
-            if r.flag in (NERelocationFlag.IMPORTORDINAL,)
-        ]
-        all_imports.sort(key=lambda v: (v.value0, v.value1))
-
-        import_map = {
-            (reloc.value0, reloc.value1): ImageImport(
-                module=imported_names[reloc.value0],
-                ordinal=reloc.value1,
-                addr=(import_seg << 16) + (4 * i),
-            )
-            for i, reloc in enumerate(all_imports)
-        }
-
+        import_map = self.get_import_mapping()
         self._imports = tuple(import_map.values())
 
         for seg, relocations in zip(self.sections, self.section_relocations):
@@ -392,48 +414,62 @@ class NEImage(Image):
             # Each location to patch in this segment.
             reloc_values: list[tuple[int, bytes]] = []
 
-            reloc_values.extend(
-                [
-                    (
-                        offset,
-                        struct.pack(
+            for reloc in relocations:
+                match reloc.flag:
+                    case NERelocationFlag.IMPORTORDINAL:
+                        replacement = struct.pack(
                             "<I", import_map[(reloc.value0, reloc.value1)].addr
-                        ),
-                    )
-                    for reloc in relocations
-                    for offset in reloc.offsets
-                    if reloc.flag == NERelocationFlag.IMPORTORDINAL
-                ]
-            )
+                        )
+                        reloc_values.extend(
+                            [(offset, replacement) for offset in reloc.offsets]
+                        )
 
-            reloc_internals = sorted(
-                (r for r in relocations if r.flag == NERelocationFlag.INTERNALREF),
-                key=lambda v: (v.value0, v.value1),
-            )
+                    case NERelocationFlag.IMPORTNAME:
+                        replacement = struct.pack(
+                            "<I",
+                            import_map[
+                                (reloc.value0, self.get_imported_name(reloc.value1))
+                            ].addr,
+                        )
 
-            for reloc in reloc_internals:
-                (replacement_seg, replacement_ofs) = (reloc.value0, reloc.value1)
+                        reloc_values.extend(
+                            [(offset, replacement) for offset in reloc.offsets]
+                        )
 
-                if reloc.value0 == 255:
-                    # Movable segment. Lookup using 1-based ordinal number.
-                    if reloc.value1 not in entry_map:
-                        raise ValueError  # TODO
+                    case NERelocationFlag.INTERNALREF:
+                        (replacement_seg, replacement_ofs) = (
+                            reloc.value0,
+                            reloc.value1,
+                        )
 
-                    entry = entry_map[reloc.value1]
-                    (replacement_seg, replacement_ofs) = (entry.segment, entry.offset)
+                        if reloc.value0 == 255:
+                            # Movable segment. Lookup using 1-based ordinal number.
+                            if reloc.value1 not in entry_map:
+                                raise ValueError  # TODO
 
-                if reloc.type == NERelocationType.OFFSET:
-                    replacement = struct.pack("<H", replacement_ofs)
+                            entry = entry_map[reloc.value1]
+                            (replacement_seg, replacement_ofs) = (
+                                entry.segment,
+                                entry.offset,
+                            )
 
-                elif reloc.type == NERelocationType.SEGMENT:
-                    replacement = struct.pack("<H", index_to_seg(replacement_seg))
+                        if reloc.type == NERelocationType.OFFSET:
+                            replacement = struct.pack("<H", replacement_ofs)
 
-                elif reloc.type == NERelocationType.FAR_ADDR:
-                    replacement = struct.pack(
-                        "<I", self.get_abs_addr(replacement_seg, replacement_ofs)
-                    )
+                        elif reloc.type == NERelocationType.SEGMENT:
+                            replacement = struct.pack(
+                                "<H", index_to_seg(replacement_seg)
+                            )
 
-                reloc_values.extend([(offset, replacement) for offset in reloc.offsets])
+                        elif reloc.type == NERelocationType.FAR_ADDR:
+                            replacement = struct.pack(
+                                "<I",
+                                self.get_abs_addr(replacement_seg, replacement_ofs),
+                            )
+
+                        reloc_values.extend(
+                            [(offset, replacement) for offset in reloc.offsets]
+                        )
 
             # Now apply the patches
             for offset, patch in reloc_values:

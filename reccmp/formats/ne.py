@@ -18,10 +18,6 @@ from .image import Image, ImageImport, ImageSection, ImageRegion
 from .mz import ImageDosHeader
 
 
-def index_to_seg(index: int) -> int:
-    return 0x1000 + (8 * (index - 1))
-
-
 def pascal_string(data: bytes, offset: int = 0) -> str:
     strlen = data[offset]
     return bytes(data[offset + 1 : offset + strlen + 1]).decode("ascii")
@@ -127,12 +123,19 @@ def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
 def iter_segments(
     view: memoryview, seg_tab_offset: int, seg_count: int, sector_size: int
 ) -> Iterator[tuple[ImageSection, NERelocations]]:
+    """Creates an ImageSection for each segment in the NE segment table.
+    We also return the list of relocations for each segment.
+    The reason to return both here is that we need the segment table to tell whether
+    the segment has any relocations and the segment's data to collect all relocation sites
+    by iterating on the chained values."""
     segment_table, _ = NESegmentTableEntry.from_memory(
         view, offset=seg_tab_offset, count=seg_count
     )
 
     for i, entry in enumerate(segment_table):
-        # Per ghidra
+        # Advance the segment number by 8 for each segment.
+        # It is critical to match Ghidra's behavior so that our import tool will work.
+        # See: ghidra.program.model.address.ProtectedAddressSpace::getNextOpenSegment
         virtual_address = (0x1000 + 8 * i) << 16
         physical_offset = entry.ns_sector * sector_size
 
@@ -147,6 +150,7 @@ def iter_segments(
         relocs = []
 
         if entry.has_reloc():
+            # The relocation table directly follows the end of physical data for the segment.
             reloc_table = view[physical_offset + physical_size :]
 
             for reloc_type, reloc_flag, start, value0, value1 in iter_relocations(
@@ -164,7 +168,7 @@ def iter_segments(
 
                 reloc = NERelocation(
                     type=NERelocationType(reloc_type),
-                    flag=NERelocationFlag(reloc_flag & 3),
+                    flag=NERelocationFlag(reloc_flag & 3),  # Mask out additive flag
                     offsets=offsets,
                     value0=value0,
                     value1=value1,
@@ -354,10 +358,15 @@ class NEImage(Image):
         return pascal_string(import_names_raw, offset)
 
     def get_import_mapping(self) -> Mapping[tuple[int, int | str], ImageImport]:
-        # Flatten the list of relocations across all sections
-        # to collect each import by ordinal or name.
+        """Searches each section's relocation table for imported functions, then
+        assigns a dummy address for each. The import addresses are ordered to match Ghidra
+        although this is not of utmost importance. The returned mapping connects
+        (module_id, name or ordinal_idx) to ImageImport so that we can easily substitute
+        the dummy address when applying relocation patches."""
 
         def import_tuple_generator() -> Iterator[tuple[int, int | str]]:
+            """Flattens the list of relocations across all sections
+            to collect each import by ordinal or name."""
             for relocations in self.section_relocations:
                 for r in relocations:
                     if r.flag == NERelocationFlag.IMPORTORDINAL:
@@ -366,9 +375,12 @@ class NEImage(Image):
                     elif r.flag == NERelocationFlag.IMPORTNAME:
                         yield (r.value0, self.get_imported_name(r.value1))
 
+        # Remove duplicates
         all_imports = set(import_tuple_generator())
 
         def ordinal_name_keyfn(imp: tuple[int, int | str]) -> tuple[int, str]:
+            """Sorts named and ordinal imports to match Ghidra's ordering.
+            See ghidra.program.model.symbol.SymbolUtilities::ORDINAL_PREFIX."""
             if isinstance(imp[1], int):
                 return (imp[0], f"Ordinal_{imp[1]:05}")
 
@@ -377,12 +389,16 @@ class NEImage(Image):
         sorted_imports = sorted(all_imports, key=ordinal_name_keyfn)
 
         def generator() -> Iterator[tuple[tuple[int, int | str], ImageImport]]:
-            # TODO: We just need something. Recalculate later using Ghidra technique.
+            # Ghidra creates a dummy segment for each NE resource, followed by the import table.
+            # We don't do anything with resources yet, so just use a value large enough
+            # to not intrude on any real segments.
             import_seg = 0x2000
 
             for i, reloc_key in enumerate(sorted_imports):
                 (module_id, func_id) = reloc_key
                 module_name = self.get_module_name(module_id)
+                # Assumes 4 bytes per import to match Ghidra.
+                # See: ghidra.app.util.opinion.NELoader::processModuleReferenceTable
                 addr = (import_seg << 16) + (4 * i)
 
                 if isinstance(func_id, int):
@@ -420,9 +436,6 @@ class NEImage(Image):
                         replacement = struct.pack(
                             "<I", import_map[(reloc.value0, reloc.value1)].addr
                         )
-                        reloc_values.extend(
-                            [(offset, replacement) for offset in reloc.offsets]
-                        )
 
                     case NERelocationFlag.IMPORTNAME:
                         replacement = struct.pack(
@@ -430,10 +443,6 @@ class NEImage(Image):
                             import_map[
                                 (reloc.value0, self.get_imported_name(reloc.value1))
                             ].addr,
-                        )
-
-                        reloc_values.extend(
-                            [(offset, replacement) for offset in reloc.offsets]
                         )
 
                     case NERelocationFlag.INTERNALREF:
@@ -457,9 +466,8 @@ class NEImage(Image):
                             replacement = struct.pack("<H", replacement_ofs)
 
                         elif reloc.type == NERelocationType.SEGMENT:
-                            replacement = struct.pack(
-                                "<H", index_to_seg(replacement_seg)
-                            )
+                            start_addr = self.get_abs_addr(replacement_seg, 0)
+                            replacement = struct.pack("<H", (start_addr >> 16))
 
                         elif reloc.type == NERelocationType.FAR_ADDR:
                             replacement = struct.pack(
@@ -467,9 +475,13 @@ class NEImage(Image):
                                 self.get_abs_addr(replacement_seg, replacement_ofs),
                             )
 
-                        reloc_values.extend(
-                            [(offset, replacement) for offset in reloc.offsets]
-                        )
+                    case NERelocationFlag.OSFIXUP:
+                        # TODO: Ghidra does not handle these either.
+                        # We need to see an example to know what to do.
+                        continue
+
+                # TODO: Additive relocations are ignored and reloc.offsets will be empty.
+                reloc_values.extend([(offset, replacement) for offset in reloc.offsets])
 
             # Now apply the patches
             for offset, patch in reloc_values:

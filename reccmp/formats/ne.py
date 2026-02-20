@@ -144,19 +144,21 @@ def iter_segments(
         # It is critical to match Ghidra's behavior so that our import tool will work.
         # See: ghidra.program.model.address.ProtectedAddressSpace::getNextOpenSegment
         virtual_address = (0x1000 + 8 * i) << 16
-        physical_offset = entry.ns_sector * sector_size
+        virtual_size = entry.ns_minalloc if entry.ns_minalloc != 0 else 0x10000
 
-        # TODO: entry.ns_sector == 0
-
-        # 64k if either value is 0
-        physical_size = entry.ns_cbseg if entry.ns_cbseg else 0x10000
-        virtual_size = entry.ns_minalloc if entry.ns_minalloc else 0x10000
+        if entry.ns_sector == 0:
+            # No physical data. The segment is entirely virtual.
+            physical_offset = 0
+            physical_size = 0
+        else:
+            physical_offset = entry.ns_sector * sector_size
+            physical_size = entry.ns_cbseg if entry.ns_cbseg != 0 else 0x10000
 
         seg_data = view[physical_offset:][:physical_size]
 
         relocs = []
 
-        if entry.has_reloc():
+        if physical_size > 0 and entry.has_reloc():
             # The relocation table directly follows the end of physical data for the segment.
             reloc_table = view[physical_offset + physical_size :]
 

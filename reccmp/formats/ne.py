@@ -105,6 +105,10 @@ NERelocations = tuple[NERelocation, ...]
 def iter_relocations(
     data: bytes, offset: int = 0
 ) -> Iterator[tuple[int, int, int, int, int]]:
+    """Read raw values from the relocation table.
+    The first word is the number of 8-byte relocations that follow.
+    This is not a complete NERelocation because we need to read the chain of offsets
+    to collect all relocation sites."""
     (n_reloc,) = struct.unpack_from("<H", data, offset=offset)
     offset += 2
 
@@ -114,6 +118,9 @@ def iter_relocations(
 
 
 def iter_reloc_chain(data: bytes, start: int) -> Iterator[int]:
+    """Using the segment contents in `data`, iterate each relocation site by following the
+    chain of offsets that begins at offset `start`. 0xFFFF signals the end of the chain.
+    """
     value = start
     while value != 0xFFFF:
         yield value
@@ -161,7 +168,7 @@ def iter_segments(
                 offsets: tuple[int, ...]
                 # Do not follow the chain if the additive flag is set.
                 if additive:
-                    # TODO: Skip this for now. Even Ghidra doesn't handle it.
+                    # TODO: GH #325. Skip this for now. Even Ghidra doesn't handle it.
                     offsets = tuple()
                 else:
                     offsets = tuple(iter_reloc_chain(seg_data, start))
@@ -453,16 +460,17 @@ class NEImage(Image):
 
                         if reloc.value0 == 255:
                             # Movable segment. Lookup using 1-based ordinal number.
-                            if reloc.value1 not in entry_map:
-                                raise ValueError  # TODO
-
                             entry = entry_map[reloc.value1]
                             (replacement_seg, replacement_ofs) = (
                                 entry.segment,
                                 entry.offset,
                             )
 
-                        if reloc.type == NERelocationType.OFFSET:
+                        if reloc.type == NERelocationType.LOBYTE:
+                            # TODO: GH #325
+                            pass
+
+                        elif reloc.type == NERelocationType.OFFSET:
                             replacement = struct.pack("<H", replacement_ofs)
 
                         elif reloc.type == NERelocationType.SEGMENT:
@@ -476,18 +484,15 @@ class NEImage(Image):
                             )
 
                     case NERelocationFlag.OSFIXUP:
-                        # TODO: Ghidra does not handle these either.
+                        # TODO: GH #325. Ghidra does not handle these either.
                         # We need to see an example to know what to do.
                         continue
 
-                # TODO: Additive relocations are ignored and reloc.offsets will be empty.
+                # TODO: GH #325. Additive relocations are ignored and reloc.offsets will be empty.
                 reloc_values.extend([(offset, replacement) for offset in reloc.offsets])
 
             # Now apply the patches
             for offset, patch in reloc_values:
-                # print(
-                #     f"{seg.address + offset:8x}:  {seg_data[offset : offset + len(patch)].hex()}  {patch.hex()}"
-                # )
                 seg_data[offset : offset + len(patch)] = patch
 
         # The data has been changed: update underlying value.

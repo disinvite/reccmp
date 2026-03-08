@@ -58,6 +58,7 @@ class YmlReportConfig(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("ignore-functions", "ignore_functions"),
     )
+    html_template: Path | None = None
 
     @classmethod
     def default(cls) -> "YmlReportConfig":

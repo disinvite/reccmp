@@ -311,7 +311,7 @@ def main():
         )
 
     if args.html is not None:
-        write_html_report(args.html, report)
+        write_html_report(args.html, report, target.report_config)
 
     implemented_funcs = function_count
 

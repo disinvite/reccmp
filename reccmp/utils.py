@@ -4,6 +4,7 @@ import logging
 import colorama
 from pystache import Renderer  # type: ignore[import-untyped]
 from reccmp.assets import get_asset_file
+from reccmp.project.detect import ReportConfig
 from reccmp.compare.report import (
     ReccmpStatusReport,
     ReccmpComparedEntity,
@@ -43,7 +44,11 @@ def read_js_file(filename: str) -> str:
     return file_header + "".join(lines)
 
 
-def write_html_report(html_file: str, report: ReccmpStatusReport):
+def write_html_report(
+    html_file: str,
+    report: ReccmpStatusReport,
+    report_config: ReportConfig | None = None,
+):
     """Create the interactive HTML diff viewer with the given report."""
     # For the flat-file report, the component JS files must be added in a particular order
     # so that any dependencies required by a particular file have already been resolved.
@@ -74,8 +79,13 @@ def write_html_report(html_file: str, report: ReccmpStatusReport):
     # Convert the report to a JSON string to insert in the HTML template.
     report_str = serialize_reccmp_report(report, diff_included=True)
 
+    if report_config is not None and report_config.html_template is not None:
+        html_template_path = report_config.html_template
+    else:
+        html_template_path = get_asset_file("template.html")
+
     output_data = Renderer().render_path(
-        get_asset_file("template.html"),
+        html_template_path,
         {"report": report_str, "reccmp_js": reccmp_js},
     )
 

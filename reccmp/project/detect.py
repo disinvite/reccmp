@@ -121,6 +121,7 @@ class GhidraConfig:
 @dataclass
 class ReportConfig:
     ignore_functions: list[str] = field(default_factory=list)
+    html_template: Path | None = None
 
 
 @dataclass
@@ -363,6 +364,11 @@ class RecCmpProject:
             if target.report is not None:
                 report = ReportConfig(
                     ignore_functions=target.report.ignore_functions,
+                    html_template=(
+                        (project_directory / target.report.html_template)
+                        if target.report.html_template is not None
+                        else None
+                    ),
                 )
             else:
                 report = None

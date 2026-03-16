@@ -209,7 +209,7 @@ class NEEntry:
         entries = []
 
         while True:
-            (n_entries, indicator) = struct.unpack_from("<2B", data, offset)
+            n_entries, indicator = struct.unpack_from("<2B", data, offset)
             if n_entries == 0:
                 break
 
@@ -217,7 +217,7 @@ class NEEntry:
             for _ in range(n_entries):
                 ordinal += 1  # Ordinals start at 1.
                 if indicator == 255:
-                    (flag, entry_seg, entry_ofs) = struct.unpack_from(
+                    flag, entry_seg, entry_ofs = struct.unpack_from(
                         "<BxxBH", data, offset
                     )
                     entry = cls(
@@ -237,7 +237,7 @@ class NEEntry:
 
                 else:
                     # Indicator is the segment number for all in this bundle.
-                    (flag, entry_ofs) = struct.unpack_from("<BH", data, offset)
+                    flag, entry_ofs = struct.unpack_from("<BH", data, offset)
                     entry = cls(
                         ordinal=ordinal,
                         movable=False,
@@ -330,7 +330,7 @@ class NEImage(Image):
         # n.b. The memoryview must be writeable for reloc replacement.
         view = memoryview(bytearray(data))
         header, _ = NewExeHeader.from_memory(data, offset=offset)
-        (sections, section_relocations) = zip(
+        sections, section_relocations = zip(
             *iter_segments(
                 view,
                 seg_tab_offset=offset + header.ne_segtab,
@@ -404,7 +404,7 @@ class NEImage(Image):
             import_seg = 0x2000
 
             for i, reloc_key in enumerate(sorted_imports):
-                (module_id, func_id) = reloc_key
+                module_id, func_id = reloc_key
                 module_name = self.get_module_name(module_id)
                 # Assumes 4 bytes per import to match Ghidra.
                 # See: ghidra.app.util.opinion.NELoader::processModuleReferenceTable
@@ -455,7 +455,7 @@ class NEImage(Image):
                         )
 
                     case NERelocationFlag.INTERNALREF:
-                        (replacement_seg, replacement_ofs) = (
+                        replacement_seg, replacement_ofs = (
                             reloc.value0,
                             reloc.value1,
                         )
@@ -463,7 +463,7 @@ class NEImage(Image):
                         if reloc.value0 == 255:
                             # Movable segment. Lookup using 1-based ordinal number.
                             entry = entry_map[reloc.value1]
-                            (replacement_seg, replacement_ofs) = (
+                            replacement_seg, replacement_ofs = (
                                 entry.segment,
                                 entry.offset,
                             )
@@ -537,7 +537,7 @@ class NEImage(Image):
             raise InvalidVirtualAddressError(f"{section:04x}:{offset:04x}") from ex
 
     def seek(self, vaddr: int) -> tuple[bytes, int]:
-        (segment, offset) = self.get_relative_addr(vaddr)
+        segment, offset = self.get_relative_addr(vaddr)
         seg = self._get_segment(segment)
 
         if offset > seg.virtual_size:

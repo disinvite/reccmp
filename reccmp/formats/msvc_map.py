@@ -4,7 +4,6 @@ from typing import NamedTuple
 from reccmp.cvdump.analysis import CvdumpNode
 from reccmp.types import EntityType
 
-
 r_sections_header = re.compile(r" Start\s+Length\s+Name\s+Class\n")
 
 r_symbol_name_header = re.compile(r"\n  Address         Publics by Value\n")

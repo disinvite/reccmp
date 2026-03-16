@@ -9,6 +9,7 @@ from reccmp.dir import source_code_search
 from reccmp.compare.functions import FunctionComparator
 from reccmp.formats import (
     Image,
+    NEImage,
     PEImage,
     TextFile,
     detect_image,
@@ -124,7 +125,7 @@ class Compare:
         self.types = CvdumpTypesParser()
 
         # TODO: hack
-        is_32bit = isinstance(self.orig_bin, PEImage)
+        is_32bit = not isinstance(self.orig_bin, NEImage)
         self.function_comparator = FunctionComparator(
             self._db,
             self._lines_db,

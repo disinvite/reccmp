@@ -172,6 +172,12 @@ class Compare:
         match_variables(self._db, self.report)
         match_lines(self._db, self._lines_db, self.report)
 
+        # TODO: hack
+        if isinstance(self.orig_bin, NEImage) and isinstance(self.recomp_bin, NEImage):
+            create_imports(self._db, ImageId.ORIG, self.orig_bin)
+            create_imports(self._db, ImageId.RECOMP, self.recomp_bin)
+            match_imports(self._db)
+
         try:
             assert isinstance(self.orig_bin, PEImage)
             assert isinstance(self.recomp_bin, PEImage)

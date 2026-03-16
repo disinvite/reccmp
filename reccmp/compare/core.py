@@ -5,7 +5,7 @@ from typing import Iterable, Iterator
 from typing_extensions import Self
 from reccmp.project.detect import RecCmpTarget
 from reccmp.difflib import get_grouped_opcodes
-from reccmp.dir import walk_source_dir
+from reccmp.dir import source_code_search
 from reccmp.compare.functions import FunctionComparator
 from reccmp.formats import (
     Image,
@@ -64,7 +64,6 @@ from .verify import (
     check_vtables,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +84,7 @@ class Compare:
     map_file: TextFile | None
 
     # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-positional-arguments
     def __init__(
         self,
         orig_bin: Image,
@@ -220,7 +220,7 @@ class Compare:
         )
         pdb_file = CvdumpAnalysis(cvdump)
 
-        code_paths = walk_source_dir(target.source_root)
+        code_paths = source_code_search(target.source_root)
         code_files = list(TextFile.from_files(code_paths, allow_error=True))
 
         data_sources = list(TextFile.from_files(target.data_sources, allow_error=True))
@@ -389,19 +389,6 @@ class Compare:
         return None
 
     ## Public API
-
-    def is_pointer_match(self, orig_addr, recomp_addr) -> bool:
-        """Check whether these pointers point at the same thing"""
-
-        # Null pointers considered matching
-        if orig_addr == 0 and recomp_addr == 0:
-            return True
-
-        match = self._db.get_by_orig(orig_addr)
-        if match is None:
-            return False
-
-        return match.recomp_addr == recomp_addr
 
     def get_by_orig(self, addr: int) -> ReccmpEntity | None:
         return self._db.get_by_orig(addr)

@@ -135,7 +135,7 @@ class Image:
         raise NotImplementedError
 
     def read_string(self, vaddr: int) -> bytes:
-        (view, _) = self.seek(vaddr)
+        view, _ = self.seek(vaddr)
 
         match = r_szstring.match(view)
         if match is None:
@@ -144,7 +144,7 @@ class Image:
         return match.group(0)
 
     def read_widechar(self, vaddr: int) -> bytes:
-        (view, _) = self.seek(vaddr)
+        view, _ = self.seek(vaddr)
 
         match = r_widestring.match(view)
 
@@ -157,7 +157,7 @@ class Image:
         return match.group(0)
 
     def read(self, vaddr: int, size: int) -> bytes:
-        (view, remaining) = self.seek(vaddr)
+        view, remaining = self.seek(vaddr)
         if size < 0 or size > remaining:
             raise InvalidVirtualReadError(
                 f"{self.filepath} : Cannot read {size} bytes from 0x{vaddr:x}"

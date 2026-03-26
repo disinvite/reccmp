@@ -23,7 +23,7 @@ jobs:
         with:
           path: ./dist
 
-  pypi-publish:
+  publish:
     needs: build
     name: Upload release to PyPI
     runs-on: ubuntu-latest
@@ -31,6 +31,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/reccmp
     permissions:
+      contents: write
       id-token: write
     steps:
       - uses: actions/download-artifact@v8
@@ -41,3 +42,29 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          working_directory: dist
+          files: |
+            *.whl
+
+  rollback:
+    if: ${{ always() && needs.build.result == 'success' && needs.publish.result == 'failure' }}
+    needs:
+      - build
+      - publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+    steps:
+      - name: Delete GitHub Release if created
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+        run: gh release delete "${{ github.ref_name }}" --yes --cleanup-tag || true
+      - name: Delete remote tag
+        run: git push origin --delete "${{ github.ref_name }}" || true

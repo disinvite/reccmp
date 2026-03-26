@@ -2,6 +2,7 @@ name: Publish
 
 on:
   push:
+    branches: [master]
     tags:
       - 'v*'
 
@@ -51,6 +52,7 @@ jobs:
           working_directory: dist
           files: |
             *.whl
+            *.tar.gz
 
   rollback:
     if: ${{ always() && needs.build.result == 'success' && needs.publish.result == 'failure' }}
@@ -64,7 +66,7 @@ jobs:
     steps:
       - name: Delete GitHub Release if created
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release delete "${{ github.ref_name }}" --yes --cleanup-tag || true
       - name: Delete remote tag
         run: git push origin --delete "${{ github.ref_name }}" || true

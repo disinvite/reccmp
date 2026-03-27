@@ -1,7 +1,6 @@
 [project]
 name = "reccmp"
 description = "Collection of decompilation tools."
-license = AGPL-3.0-or-later
 license-files = ["COPYING", "reccmp/bin/LICENSE*.txt"]
 readme = "README.md"
 dynamic = ["classifiers", "dependencies", "license", "scripts", "version"]

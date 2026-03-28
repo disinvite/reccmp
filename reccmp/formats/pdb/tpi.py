@@ -22,12 +22,12 @@ class TPIHeader:
         match version:
             # MSVC 4.1+
             case 19951122:
-                (id_start, id_end, size) = unpack_from("<HHI", data, offset=4)
+                id_start, id_end, size = unpack_from("<HHI", data, offset=4)
                 return cls(version, id_start, id_end, size, header_size=16)
 
             # MSVC 5+
             case 19961031:
-                (header_size, id_start, id_end, size) = unpack_from(
+                header_size, id_start, id_end, size = unpack_from(
                     "<IIII", data, offset=4
                 )
                 return cls(version, id_start, id_end, size, header_size=header_size)
@@ -87,10 +87,10 @@ class LfMethod:
     ) -> Iterator["LfMethod"]:
         while offset < len(data):
             if is32:
-                (attr, index) = unpack_from("<H2xI", data, offset=offset)
+                attr, index = unpack_from("<H2xI", data, offset=offset)
                 offset += 8
             else:
-                (attr, index) = unpack_from("<2H", data, offset=offset)
+                attr, index = unpack_from("<2H", data, offset=offset)
                 offset += 4
 
             vbaseoff = 0
@@ -111,7 +111,7 @@ class LfMethodList:
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfMethodList":
-        (leaf_size, leaf_type) = unpack_from("<2H", data, offset=offset)
+        leaf_size, leaf_type = unpack_from("<2H", data, offset=offset)
         offset += 4
         is32 = leaf_type & 0x1000 == 0x1000
 
@@ -137,14 +137,14 @@ class LfArray:
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (elemtype, idxtype) = unpack_from("<2I", data, offset=offset)
+            elemtype, idxtype = unpack_from("<2I", data, offset=offset)
             offset += 8
         else:
-            (elemtype, idxtype) = unpack_from("<2H", data, offset=offset)
+            elemtype, idxtype = unpack_from("<2H", data, offset=offset)
             offset += 4
 
-        (count, offset) = read_packed_value(data, offset)
-        (name, _) = read_pascal_string(data, offset)
+        count, offset = read_packed_value(data, offset)
+        name, _ = read_pascal_string(data, offset)
 
         return cls(elemtype, idxtype, count, name)
 
@@ -166,14 +166,14 @@ class LfUnion:
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (count, prop, field) = unpack_from("<2HI", data, offset=offset)
+            count, prop, field = unpack_from("<2HI", data, offset=offset)
             offset += 8
         else:
-            (count, field, prop) = unpack_from("<3H", data, offset=offset)
+            count, field, prop = unpack_from("<3H", data, offset=offset)
             offset += 6
 
-        (length, offset) = read_packed_value(data, offset)
-        (name, _) = read_pascal_string(data, offset)
+        length, offset = read_packed_value(data, offset)
+        name, _ = read_pascal_string(data, offset)
 
         return cls(count, field, prop, length, name)
 
@@ -192,9 +192,9 @@ class LfModifier:
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (index, attr) = unpack_from("<IH", data, offset=offset)
+            index, attr = unpack_from("<IH", data, offset=offset)
         else:
-            (attr, index) = unpack_from("<2H", data, offset=offset)
+            attr, index = unpack_from("<2H", data, offset=offset)
 
         return cls(attr, index)
 
@@ -225,9 +225,9 @@ class LfPointer:
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (index, attr) = unpack_from("<2I", data, offset=offset)
+            index, attr = unpack_from("<2I", data, offset=offset)
         else:
-            (attr, index) = unpack_from("<2H", data, offset=offset)
+            attr, index = unpack_from("<2H", data, offset=offset)
 
         return cls(attr, index)
 
@@ -365,19 +365,15 @@ class LfClass:
         # Derivation list type always zero?
         if is32:
             fmt = "<2H3I"
-            (count, attr, field, derived, vshape) = unpack_from(
-                fmt, data, offset=offset
-            )
+            count, attr, field, derived, vshape = unpack_from(fmt, data, offset=offset)
         else:
             fmt = "<5H"
-            (count, field, attr, derived, vshape) = unpack_from(
-                fmt, data, offset=offset
-            )
+            count, field, attr, derived, vshape = unpack_from(fmt, data, offset=offset)
 
         # Pascal string with the name of the class follows the leaf data.
         offset += calcsize(fmt)
-        (size, offset) = read_packed_value(data, offset)
-        (name, _) = read_pascal_string(data, offset)
+        size, offset = read_packed_value(data, offset)
+        name, _ = read_pascal_string(data, offset)
 
         return cls(count, field, attr, derived, vshape, size, name)
 
@@ -402,13 +398,13 @@ class LfEnum:
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (count, prop, utype, index) = unpack_from("<2H2I", data, offset=offset)
+            count, prop, utype, index = unpack_from("<2H2I", data, offset=offset)
             offset += 12
         else:
-            (count, utype, index, prop) = unpack_from("<4H", data, offset=offset)
+            count, utype, index, prop = unpack_from("<4H", data, offset=offset)
             offset += 8
 
-        (name, _) = read_pascal_string(data, offset)
+        name, _ = read_pascal_string(data, offset)
 
         return cls(count, prop, utype, index, name)
 

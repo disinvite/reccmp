@@ -1,6 +1,5 @@
 from struct import calcsize, unpack_from
 
-
 PACKED_VALUE_MAP = {
     0x8000: "<b",  # LF_CHAR
     0x8001: "<h",  # LF_SHORT

@@ -44,7 +44,7 @@ class MSFHeader:
 
         fmt = "30s4I4x" if is_big_header else "44sI2HI4x"
 
-        (magic_str, page_size, fpm_page_no, num_pages, stream_dir_size) = unpack_from(
+        magic_str, page_size, fpm_page_no, num_pages, stream_dir_size = unpack_from(
             fmt, buf
         )
         n_block_maps = math.ceil(stream_dir_size * 1.0 / page_size)
@@ -109,7 +109,7 @@ class MSFContainer:
         ]
 
     def get_stream(self, stream_id: int) -> bytes:
-        (size, pages) = self.stream_dir[stream_id]
+        size, pages = self.stream_dir[stream_id]
         return self.combine_pages(pages)[:size]
 
     def combine_pages(self, pages: Iterable[int]):

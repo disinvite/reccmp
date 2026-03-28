@@ -20,7 +20,7 @@ class CodeViewRecord:
             if align and (offset % 4 != 0):
                 offset += 4 - offset % 4
 
-            (record_size, record_type) = unpack_from("<2H", buf, offset=offset)
+            record_size, record_type = unpack_from("<2H", buf, offset=offset)
             if record_size == 0:
                 break
 

@@ -1,6 +1,5 @@
 import math
 
-
 PRINTABLE_RANGE = range(31, 128)
 
 

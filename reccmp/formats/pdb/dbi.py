@@ -88,7 +88,7 @@ class SectionContribution:
             ) = unpack_from("<H2x2iIH2x2I", data, offset=offset)
             offset += 28
         else:
-            (section, sc_offset, size, characteristics, moduleindex) = unpack_from(
+            section, sc_offset, size, characteristics, moduleindex = unpack_from(
                 "<2IiIH2x", data, offset=offset
             )
             data_crc = 0
@@ -126,22 +126,22 @@ class ModuleInfo:
     ) -> tuple["ModuleInfo", int]:
         offset = align_to(offset, 4)
         offset += 4  # skip unused
-        (sc, offset) = SectionContribution.from_bytes(data, offset=offset, new=new)
+        sc, offset = SectionContribution.from_bytes(data, offset=offset, new=new)
 
         if new:
-            (stream_id, symbol_size, c11_lines_size, c13_lines_size) = unpack_from(
+            stream_id, symbol_size, c11_lines_size, c13_lines_size = unpack_from(
                 "<2xh3I", data, offset=offset
             )
             offset += 32  # skip TODO
         else:
-            (stream_id, symbol_size, c11_lines_size) = unpack_from(
+            stream_id, symbol_size, c11_lines_size = unpack_from(
                 "<2xh2I", data, offset=offset
             )
             c13_lines_size = 0
             offset += 24  # skip TODO
 
-        (name, offset) = read_sz_string(data, offset)
-        (obj_name, offset) = read_sz_string(data, offset)
+        name, offset = read_sz_string(data, offset)
+        obj_name, offset = read_sz_string(data, offset)
 
         return (
             cls(
@@ -164,18 +164,18 @@ class DebugInfomation:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "DebugInfomation":
-        (header, offset) = DBIHeader.from_bytes(data)
+        header, offset = DBIHeader.from_bytes(data)
         new_modi = header.version >= 19970606
         modules = []
         while offset < header.module_info_size:
-            (module, offset) = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
+            module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
             modules.append(module)
 
         return cls(header, tuple(modules))
 
 
 def parse_modules(data: bytes):
-    (header, offset) = DBIHeader.from_bytes(data)
+    header, offset = DBIHeader.from_bytes(data)
     debug_print(data, size=offset)
 
     # MODI50 or MODI60
@@ -186,7 +186,7 @@ def parse_modules(data: bytes):
     idx = 1
     while offset < header.module_info_size:
         # start = offset
-        (module, offset) = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
+        module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
         # print()
         # debug_print(data, offset=start, size=offset-start)
         print(

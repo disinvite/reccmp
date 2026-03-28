@@ -65,15 +65,15 @@ class LfBClass(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
             (index,) = unpack_from("<I", data, offset=offset)
             offset += 4
         else:
             (index,) = unpack_from("<H", data, offset=offset)
             offset += 2
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
 
-        (base_offset, offset) = read_packed_value(data, offset)
+        base_offset, offset = read_packed_value(data, offset)
 
         return (cls(leaf_type, index, attr, base_offset), offset)
 
@@ -96,17 +96,17 @@ class LfVBClass(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
-            (index, vbptr) = unpack_from("<2I", data, offset=offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
+            index, vbptr = unpack_from("<2I", data, offset=offset)
             offset += 8
         else:
-            (index, vbptr) = unpack_from("<2H", data, offset=offset)
+            index, vbptr = unpack_from("<2H", data, offset=offset)
             offset += 4
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
 
         # TODO: order?
-        (vbpoff, offset) = read_packed_value(data, offset)
-        (vbind, offset) = read_packed_value(data, offset)
+        vbpoff, offset = read_packed_value(data, offset)
+        vbind, offset = read_packed_value(data, offset)
 
         return (cls(leaf_type, index, attr, vbptr, vbpoff, vbind), offset)
 
@@ -124,9 +124,9 @@ class LfEnumerate(FieldListLeaf):
         (leaf_type,) = unpack_from("<H", data, offset=offset)
         offset += 2
 
-        (attr, offset) = FieldAttr.from_bytes(data, offset)
-        (value, offset) = read_packed_value(data, offset)
-        (name, offset) = read_pascal_string(data, offset)
+        attr, offset = FieldAttr.from_bytes(data, offset)
+        value, offset = read_packed_value(data, offset)
+        name, offset = read_pascal_string(data, offset)
 
         return (cls(leaf_type, attr, value, name), offset)
 
@@ -148,16 +148,16 @@ class LfMember(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
             (index,) = unpack_from("<I", data, offset=offset)
             offset += 4
         else:
             (index,) = unpack_from("<H", data, offset=offset)
             offset += 2
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
 
-        (field_offset, offset) = read_packed_value(data, offset)
-        (name, offset) = read_pascal_string(data, offset)
+        field_offset, offset = read_packed_value(data, offset)
+        name, offset = read_pascal_string(data, offset)
 
         return (cls(leaf_type, index, attr, field_offset, name), offset)
 
@@ -178,15 +178,15 @@ class LfStaticMember(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
             (index,) = unpack_from("<I", data, offset=offset)
             offset += 4
         else:
             (index,) = unpack_from("<H", data, offset=offset)
             offset += 2
-            (attr, offset) = FieldAttr.from_bytes(data, offset)
+            attr, offset = FieldAttr.from_bytes(data, offset)
 
-        (name, offset) = read_pascal_string(data, offset)
+        name, offset = read_pascal_string(data, offset)
 
         return (cls(leaf_type, index, attr, name), offset)
 
@@ -206,9 +206,9 @@ class LfMethod(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         fmt = "<HI" if is32 else "<2H"
-        (count, index) = unpack_from(fmt, data, offset=offset)
+        count, index = unpack_from(fmt, data, offset=offset)
         offset += calcsize(fmt)
-        (name, offset) = read_pascal_string(data, offset)
+        name, offset = read_pascal_string(data, offset)
 
         return (cls(leaf_type, count, index, name), offset)
 
@@ -229,7 +229,7 @@ class LfNestType(FieldListLeaf):
         fmt = "<2xI" if is32 else "<H"
         (index,) = unpack_from(fmt, data, offset=offset)
         offset += calcsize(fmt)
-        (name, offset) = read_pascal_string(data, offset)
+        name, offset = read_pascal_string(data, offset)
 
         return (cls(leaf_type, index, name), offset)
 
@@ -268,7 +268,7 @@ class LfOneMethod(FieldListLeaf):
         offset += 2
         is32 = leaf_type & 0x1000 == 0x1000
 
-        (attr, offset) = FieldAttr.from_bytes(data, offset)
+        attr, offset = FieldAttr.from_bytes(data, offset)
 
         fmt = "<I" if is32 else "<H"
         (index,) = unpack_from(fmt, data, offset=offset)
@@ -281,7 +281,7 @@ class LfOneMethod(FieldListLeaf):
             vbaseoff = 0
 
         try:
-            (name, offset) = read_pascal_string(data, offset)
+            name, offset = read_pascal_string(data, offset)
         except Exception as ex:
             debug_print(data[offset:])
             raise ex
@@ -297,7 +297,7 @@ class LfFieldList:
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfFieldList":
-        (leaf_size, _) = unpack_from("<2H", data, offset=offset)
+        leaf_size, _ = unpack_from("<2H", data, offset=offset)
         end_offset = offset + leaf_size + 2  # TODO: expect pre-cropped data?
         offset += 4
 
@@ -321,23 +321,23 @@ class LfFieldList:
 
                 match leaf_type:
                     case 0x400 | 0x1400:
-                        (leaf, offset) = LfBClass.from_bytes(data, offset=offset)
+                        leaf, offset = LfBClass.from_bytes(data, offset=offset)
                     case 0x401 | 0x402 | 0x1401 | 0x1402:
-                        (leaf, offset) = LfVBClass.from_bytes(data, offset=offset)
+                        leaf, offset = LfVBClass.from_bytes(data, offset=offset)
                     case 0x403 | 0x1502:
-                        (leaf, offset) = LfEnumerate.from_bytes(data, offset=offset)
+                        leaf, offset = LfEnumerate.from_bytes(data, offset=offset)
                     case 0x406 | 0x1405:
-                        (leaf, offset) = LfMember.from_bytes(data, offset=offset)
+                        leaf, offset = LfMember.from_bytes(data, offset=offset)
                     case 0x407 | 0x1406:
-                        (leaf, offset) = LfStaticMember.from_bytes(data, offset=offset)
+                        leaf, offset = LfStaticMember.from_bytes(data, offset=offset)
                     case 0x408 | 0x1407:
-                        (leaf, offset) = LfMethod.from_bytes(data, offset=offset)
+                        leaf, offset = LfMethod.from_bytes(data, offset=offset)
                     case 0x409 | 0x1408:
-                        (leaf, offset) = LfNestType.from_bytes(data, offset=offset)
+                        leaf, offset = LfNestType.from_bytes(data, offset=offset)
                     case 0x40A | 0x1409:
-                        (leaf, offset) = LfVFuncTab.from_bytes(data, offset=offset)
+                        leaf, offset = LfVFuncTab.from_bytes(data, offset=offset)
                     case 0x40C | 0x140B:
-                        (leaf, offset) = LfOneMethod.from_bytes(data, offset=offset)
+                        leaf, offset = LfOneMethod.from_bytes(data, offset=offset)
 
                     case _:
                         break

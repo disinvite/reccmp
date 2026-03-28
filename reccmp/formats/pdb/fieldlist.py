@@ -119,6 +119,14 @@ class LfEnumerate(FieldListLeaf):
     value: int
     name: str
 
+    @property
+    def access(self) -> int:
+        return self.attr.access
+
+    @property
+    def mprop(self) -> int:
+        return self.attr.mprop
+
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfEnumerate", int]:
         (leaf_type,) = unpack_from("<H", data, offset=offset)
@@ -139,6 +147,14 @@ class LfMember(FieldListLeaf):
     attr: FieldAttr
     field_offset: int
     name: str
+
+    @property
+    def access(self) -> int:
+        return self.attr.access
+
+    @property
+    def mprop(self) -> int:
+        return self.attr.mprop
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfMember", int]:
@@ -169,6 +185,14 @@ class LfStaticMember(FieldListLeaf):
     index: int
     attr: FieldAttr
     name: str
+
+    @property
+    def access(self) -> int:
+        return self.attr.access
+
+    @property
+    def mprop(self) -> int:
+        return self.attr.mprop
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfStaticMember", int]:
@@ -261,6 +285,14 @@ class LfOneMethod(FieldListLeaf):
     index: int
     vbaseoff: int
     name: str
+
+    @property
+    def access(self) -> int:
+        return self.attr.access
+
+    @property
+    def mprop(self) -> int:
+        return self.attr.mprop
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfOneMethod", int]:

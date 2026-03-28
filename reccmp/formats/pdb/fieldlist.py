@@ -88,6 +88,10 @@ class LfVBClass(FieldListLeaf):
     vbpoff: int
     vbind: int
 
+    @property
+    def access(self) -> int:
+        return self.attr.access
+
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfVBClass", int]:
         # n.b. attr/index order is swapped between 16 and 32-bit structs.
@@ -123,10 +127,6 @@ class LfEnumerate(FieldListLeaf):
     def access(self) -> int:
         return self.attr.access
 
-    @property
-    def mprop(self) -> int:
-        return self.attr.mprop
-
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfEnumerate", int]:
         (leaf_type,) = unpack_from("<H", data, offset=offset)
@@ -151,10 +151,6 @@ class LfMember(FieldListLeaf):
     @property
     def access(self) -> int:
         return self.attr.access
-
-    @property
-    def mprop(self) -> int:
-        return self.attr.mprop
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfMember", int]:
@@ -189,10 +185,6 @@ class LfStaticMember(FieldListLeaf):
     @property
     def access(self) -> int:
         return self.attr.access
-
-    @property
-    def mprop(self) -> int:
-        return self.attr.mprop
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfStaticMember", int]:

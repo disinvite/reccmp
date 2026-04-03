@@ -61,7 +61,7 @@ def test_create_analysis_strings(db: EntityDb):
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") == EntityType.STRING
     assert e.get("size") == 6
@@ -106,7 +106,7 @@ def test_create_analysis_strings_do_not_replace(db: EntityDb):
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") != EntityType.STRING
 
@@ -125,7 +125,7 @@ def test_create_analysis_strings_not_relocated(db: EntityDb):
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
-    assert db.get_by_orig(100) is None
+    assert db.get(ImageId.ORIG, 100) is None
 
 
 def test_create_analysis_strings_not_latin1(db: EntityDb):
@@ -139,7 +139,7 @@ def test_create_analysis_strings_not_latin1(db: EntityDb):
 
     create_analysis_strings(db, ImageId.ORIG, binfile)
 
-    assert db.get_by_orig(100) is None
+    assert db.get(ImageId.ORIG, 100) is None
 
 
 def test_create_thunks(db: EntityDb):
@@ -149,7 +149,7 @@ def test_create_thunks(db: EntityDb):
 
     create_thunks(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") == EntityType.THUNK
     assert e.get("size") == 5
@@ -165,7 +165,7 @@ def test_create_thunks_do_not_replace(db: EntityDb):
 
     create_thunks(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") == EntityType.FUNCTION
     assert e.get("size") != 5
@@ -181,7 +181,7 @@ def test_create_analysis_floats(db: EntityDb):
     ):
         create_analysis_floats(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") == EntityType.FLOAT
     assert e.get("size") == 4
@@ -201,7 +201,7 @@ def test_create_analysis_floats_do_not_replace(db: EntityDb):
     ):
         create_analysis_floats(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") != EntityType.FLOAT
 
@@ -211,7 +211,7 @@ def test_create_analysis_vtordisps(db: EntityDb, binfile: PEImage):
     create_analysis_vtordisps(db, ImageId.ORIG, binfile)
 
     # Using the first vtordisp as an example
-    e = db.get_by_orig(0x1000FB50)
+    e = db.get(ImageId.ORIG, 0x1000FB50)
     assert e is not None
     assert e.get("type") == EntityType.VTORDISP
     assert e.get("size") == 8
@@ -219,7 +219,7 @@ def test_create_analysis_vtordisps(db: EntityDb, binfile: PEImage):
     assert get_ref_displacement(db, ImageId.ORIG, 0x1000FB50) == (-4, 0)
 
     # Should also set up the function entity (if it does not already exist)
-    e = db.get_by_orig(0x1000FB60)
+    e = db.get(ImageId.ORIG, 0x1000FB60)
     assert e is not None
     assert e.get("type") == EntityType.FUNCTION
 
@@ -228,14 +228,14 @@ def test_create_analysis_vtordisps_no_overwrite(db: EntityDb, binfile: PEImage):
     """Should not overwrite an entity on the referenced function if it exists."""
     with db.batch() as batch:
         # Using addrs from above example.
-        batch.set_orig(0x1000FB60, type=EntityType.STRING)
+        batch.set(ImageId.ORIG, 0x1000FB60, type=EntityType.STRING)
 
     create_analysis_vtordisps(db, ImageId.ORIG, binfile)
 
     # For now: Don't overwrite the entity type of the referenced function.
     # This is probably fine to do in the long run, but we want to protect against
     # changes to how regular thunks are identified if/when they get their own type.
-    e = db.get_by_orig(0x1000FB60)
+    e = db.get(ImageId.ORIG, 0x1000FB60)
     assert e is not None
     assert e.get("type") != EntityType.FUNCTION
 
@@ -251,7 +251,7 @@ def test_complete_partial_strings(db: EntityDb):
     complete_partial_strings(db, ImageId.ORIG, binfile)
 
     # Entity size set according to string length plus null-terminator.
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("size") == 6
     assert e.name == '"Hello"'
@@ -270,7 +270,7 @@ def test_complete_partial_strings_with_nulls(db: EntityDb):
 
     complete_partial_strings(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.name == '"\\x00test"'
 
@@ -286,7 +286,7 @@ def test_complete_partial_strings_widechar(db: EntityDb):
     complete_partial_strings(db, ImageId.ORIG, binfile)
 
     # Entity size set according to string length plus null-terminator.
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("size") == 12
     assert e.name == 'L"Hello"'
@@ -315,7 +315,7 @@ def test_complete_partial_strings_exceptions(db: EntityDb, ex_type: Exception):
     complete_partial_strings(db, ImageId.ORIG, binfile)
 
     # Should not modify the entity.
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.name is None
 
@@ -337,7 +337,7 @@ def test_complete_partial_strings_unicode_exception(db: EntityDb):
     complete_partial_strings(db, ImageId.ORIG, binfile)
 
     # Should not modify the entity.
-    e = db.get_by_orig(100)
+    e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.name is None
 
@@ -352,7 +352,7 @@ def test_create_imports(db: EntityDb):
 
     create_imports(db, ImageId.ORIG, binfile)
 
-    e = db.get_by_orig(0x1000)
+    e = db.get(ImageId.ORIG, 0x1000)
     assert e is not None
     assert e.get("type") == EntityType.IMPORT
     name = e.get("name")
@@ -360,7 +360,7 @@ def test_create_imports(db: EntityDb):
     assert "Hello" in name
 
     # Create mock name using the ordinal number.
-    e = db.get_by_orig(0x2000)
+    e = db.get(ImageId.ORIG, 0x2000)
     assert e is not None
     assert e.get("type") == EntityType.IMPORT
     name = e.get("name")

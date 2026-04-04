@@ -211,9 +211,8 @@ def test_batch_match_combine_replace_null(db):
     assert db.get(ImageId.RECOMP, 200).get("test") == 123
 
 
-@pytest.mark.xfail(reason="Known limitation.")
 def test_batch_match_create(db):
-    """Matching requires either the orig or recomp entity to exist. It does not create entities."""
+    """Can create new entities simply by matching two addrs."""
     with db.batch() as batch:
         batch.match(100, 200)
 

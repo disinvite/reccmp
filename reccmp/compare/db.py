@@ -18,11 +18,36 @@ _SETUP_SQL = """
         primary key (img, addr)
     );
 
-    CREATE TABLE entities (
-        orig_addr int unique,
-        recomp_addr int unique,
-        kvstore text default '{}'
+    CREATE TABLE things (
+        img integer not null,
+        addr integer not null,
+        kvstore text default '{}',
+        primary key (img, addr)
     );
+
+    CREATE TABLE matches (
+        orig_addr integer not null unique,
+        recomp_addr integer not null unique
+    );
+
+    CREATE VIEW zipped (orig_addr, recomp_addr) as
+        SELECT orig_addr, recomp_addr from matches
+            union ALL
+        select
+            case when img = 0 then addr else null end orig_addr,
+            case when img = 1 then addr else null end recomp_addr
+        from things
+        where 
+            orig_addr not in (select orig_addr from matches) or
+            recomp_addr not in (select recomp_addr from matches);
+
+    CREATE VIEW entities (orig_addr, recomp_addr, kvstore) AS
+        SELECT 
+            z.orig_addr, z.recomp_addr, json_patch(coalesce(x.kvstore, '{}'), json_patch('{}', coalesce(y.kvstore, '{}')))
+    from zipped z
+        left join things x on z.orig_addr = x.addr and x.img = 0
+        left join things y on z.recomp_addr = y.addr and y.img = 1
+        order by x.addr nulls last, y.addr;
 
     -- REFS stores the destination of the JMP instruction in each thunk/vtordisp.
     -- vtordisp functions have 1 or 2 displacement values that modify ECX.
@@ -36,24 +61,20 @@ _SETUP_SQL = """
         primary key (img, addr)
     );
 
-    CREATE VIEW matches (match_id, orig_addr, recomp_addr) AS
-        SELECT rowid, orig_addr, recomp_addr FROM entities
-        WHERE orig_addr IS NOT NULL AND recomp_addr IS NOT NULL;
-
     CREATE VIEW matched_ids (img, addr) AS
         SELECT 0, orig_addr FROM matches
         UNION ALL
         SELECT 1, recomp_addr FROM matches;
 
     CREATE VIEW orig_unmatched (orig_addr, kvstore) AS
-        SELECT orig_addr, kvstore FROM entities
-        WHERE orig_addr is not null and recomp_addr is null
-        ORDER by orig_addr;
+        SELECT addr, kvstore FROM things
+        WHERE img = 0 and addr not in (select orig_addr from matches)
+        ORDER by addr;
 
     CREATE VIEW recomp_unmatched (recomp_addr, kvstore) AS
-        SELECT recomp_addr, kvstore FROM entities
-        WHERE recomp_addr is not null and orig_addr is null
-        ORDER by recomp_addr;
+        SELECT addr, kvstore FROM things
+        WHERE img = 1 and addr not in (select recomp_addr from matches)
+        ORDER by addr;
 
     -- ReccmpEntity
     CREATE VIEW entity_factory (orig_addr, recomp_addr, kvstore) AS
@@ -192,10 +213,6 @@ class EntityBatch:
     _recomp: dict[int, dict[str, Any]]
     _matches: list[tuple[int, int]]
 
-    # Sets the recomp_addr of an entity with only an orig_addr.
-    # This isn't possible using set_orig() or by matching.
-    _recomp_addr: dict[int, int]
-
     _refs: list[tuple[ImageId, int, int, int, int]]
 
     def __init__(self, backref: "EntityDb") -> None:
@@ -244,7 +261,7 @@ class EntityBatch:
         self._matches.append((orig, recomp))
 
     def set_recomp_addr(self, orig: int, recomp: int):
-        self._recomp_addr[orig] = recomp
+        self.match(orig, recomp)
 
     def _finalized_matches(self) -> Iterator[tuple[int, int]]:
         """Reduce the list of matches so that each orig and recomp addr appears once.
@@ -282,9 +299,6 @@ class EntityBatch:
 
             if self._matches:
                 self.base.bulk_match(self._finalized_matches())
-
-            if self._recomp_addr:
-                self.base.bulk_set_recomp_addr(self._recomp_addr.items())
 
         self.reset()
 
@@ -326,15 +340,15 @@ class EntityDb:
     ):
         if upsert:
             self._sql.executemany(
-                """INSERT INTO entities (orig_addr, kvstore) values (?,?)
-                ON CONFLICT (orig_addr) DO UPDATE
+                """INSERT INTO things (img, addr, kvstore) values (?,?,?)
+                ON CONFLICT (img, addr) DO UPDATE
                 SET kvstore = json_patch(kvstore, excluded.kvstore)""",
-                ((addr, json.dumps(values)) for addr, values in rows),
+                ((ImageId.ORIG, addr, json.dumps(values)) for addr, values in rows),
             )
         else:
             self._sql.executemany(
-                "INSERT or ignore INTO entities (orig_addr, kvstore) values (?,?)",
-                ((addr, json.dumps(values)) for addr, values in rows),
+                "INSERT or ignore INTO things (img, addr, kvstore) values (?,?,?)",
+                ((ImageId.ORIG, addr, json.dumps(values)) for addr, values in rows),
             )
 
     def bulk_recomp_insert(
@@ -342,49 +356,21 @@ class EntityDb:
     ):
         if upsert:
             self._sql.executemany(
-                """INSERT INTO entities (recomp_addr, kvstore) values (?,?)
-                ON CONFLICT (recomp_addr) DO UPDATE
+                """INSERT INTO things (img, addr, kvstore) values (?,?,?)
+                ON CONFLICT (img, addr) DO UPDATE
                 SET kvstore = json_patch(kvstore, excluded.kvstore)""",
-                ((addr, json.dumps(values)) for addr, values in rows),
+                ((ImageId.RECOMP, addr, json.dumps(values)) for addr, values in rows),
             )
         else:
             self._sql.executemany(
-                "INSERT or ignore INTO entities (recomp_addr, kvstore) values (?,?)",
-                ((addr, json.dumps(values)) for addr, values in rows),
+                "INSERT or ignore INTO things (img, addr, kvstore) values (?,?,?)",
+                ((ImageId.RECOMP, addr, json.dumps(values)) for addr, values in rows),
             )
 
     def bulk_match(self, pairs: Iterable[tuple[int, int]]):
         """Expects iterable of `(orig_addr, recomp_addr)`."""
-        # We need to iterate over this multiple times.
-        pairlist = list(pairs)
-
-        with self._sql:
-            # Copy orig information to recomp side. Prefer recomp information except for NULLS.
-            # json_patch(X, Y) copies keys from Y into X and replaces existing values.
-            # From inner-most to outer-most:
-            # - json_patch('{}', entities.kvstore)      Eliminate NULLS on recomp side (so orig will replace)
-            # - json_patch(o.kvstore, ^)                Merge orig and recomp keys. Prefer recomp values.
-            self._sql.executemany(
-                """UPDATE entities
-                SET kvstore = json_patch(o.kvstore, json_patch('{}', entities.kvstore))
-                FROM (SELECT kvstore FROM entities WHERE orig_addr = ? and recomp_addr is null) o
-                WHERE recomp_addr = ? AND orig_addr is null""",
-                pairlist,
-            )
-            # Patch orig address into recomp and delete orig entry.
-            self._sql.executemany(
-                "UPDATE OR REPLACE entities SET orig_addr = ? WHERE recomp_addr = ? AND orig_addr is null",
-                pairlist,
-            )
-
-    def bulk_set_recomp_addr(self, pairs: Iterable[tuple[int, int]]):
-        """Expects iterable of `(orig_addr recomp_addr)`. To be used when the orig information are complete
-        up to the recomp address and there exists no entry on the recomp side."""
         self._sql.executemany(
-            """UPDATE entities
-                SET recomp_addr = ?
-                WHERE orig_addr = ? and recomp_addr is null""",
-            ((recomp_addr, orig_addr) for orig_addr, recomp_addr in pairs),
+            "INSERT or ignore into matches (orig_addr, recomp_addr) values (?,?)", pairs
         )
 
     def get_unmatched_strings(self) -> list[str]:

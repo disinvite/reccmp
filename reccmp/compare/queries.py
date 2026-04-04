@@ -66,7 +66,7 @@ def get_named_thunks(db: EntityDb) -> Iterator[ThunkWithName]:
         WHERE type IN (?, ?, ?)
         AND name IS NOT NULL
         -- Performance: we only need to yield one addr for a matched entity.
-        GROUP BY e.rowid""",
+        -- GROUP BY e.rowid""",
         (EntityType.THUNK, EntityType.VTORDISP, EntityType.IMPORT_THUNK),
     ):
         assert img in (ImageId.ORIG, ImageId.RECOMP)
@@ -136,8 +136,8 @@ def get_referencing_entity_matches(db: EntityDb) -> Iterator[tuple[int, int]]:
     """
     for orig_addr, recomp_addr in db.sql.execute("""
         WITH linked_refs AS (
-            SELECT r.img, r.addr, m.match_id, disp0, disp1,
-            row_number() OVER (PARTITION BY r.img, m.match_id, disp0, disp1 ORDER BY r.addr) nth
+            SELECT r.img, r.addr, m.rowid match_id, disp0, disp1,
+            row_number() OVER (PARTITION BY r.img, m.rowid, disp0, disp1 ORDER BY r.addr) nth
             FROM refs r
             -- Convert the referenced address to a unique ID to allow for matching.
             INNER JOIN matches m

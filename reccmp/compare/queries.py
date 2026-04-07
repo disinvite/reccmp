@@ -89,21 +89,24 @@ def get_floats_without_data(
     return the address and whether it has double precision."""
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
-    for orig_addr, recomp_addr, size in db.sql.execute(
-        """SELECT orig_addr, recomp_addr, json_extract(kvstore,'$.size') size
+    column = "orig_addr" if image_id == ImageId.ORIG else "recomp_addr"
+
+    for addr, size in db.sql.execute(
+        f"""SELECT {column}, coalesce(rsize.size, osize.size) any_size
         FROM entities
+        LEFT JOIN sizes osize ON osize.img = 0 AND osize.addr = orig_addr
+        LEFT JOIN sizes rsize ON rsize.img = 1 AND rsize.addr = recomp_addr
         WHERE json_extract(kvstore,'$.type') = ?
-        AND size in (4, 8)
+        AND {column} IS NOT NULL
+        AND any_size in (4, 8)
         -- TODO: #27. We are using the name field to store the data for now,
         -- but we should put this data in its own table.
         AND json_extract(kvstore,'$.name') IS NULL
         """,
         (EntityType.FLOAT,),
     ):
-        if image_id == ImageId.ORIG and isinstance(orig_addr, int):
-            yield (orig_addr, size == 8)
-        elif image_id == ImageId.RECOMP and isinstance(recomp_addr, int):
-            yield (recomp_addr, size == 8)
+        if isinstance(addr, int):
+            yield (addr, size == 8)
 
 
 def get_strings_without_data(
@@ -111,21 +114,22 @@ def get_strings_without_data(
 ) -> Iterator[tuple[int, int | None, bool]]:
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
-    for orig_addr, recomp_addr, size, type_ in db.sql.execute(
-        """SELECT orig_addr, recomp_addr, json_extract(kvstore,'$.size') size, json_extract(kvstore,'$.type') type
+    column = "orig_addr" if image_id == ImageId.ORIG else "recomp_addr"
+
+    for addr, size, type_ in db.sql.execute(
+        f"""SELECT {column}, sizes.size, json_extract(kvstore,'$.type') type
         FROM entities
+        LEFT JOIN sizes ON sizes.img = ? AND sizes.addr = {column}
         WHERE type IN (?, ?)
+        AND {column} IS NOT NULL
         -- TODO: #27. We are using the name field to store the data for now,
         -- but we should put this data in its own table.
         AND json_extract(kvstore,'$.name') IS NULL
         """,
-        (EntityType.STRING, EntityType.WIDECHAR),
+        (image_id, EntityType.STRING, EntityType.WIDECHAR),
     ):
-
-        if image_id == ImageId.ORIG and isinstance(orig_addr, int):
-            yield (orig_addr, size, type_ == EntityType.WIDECHAR)
-        elif image_id == ImageId.RECOMP and isinstance(recomp_addr, int):
-            yield (recomp_addr, size, type_ == EntityType.WIDECHAR)
+        if isinstance(addr, int):
+            yield (addr, size, type_ == EntityType.WIDECHAR)
 
 
 def get_referencing_entity_matches(db: EntityDb) -> Iterator[tuple[int, int]]:

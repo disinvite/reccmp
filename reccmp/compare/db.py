@@ -5,6 +5,7 @@ addresses/symbols that we want to compare between the original and recompiled bi
 import sqlite3
 import logging
 import json
+from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Iterable, Iterator
 from reccmp.types import EntityType, ImageId
@@ -15,6 +16,13 @@ _SETUP_SQL = """
         addr integer not null,
         name text,
         computed_name text,
+        primary key (img, addr)
+    );
+
+    CREATE TABLE sizes (
+        img integer not null,
+        addr integer not null,
+        size integer not null,
         primary key (img, addr)
     );
 
@@ -56,8 +64,11 @@ _SETUP_SQL = """
         ORDER by recomp_addr;
 
     -- ReccmpEntity
-    CREATE VIEW entity_factory (orig_addr, recomp_addr, kvstore) AS
-        SELECT orig_addr, recomp_addr, kvstore FROM entities;
+    CREATE VIEW entity_factory (orig_addr, recomp_addr, orig_size, recomp_size, kvstore) AS
+        SELECT orig_addr, recomp_addr, osize.size, rsize.size, kvstore
+        FROM entities
+        LEFT JOIN sizes osize ON osize.img = 0 and osize.addr = orig_addr
+        LEFT JOIN sizes rsize ON rsize.img = 1 and rsize.addr = recomp_addr;
 
     -- ReccmpMatch
     CREATE VIEW matched_entity_factory AS
@@ -77,21 +88,19 @@ EntityTypeLookup: dict[int, str] = {
 }
 
 
+@dataclass(frozen=True)
 class ReccmpEntity:
     """ORM object for Reccmp database entries."""
 
     _orig_addr: int | None
     _recomp_addr: int | None
+    _orig_size: int | None
+    _recomp_size: int | None
     _kvstore: str
 
-    def __init__(
-        self, orig: int | None, recomp: int | None, kvstore: str = "{}"
-    ) -> None:
+    def __post_init__(self):
         """Requires one or both of the addresses to be defined"""
-        assert orig is not None or recomp is not None
-        self._orig_addr = orig
-        self._recomp_addr = recomp
-        self._kvstore = kvstore
+        assert self._orig_addr is not None or self._recomp_addr is not None
 
     def addr(self, image_id: ImageId) -> int | None:
         if image_id == ImageId.ORIG:
@@ -122,10 +131,24 @@ class ReccmpEntity:
     def name(self) -> str | None:
         return self.options.get("name")
 
-    @property
-    def size(self) -> int:
-        """Assume null size means size is zero: there are no bytes to read for this entity."""
-        return self.options.get("size", 0)
+    def any_size(self, image_id: ImageId | None = None) -> int:
+        """Size with image preference (is this what we want?)"""
+        if image_id in (None, ImageId.RECOMP):
+            return self._recomp_size or self._orig_size or 0
+
+        if image_id in (None, ImageId.ORIG):
+            return self._orig_size or self._recomp_size or 0
+
+        return 0
+
+    def size(self, image_id: ImageId) -> int | None:
+        if image_id == ImageId.ORIG:
+            return self._orig_size
+
+        if image_id == ImageId.RECOMP:
+            return self._recomp_size
+
+        assert False, "Invalid image id"
 
     @property
     def matched(self) -> bool:
@@ -161,13 +184,13 @@ class ReccmpEntity:
         return f"{self.name}+{ofs} (OFFSET)"
 
 
+@dataclass(frozen=True)
 class ReccmpMatch(ReccmpEntity):
     """To simplify type checking, use this object when a "match" is
     required or expected. Meaning: both orig and recomp addresses are set."""
 
-    def __init__(self, orig: int, recomp: int, kvstore: str = "{}") -> None:
-        assert orig is not None and recomp is not None
-        super().__init__(orig, recomp, kvstore)
+    def __post_init__(self):
+        assert self._orig_addr is not None and self._recomp_addr is not None
 
     @property
     def orig_addr(self) -> int:
@@ -206,6 +229,7 @@ class EntityBatch:
     _recomp_addr: dict[int, int]
 
     _refs: list[tuple[ImageId, int, int, int, int]]
+    _sizes: dict[tuple[ImageId, int], int]
 
     def __init__(self, backref: "EntityDb") -> None:
         self.base = backref
@@ -214,6 +238,7 @@ class EntityBatch:
         self._matches = []
         self._recomp_addr = {}
         self._refs = []
+        self._sizes = {}
 
     def reset(self):
         """Clear all pending changes"""
@@ -222,16 +247,19 @@ class EntityBatch:
         self._matches.clear()
         self._recomp_addr.clear()
         self._refs.clear()
+        self._sizes.clear()
 
-    def set(self, img: ImageId, addr: int, **kwargs):
+    def set(self, img: ImageId, addr: int, size: int | None = None, **kwargs):
+        assert img in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
+
+        if size is not None:
+            self._sizes[(img, addr)] = size
+
         if img == ImageId.ORIG:
             self._orig.setdefault(addr, {}).update(kwargs)
 
         elif img == ImageId.RECOMP:
             self._recomp.setdefault(addr, {}).update(kwargs)
-
-        else:
-            assert False, "Invalid image id"
 
     def set_ref(
         self,
@@ -281,6 +309,12 @@ class EntityBatch:
                 self.base.sql.executemany(
                     "INSERT OR REPLACE INTO refs (img, addr, ref, disp0, disp1) VALUES (?,?,?,?,?)",
                     self._refs,
+                )
+
+            if self._sizes:
+                self.base.sql.executemany(
+                    "INSERT OR REPLACE INTO sizes (img, addr, size) VALUES (?,?,?)",
+                    ((img, addr, size) for (img, addr), size in self._sizes.items()),
                 )
 
             if self._matches:

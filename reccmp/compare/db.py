@@ -24,7 +24,7 @@ _SETUP_SQL = """
         addr integer not null,
         size integer not null,
         primary key (img, addr)
-    );
+    ) without rowid;
 
     CREATE TABLE entities (
         orig_addr int unique,

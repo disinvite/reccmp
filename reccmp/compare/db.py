@@ -19,13 +19,6 @@ _SETUP_SQL = """
         primary key (img, addr)
     );
 
-    CREATE TABLE sizes (
-        img integer not null,
-        addr integer not null,
-        size integer not null,
-        primary key (img, addr)
-    ) without rowid;
-
     CREATE TABLE entities (
         orig_addr int unique,
         recomp_addr int unique,
@@ -64,11 +57,9 @@ _SETUP_SQL = """
         ORDER by recomp_addr;
 
     -- ReccmpEntity
-    CREATE VIEW entity_factory (orig_addr, recomp_addr, orig_size, recomp_size, kvstore) AS
-        SELECT orig_addr, recomp_addr, osize.size, rsize.size, kvstore
-        FROM entities
-        LEFT JOIN sizes osize ON osize.img = 0 and osize.addr = orig_addr
-        LEFT JOIN sizes rsize ON rsize.img = 1 and rsize.addr = recomp_addr;
+    CREATE VIEW entity_factory (orig_addr, recomp_addr, kvstore) AS
+        SELECT orig_addr, recomp_addr, kvstore
+        FROM entities;
 
     -- ReccmpMatch
     CREATE VIEW matched_entity_factory AS
@@ -94,8 +85,6 @@ class ReccmpEntity:
 
     _orig_addr: int | None
     _recomp_addr: int | None
-    _orig_size: int | None
-    _recomp_size: int | None
     _kvstore: str
 
     def __post_init__(self):
@@ -134,19 +123,19 @@ class ReccmpEntity:
     def any_size(self, image_id: ImageId | None = None) -> int:
         """Size with image preference (is this what we want?)"""
         if image_id in (None, ImageId.RECOMP):
-            return self._recomp_size or self._orig_size or 0
+            return self.options.get("recomp_size") or self.options.get("orig_size") or 0
 
         if image_id in (None, ImageId.ORIG):
-            return self._orig_size or self._recomp_size or 0
+            return self.options.get("orig_size") or self.options.get("recomp_size") or 0
 
         return 0
 
     def size(self, image_id: ImageId) -> int | None:
         if image_id == ImageId.ORIG:
-            return self._orig_size
+            return self.options.get("orig_size")
 
         if image_id == ImageId.RECOMP:
-            return self._recomp_size
+            return self.options.get("recomp_size")
 
         assert False, "Invalid image id"
 
@@ -229,7 +218,6 @@ class EntityBatch:
     _recomp_addr: dict[int, int]
 
     _refs: list[tuple[ImageId, int, int, int, int]]
-    _sizes: dict[tuple[ImageId, int], int]
 
     def __init__(self, backref: "EntityDb") -> None:
         self.base = backref
@@ -238,7 +226,6 @@ class EntityBatch:
         self._matches = []
         self._recomp_addr = {}
         self._refs = []
-        self._sizes = {}
 
     def reset(self):
         """Clear all pending changes"""
@@ -247,13 +234,12 @@ class EntityBatch:
         self._matches.clear()
         self._recomp_addr.clear()
         self._refs.clear()
-        self._sizes.clear()
 
     def set(self, img: ImageId, addr: int, size: int | None = None, **kwargs):
         assert img in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
         if size is not None:
-            self._sizes[(img, addr)] = size
+            kwargs["orig_size" if img == ImageId.ORIG else "recomp_size"] = size
 
         if img == ImageId.ORIG:
             self._orig.setdefault(addr, {}).update(kwargs)
@@ -309,12 +295,6 @@ class EntityBatch:
                 self.base.sql.executemany(
                     "INSERT OR REPLACE INTO refs (img, addr, ref, disp0, disp1) VALUES (?,?,?,?,?)",
                     self._refs,
-                )
-
-            if self._sizes:
-                self.base.sql.executemany(
-                    "INSERT OR REPLACE INTO sizes (img, addr, size) VALUES (?,?,?)",
-                    ((img, addr, size) for (img, addr), size in self._sizes.items()),
                 )
 
             if self._matches:

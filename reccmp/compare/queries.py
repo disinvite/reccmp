@@ -89,21 +89,22 @@ def get_floats_without_data(
     return the address and whether it has double precision."""
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
-    column = "orig_addr" if image_id == ImageId.ORIG else "recomp_addr"
-
     for addr, size in db.sql.execute(
-        f"""SELECT {column}, coalesce(rsize.size, osize.size) any_size
+        """SELECT
+            case ? when 0 then orig_addr when 1 then recomp_addr else null end addr,
+            coalesce(json_extract(kvstore,'$.recomp_size'), json_extract(kvstore,'$.orig_size')) any_size
         FROM entities
-        LEFT JOIN sizes osize ON osize.img = 0 AND osize.addr = orig_addr
-        LEFT JOIN sizes rsize ON rsize.img = 1 AND rsize.addr = recomp_addr
         WHERE json_extract(kvstore,'$.type') = ?
-        AND {column} IS NOT NULL
+        AND addr IS NOT NULL
         AND any_size in (4, 8)
         -- TODO: #27. We are using the name field to store the data for now,
         -- but we should put this data in its own table.
         AND json_extract(kvstore,'$.name') IS NULL
         """,
-        (EntityType.FLOAT,),
+        (
+            image_id,
+            EntityType.FLOAT,
+        ),
     ):
         if isinstance(addr, int):
             yield (addr, size == 8)
@@ -114,19 +115,19 @@ def get_strings_without_data(
 ) -> Iterator[tuple[int, int | None, bool]]:
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
-    column = "orig_addr" if image_id == ImageId.ORIG else "recomp_addr"
-
     for addr, size, type_ in db.sql.execute(
-        f"""SELECT {column}, sizes.size, json_extract(kvstore,'$.type') type
+        """SELECT
+            case ? when 0 then orig_addr when 1 then recomp_addr else null end addr,
+            case ? when 0 then json_extract(kvstore,'$.orig_size') when 1 then json_extract(kvstore,'$.recomp_size') else null end,
+            json_extract(kvstore,'$.type') type
         FROM entities
-        LEFT JOIN sizes ON sizes.img = ? AND sizes.addr = {column}
         WHERE type IN (?, ?)
-        AND {column} IS NOT NULL
+        AND addr IS NOT NULL
         -- TODO: #27. We are using the name field to store the data for now,
         -- but we should put this data in its own table.
         AND json_extract(kvstore,'$.name') IS NULL
         """,
-        (image_id, EntityType.STRING, EntityType.WIDECHAR),
+        (image_id, image_id, EntityType.STRING, EntityType.WIDECHAR),
     ):
         if isinstance(addr, int):
             yield (addr, size, type_ == EntityType.WIDECHAR)

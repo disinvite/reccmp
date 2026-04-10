@@ -58,8 +58,7 @@ _SETUP_SQL = """
 
     -- ReccmpEntity
     CREATE VIEW entity_factory (orig_addr, recomp_addr, kvstore) AS
-        SELECT orig_addr, recomp_addr, kvstore
-        FROM entities;
+        SELECT orig_addr, recomp_addr, kvstore FROM entities;
 
     -- ReccmpMatch
     CREATE VIEW matched_entity_factory AS

@@ -120,17 +120,21 @@ class ReccmpEntity:
     def name(self) -> str | None:
         return self.options.get("name")
 
-    def any_size(self, image_id: ImageId | None = None) -> int:
-        """Size with image preference (is this what we want?)"""
-        if image_id in (None, ImageId.RECOMP):
+    def any_size(self, image_id: ImageId = ImageId.RECOMP) -> int:
+        """Returns any size for this entity: the returned value cannot be null.
+        Prefer to return the size attribute for the provided ImageId if it exists.
+        With no ImageId, prefer recomp_size first, then orig_size, default to zero.
+        (This matches the previous behavior.)"""
+        if image_id == ImageId.RECOMP:
             return self.options.get("recomp_size") or self.options.get("orig_size") or 0
 
-        if image_id in (None, ImageId.ORIG):
+        if image_id == ImageId.ORIG:
             return self.options.get("orig_size") or self.options.get("recomp_size") or 0
 
         return 0
 
     def size(self, image_id: ImageId) -> int | None:
+        """Return the size attribute for the provided ImageId."""
         if image_id == ImageId.ORIG:
             return self.options.get("orig_size")
 

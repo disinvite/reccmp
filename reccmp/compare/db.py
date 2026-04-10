@@ -5,7 +5,6 @@ addresses/symbols that we want to compare between the original and recompiled bi
 import sqlite3
 import logging
 import json
-from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Iterable, Iterator
 from reccmp.types import EntityType, ImageId
@@ -78,7 +77,6 @@ EntityTypeLookup: dict[int, str] = {
 }
 
 
-@dataclass(frozen=True)
 class ReccmpEntity:
     """ORM object for Reccmp database entries."""
 
@@ -86,9 +84,14 @@ class ReccmpEntity:
     _recomp_addr: int | None
     _kvstore: str
 
-    def __post_init__(self):
+    def __init__(
+        self, orig: int | None, recomp: int | None, kvstore: str = "{}"
+    ) -> None:
         """Requires one or both of the addresses to be defined"""
-        assert self._orig_addr is not None or self._recomp_addr is not None
+        assert orig is not None or recomp is not None
+        self._orig_addr = orig
+        self._recomp_addr = recomp
+        self._kvstore = kvstore
 
     def addr(self, image_id: ImageId) -> int | None:
         if image_id == ImageId.ORIG:
@@ -176,13 +179,13 @@ class ReccmpEntity:
         return f"{self.name}+{ofs} (OFFSET)"
 
 
-@dataclass(frozen=True)
 class ReccmpMatch(ReccmpEntity):
     """To simplify type checking, use this object when a "match" is
     required or expected. Meaning: both orig and recomp addresses are set."""
 
-    def __post_init__(self):
-        assert self._orig_addr is not None and self._recomp_addr is not None
+    def __init__(self, orig: int, recomp: int, kvstore: str = "{}") -> None:
+        assert orig is not None and recomp is not None
+        super().__init__(orig, recomp, kvstore)
 
     @property
     def orig_addr(self) -> int:

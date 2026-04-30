@@ -6,6 +6,7 @@ from struct import calcsize, unpack_from
 from typing import Any
 from .common import read_packed_value, read_pascal_string
 from .debug import debug_print
+from .leaf import CodeViewLeaf
 
 
 class FieldAccess(IntEnum):
@@ -26,12 +27,7 @@ class MethodProp(IntEnum):
 
 
 @dataclass(frozen=True)
-class FieldListLeaf:
-    leaf_type: int
-
-
-@dataclass(frozen=True)
-class LfBClass(FieldListLeaf):
+class LfBClass(CodeViewLeaf):
     """0400: lfBClass / lfBClass_16t, cvinfo.h"""
 
     index: int
@@ -62,7 +58,7 @@ class LfBClass(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfVBClass(FieldListLeaf):
+class LfVBClass(CodeViewLeaf):
     """0401/0402: lfVBClass / lfVBClass_16t, cvinfo.h"""
 
     index: int
@@ -97,7 +93,7 @@ class LfVBClass(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfEnumerate(FieldListLeaf):
+class LfEnumerate(CodeViewLeaf):
     """0403: lfEnumerate, cvinfo.h"""
 
     attr: int
@@ -120,7 +116,7 @@ class LfEnumerate(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfMember(FieldListLeaf):
+class LfMember(CodeViewLeaf):
     """0406: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
@@ -153,7 +149,7 @@ class LfMember(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfStaticMember(FieldListLeaf):
+class LfStaticMember(CodeViewLeaf):
     """0407: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
@@ -184,7 +180,7 @@ class LfStaticMember(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfMethod(FieldListLeaf):
+class LfMethod(CodeViewLeaf):
     """0408: lfMethod / lfMethod_16t, cvinfo.h"""
 
     count: int
@@ -206,7 +202,7 @@ class LfMethod(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfNestType(FieldListLeaf):
+class LfNestType(CodeViewLeaf):
     """0409: lfNestType / lfNestType_16t, cvinfo.h"""
 
     index: int
@@ -227,7 +223,7 @@ class LfNestType(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfVFuncTab(FieldListLeaf):
+class LfVFuncTab(CodeViewLeaf):
     """040a: lfVFuncTab / lfVFuncTab_16t, cvinfo.h"""
 
     index: int
@@ -246,7 +242,7 @@ class LfVFuncTab(FieldListLeaf):
 
 
 @dataclass(frozen=True)
-class LfOneMethod(FieldListLeaf):
+class LfOneMethod(CodeViewLeaf):
     """040c: lfOneMethod / lfOneMethod_16t, cvinfo.h"""
 
     attr: int

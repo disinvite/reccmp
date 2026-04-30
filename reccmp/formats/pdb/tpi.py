@@ -6,6 +6,7 @@ from .codeview import CodeViewRecord
 from .common import read_packed_value, read_pascal_string
 from .fieldlist import LfFieldList
 from .debug import debug_print
+from .leaf import CodeViewLeaf
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ class MethodListMethod:
 
 
 @dataclass(frozen=True)
-class LfMethodList:
+class LfMethodList(CodeViewLeaf):
     """lfArray_16t, cvinfo.h"""
 
     methods: tuple[MethodListMethod, ...]
@@ -118,11 +119,11 @@ class LfMethodList:
         methods = tuple(
             MethodListMethod.from_bytes(data[: leaf_size + 2], offset=offset, is32=is32)
         )
-        return cls(methods)
+        return cls(leaf_type, methods)
 
 
 @dataclass(frozen=True)
-class LfArray:
+class LfArray(CodeViewLeaf):
     """lfArray_16t, cvinfo.h"""
 
     elemtype: int
@@ -146,11 +147,11 @@ class LfArray:
         count, offset = read_packed_value(data, offset)
         name, _ = read_pascal_string(data, offset)
 
-        return cls(elemtype, idxtype, count, name)
+        return cls(leaf_type, elemtype, idxtype, count, name)
 
 
 @dataclass(frozen=True)
-class LfUnion:
+class LfUnion(CodeViewLeaf):
     """lfUnion_16t, cvinfo.h"""
 
     count: int
@@ -175,11 +176,11 @@ class LfUnion:
         length, offset = read_packed_value(data, offset)
         name, _ = read_pascal_string(data, offset)
 
-        return cls(count, field, prop, length, name)
+        return cls(leaf_type, count, field, prop, length, name)
 
 
 @dataclass(frozen=True)
-class LfModifier:
+class LfModifier(CodeViewLeaf):
     """lfModifier_16t, cvinfo.h"""
 
     attr: int
@@ -196,11 +197,11 @@ class LfModifier:
         else:
             attr, index = unpack_from("<2H", data, offset=offset)
 
-        return cls(attr, index)
+        return cls(leaf_type, attr, index)
 
 
 @dataclass(frozen=True)
-class LfPointer:
+class LfPointer(CodeViewLeaf):
     """lfPointer_16t, cvinfo.h"""
 
     attr: int
@@ -229,7 +230,7 @@ class LfPointer:
         else:
             attr, index = unpack_from("<2H", data, offset=offset)
 
-        return cls(attr, index)
+        return cls(leaf_type, attr, index)
 
     def __str__(self) -> str:
         return "".join(
@@ -256,7 +257,7 @@ class FuncAttr(Flag):
 
 # pylint:disable=too-many-instance-attributes
 @dataclass(frozen=True)
-class LfMFunction:
+class LfMFunction(CodeViewLeaf):
     """lfMFunc / lfMFunc_16t, cvinfo.h"""
 
     return_type: int
@@ -286,11 +287,11 @@ class LfMFunction:
         raw: tuple[int, int, int, int, int, int, int, int] = unpack_from(
             fmt, data, offset=offset
         )
-        return cls(*raw)
+        return cls(leaf_type, *raw)
 
 
 @dataclass(frozen=True)
-class LfProcedure:
+class LfProcedure(CodeViewLeaf):
     """lfProc / lfProc_16t, cvinfo.h"""
 
     return_type: int
@@ -315,7 +316,7 @@ class LfProcedure:
             fmt = "<H2B2H"
 
         raw: tuple[int, int, int, int, int] = unpack_from(fmt, data, offset=offset)
-        return cls(*raw)
+        return cls(leaf_type, *raw)
 
 
 class PropAttr(Flag):
@@ -341,7 +342,7 @@ class PropAttr(Flag):
 
 
 @dataclass(frozen=True)
-class LfClass:
+class LfClass(CodeViewLeaf):
     """lfClass_16t, cvinfo.h"""
 
     element_count: int
@@ -375,14 +376,14 @@ class LfClass:
         size, offset = read_packed_value(data, offset)
         name, _ = read_pascal_string(data, offset)
 
-        return cls(count, field, attr, derived, vshape, size, name)
+        return cls(leaf_type, count, field, attr, derived, vshape, size, name)
 
     def __str__(self) -> str:
         return f"LF_CLASS {self.name[:32]:32} {self.element_count:3} mem.  vshape: {self.vshape:4x}  size: {self.size:3}  attr: {self.prop_attr}"
 
 
 @dataclass(frozen=True)
-class LfEnum:
+class LfEnum(CodeViewLeaf):
     """lfEnum_16t / lfEnum, cvinfo.h"""
 
     count: int
@@ -406,25 +407,25 @@ class LfEnum:
 
         name, _ = read_pascal_string(data, offset)
 
-        return cls(count, prop, utype, index, name)
+        return cls(leaf_type, count, prop, utype, index, name)
 
 
 @dataclass(frozen=True)
-class LfArglist:
+class LfArglist(CodeViewLeaf):
     """lfArgList_16t, cvinfo.h"""
 
     args: tuple[int, ...]
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfArglist":
-        (_,) = unpack_from("<2xH", data, offset=offset)
+        (leaf_type, _) = unpack_from("<2H", data, offset=offset)
         offset += 4
 
         (count,) = unpack_from("<H", data, offset=offset)
         offset += 2
         arg_data = data[offset : offset + 2 * count]
         args = tuple(arg for arg, in iter_unpack("<H", arg_data))
-        return cls(args)
+        return cls(leaf_type, args)
 
 
 def parse_types(data: bytes):

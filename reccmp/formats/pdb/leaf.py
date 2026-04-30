@@ -1,4 +1,10 @@
+from dataclasses import dataclass
 from enum import IntEnum
+
+
+@dataclass(frozen=True)
+class CodeViewLeaf:
+    leaf_type: int
 
 
 class LeafEnum(IntEnum):

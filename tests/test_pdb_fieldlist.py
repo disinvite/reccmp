@@ -1,4 +1,4 @@
-from reccmp.formats.pdb.enum import LeafEnum
+from reccmp.formats.pdb.leaf import LeafEnum
 from reccmp.formats.pdb.fieldlist import (
     FieldAccess,
     MethodProp,

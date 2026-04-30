@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Iterator, NamedTuple, TypeVar
+from typing import Callable, Iterator, NamedTuple, TypeVar, cast
 
 # Disable spurious warnings in vscode / pylance
 # pyright: reportMissingModuleSource=false
@@ -20,7 +20,6 @@ from ghidra.program.model.data import (
     TypedefDataType,
     ComponentOffsetSettingsDefinition,
 )
-from ghidra.util.task import ConsoleTaskMonitor
 
 from reccmp.cvdump.types import (
     CvdumpParsedType,
@@ -85,7 +84,7 @@ class PdbTypeImporter:
         """
         Recursively imports a type from the PDB into Ghidra.
         @param type_index Either a scalar type like `T_INT4(...)` or a PDB reference like `0x10ba`
-        @param slim_for_vbase If true, the current invocation
+        @param slim_for_vbase If `True`, the current invocation
             imports a superclass of some class where virtual inheritance is involved (directly or indirectly).
             This case requires special handling: Let's say we have `class C: B` and `class B: virtual A`. Then cvdump
             reports a size for B that includes both B's fields as well as the A contained at an offset within B,
@@ -137,7 +136,11 @@ class PdbTypeImporter:
         cvtype = CvdumpTypeMap[type_key]
 
         if cvtype.pointer is None:
-            return get_scalar_ghidra_type(type_key)
+            # Scalars need to be added to the database explicitly since there can be multiple
+            # non-identical instances of the same scalar. See the failing unit tests if you remove the wrapper.
+            return add_data_type_or_reuse_existing(
+                self.api, get_scalar_ghidra_type(type_key)
+            )
 
         points_to = get_scalar_ghidra_type(cvtype.pointer)
         return get_or_add_pointer_type(self.api, points_to)
@@ -380,7 +383,7 @@ class PdbTypeImporter:
             type_name = vbase_ghidra_type.getName()
 
             vbase_ghidra_pointer = get_or_add_pointer_type(self.api, vbase_ghidra_type)
-            vbase_ghidra_pointer_typedef = TypedefDataType(
+            vbase_ghidra_pointer_typedef: DataType = TypedefDataType(
                 vbase_ghidra_pointer.getCategoryPath(),
                 f"{type_name}PtrOffset",
                 vbase_ghidra_pointer,
@@ -467,7 +470,9 @@ class PdbTypeImporter:
                     component.type,
                     -1,  # set to -1 for fixed-size components
                     component.name,  # name
-                    None,  # comment
+                    cast(
+                        str, None
+                    ),  # comment (the headers are lacking nullability information)
                 )
             except Exception as e:
                 raise StructModificationError(sanitized_name) from e
@@ -562,11 +567,11 @@ class PdbTypeImporter:
         category_path = category_path_of(sanitized_name.namespace_path)
 
         assert (
-            self.api.getCurrentProgram()
-            .getDataTypeManager()
-            .remove(existing_data_type, ConsoleTaskMonitor())
+            self.api.getCurrentProgram().getDataTypeManager().remove(existing_data_type)
         ), f"Failed to delete and re-create data type {sanitized_name}"
-        data_type = StructureDataType(category_path, sanitized_name, class_size)
+        data_type: DataType = StructureDataType(
+            category_path, str(sanitized_name), class_size
+        )
         data_type = (
             self.api.getCurrentProgram()
             .getDataTypeManager()

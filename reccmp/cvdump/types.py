@@ -198,7 +198,7 @@ class CvdumpTypesParser:
     )
 
     LF_FIELDLIST_ENUMERATE = re.compile(
-        r"list\[\d+\] = LF_ENUMERATE,.*value = (?P<value>\d+), name = '(?P<name>[^']+)'"
+        r"list\[\d+\] = LF_ENUMERATE,.*value = (?:\([\w_]*\)\s)?(?P<value>-?\d+)(?:\([\w_]*\))?, name = '(?P<name>[^']+)'"
     )
 
     LF_ARRAY_RE = re.compile(
@@ -234,7 +234,7 @@ class CvdumpTypesParser:
         (
             r"\s+Return type = (?P<return_type>[^,]+), Call type = (?P<call_type>[^\n]+)\n"
             r"\s+Func attr = (?P<func_attr>[^\n]+)\n"
-            r"\s+# Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+)"
+            r"\s+# Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+)"  # codespell:ignore
         )
     )
 
@@ -242,7 +242,7 @@ class CvdumpTypesParser:
         (
             r"\s+Return type = (?P<return_type>[^,]+), Class type = (?P<class_type>[^,]+), This type = (?P<this_type>[^,]+),\s*\n"
             r"\s+Call type = (?P<call_type>[^,]+), Func attr = (?P<func_attr>[^\n,]+)\n"
-            r"\s+Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+), This adjust = (?P<this_adjust>[0-9a-f]+)"
+            r"\s+Parms = (?P<num_params>\d+), Arg list type = (?P<arg_list_type>\w+), This adjust = (?P<this_adjust>[0-9a-f]+)"  # codespell:ignore
         )
     )
 
@@ -251,7 +251,7 @@ class CvdumpTypesParser:
     LF_ENUM_NAME_RE = re.compile(r"^\s*enum name = (?P<name>.+)$")
 
     LF_ENUM_TYPES = re.compile(
-        r"^\s*type = (?P<underlying_type>\S+) field list type (?P<field_type>0x\w{4})$"
+        r"^\s*type = (?P<underlying_type>\S+) field list type (?P<field_type>0x\w+)$"
     )
     LF_ENUM_UDT = re.compile(r"^\s*UDT\((?P<udt>0x\w+)\)$")
     LF_UNION_LINE = re.compile(
@@ -356,7 +356,9 @@ class CvdumpTypesParser:
         if obj is None:
             raise CvdumpKeyError(type_key)
 
-        if obj.get("type") == "LF_POINTER":
+        obj_type = obj.get("type")
+
+        if obj_type == "LF_POINTER":
             return self.get(CVInfoTypeEnum.T_32PVOID)
 
         if obj.get("is_forward_ref", False):
@@ -370,7 +372,7 @@ class CvdumpTypesParser:
             return self.get(forward_ref)
 
         # These type references are just a wrapper around a scalar
-        if obj.get("type") == "LF_ENUM":
+        if obj_type == "LF_ENUM":
             underlying_type = obj.get("underlying_type")
             if underlying_type is None:
                 raise CvdumpKeyError(f"Missing 'underlying_type' in {obj}")
@@ -378,10 +380,13 @@ class CvdumpTypesParser:
             return self.get(underlying_type)
 
         # Else it is not a forward reference, so build out the object here.
-        if obj.get("type") == "LF_ARRAY":
+        if obj_type == "LF_ARRAY":
             members = self._mock_array_members(obj)
-        else:
+        elif obj_type in ("LF_CLASS", "LF_STRUCTURE", "LF_UNION", "LF_FIELDLIST"):
             members = self._get_field_list(obj)
+        else:
+            # e.g. obj_type == "LF_PROCEDURE"
+            members = None
 
         return TypeInfo(
             key=type_key,
@@ -439,6 +444,23 @@ class CvdumpTypesParser:
         ), "Called get_scalar_gapless() on a type without size"
 
         scalars = self.get_scalars(type_key)
+
+        # Deduplicate overlapping scalars that come from union members.
+        # get_scalars() dedupes union members at the outermost level only:
+        # if a union has branches whose inner members span different
+        # byte offsets (e.g. DEVMODE's union of POINTL vs four shorts),
+        # the flattened scalars from one branch can overlap with the
+        # other branch. Sort by offset, then pick the largest-size scalar
+        # at each offset and skip any subsequent scalar that falls within
+        # the range we've already claimed.
+        scalars = sorted(scalars, key=lambda s: (s.offset, -s.size))
+        deduped: list[ScalarType] = []
+        next_offset = 0
+        for scalar in scalars:
+            if scalar.offset >= next_offset:
+                deduped.append(scalar)
+                next_offset = scalar.offset + scalar.size
+        scalars = deduped
 
         output: list[ScalarType] = []
         last_extent = total_size

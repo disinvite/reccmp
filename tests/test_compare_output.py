@@ -51,7 +51,7 @@ def to_report(compare: Compare) -> ReccmpStatusReport:
 
 
 def get_udiff(entity: ReccmpComparedEntity) -> CombinedDiffOutput | None:
-    """This is here for mypy type coersion and to protect against
+    """This is here for mypy type coercion and to protect against
     changes to the ReccmpStatusReport structure."""
     return entity.udiff
 
@@ -166,6 +166,9 @@ def test_compare_function():
     assert e is not None
     assert e.accuracy == 1.0
     assert e.is_stub is False
+
+    # The type round-trips through serialization as the EntityType enum.
+    assert e.type == EntityType.FUNCTION
 
     # String representation of address. No padding.
     assert e.orig_addr == "0x0"
@@ -353,6 +356,9 @@ def test_compare_vtable_match():
     e = report.entities["0x1"]
     assert e is not None
     assert e.accuracy == 1.0
+
+    # The vtable type round-trips through serialization.
+    assert e.type == EntityType.VTABLE
 
     udiff = get_udiff(e)
     assert udiff is not None

@@ -16,8 +16,6 @@ from reccmp.project.config import (
     UserFile,
 )
 from reccmp.project.detect import (
-    detect_project,
-    DetectWhat,
     RecCmpProject,
     RecCmpPartialTarget,
 )
@@ -29,8 +27,7 @@ from reccmp.project.error import (
     UnknownRecCmpTargetException,
 )
 from reccmp.formats import PEImage
-
-LEGO1_SHA256 = "14645225bbe81212e9bc1919cd8a692b81b8622abb6561280d99b0fc4151ce17"
+from .constants import LEGO1_SHA256
 
 
 def test_project_loading_no_files(tmp_path_factory):
@@ -278,25 +275,6 @@ def test_project_runtime_target(tmp_path_factory, binfile: PEImage):
         project.get("TEST")
 
 
-def test_project_original_detection(tmp_path_factory, binfile: PEImage):
-    project_root = tmp_path_factory.mktemp("project")
-    (project_root / "reccmp-project.yml").write_text(textwrap.dedent(f"""\
-            targets:
-              LEGO1:
-                filename: LEGO1.dll
-                source-root: sources
-                hash:
-                  sha256: {LEGO1_SHA256}
-            """))
-    bin_path = binfile.filepath
-    detect_project(
-        project_directory=project_root,
-        search_path=[bin_path.parent],
-        detect_what=DetectWhat.ORIGINAL,
-    )
-    assert (project_root / "reccmp-user.yml").is_file()
-
-
 def test_project_creation(tmp_path_factory, binfile: PEImage):
     project_root = tmp_path_factory.mktemp("project")
     bin_path = Path(binfile.filepath)
@@ -357,6 +335,18 @@ def test_create_original_path_must_exist(tmp_path_factory):
     with pytest.raises(FileNotFoundError):
         create_project(
             project_directory=project_root, original_paths=[temp_dir / "nonexist.dll"]
+        )
+
+
+def test_create_dont_overwrite_cmake_files(tmp_path_factory, binfile: PEImage):
+    """Fail if a CMake project is already present"""
+    project_root = tmp_path_factory.mktemp("project")
+    bin_path = Path(binfile.filepath)
+    (project_root / "CMakeLists.txt").touch()
+
+    with pytest.raises(RecCmpProjectException):
+        create_project(
+            project_directory=project_root, original_paths=[bin_path], cmake=True
         )
 
 

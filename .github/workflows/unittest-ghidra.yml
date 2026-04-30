@@ -8,13 +8,13 @@ jobs:
     runs-on: 'ubuntu-latest'
 
     container:
-      image: blacktop/ghidra:12.0.2
+      image: blacktop/ghidra:12.0.4
       env:
         # not set by default for some reason
         GHIDRA_INSTALL_DIR: '/ghidra'
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     # We cannot reuse the fetch-deps step from the other unit tests because the cache is not shared if different
     # container images are used, see https://github.com/actions/cache/issues/1361#issuecomment-2611294058

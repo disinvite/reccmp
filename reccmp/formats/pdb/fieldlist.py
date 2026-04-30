@@ -26,25 +26,6 @@ class MethodProp(IntEnum):
 
 
 @dataclass(frozen=True)
-class FieldAttr:
-    """CV_fldattr_t, cvinfo.h. With macros from typeinfo.h"""
-
-    access: int
-    mprop: int
-
-    @classmethod
-    def from_bytes(cls, data: bytes, offset: int) -> tuple["FieldAttr", int]:
-        (raw,) = unpack_from("<H", data, offset=offset)
-        # access = FieldAccess(raw & 3)
-        # mprop = MethodProp((raw >> 2) & 7)
-        access = raw & 3
-        mprop = (raw >> 2) & 7
-        # TODO: Remaining bitflags.
-
-        return (cls(access, mprop), offset + 2)
-
-
-@dataclass(frozen=True)
 class FieldListLeaf:
     leaf_type: int
 
@@ -54,8 +35,12 @@ class LfBClass(FieldListLeaf):
     """0400: lfBClass / lfBClass_16t, cvinfo.h"""
 
     index: int
-    attr: FieldAttr
+    attr: int
     base_offset: int
+
+    @property
+    def access(self) -> int:
+        return self.attr & 3
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfBClass", int]:
@@ -65,13 +50,11 @@ class LfBClass(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            attr, offset = FieldAttr.from_bytes(data, offset)
-            (index,) = unpack_from("<I", data, offset=offset)
-            offset += 4
+            attr, index = unpack_from("<HI", data, offset=offset)
+            offset += 6
         else:
-            (index,) = unpack_from("<H", data, offset=offset)
-            offset += 2
-            attr, offset = FieldAttr.from_bytes(data, offset)
+            index, attr = unpack_from("<2H", data, offset=offset)
+            offset += 4
 
         base_offset, offset = read_packed_value(data, offset)
 
@@ -83,14 +66,14 @@ class LfVBClass(FieldListLeaf):
     """0401/0402: lfVBClass / lfVBClass_16t, cvinfo.h"""
 
     index: int
-    attr: FieldAttr
+    attr: int
     vbptr: int
     vbpoff: int
     vbind: int
 
     @property
     def access(self) -> int:
-        return self.attr.access
+        return self.attr & 3
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfVBClass", int]:
@@ -100,13 +83,11 @@ class LfVBClass(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            attr, offset = FieldAttr.from_bytes(data, offset)
-            index, vbptr = unpack_from("<2I", data, offset=offset)
-            offset += 8
+            attr, index, vbptr = unpack_from("<H2I", data, offset=offset)
+            offset += 10
         else:
-            index, vbptr = unpack_from("<2H", data, offset=offset)
-            offset += 4
-            attr, offset = FieldAttr.from_bytes(data, offset)
+            index, vbptr, attr = unpack_from("<3H", data, offset=offset)
+            offset += 6
 
         # TODO: order?
         vbpoff, offset = read_packed_value(data, offset)
@@ -119,20 +100,19 @@ class LfVBClass(FieldListLeaf):
 class LfEnumerate(FieldListLeaf):
     """0403: lfEnumerate, cvinfo.h"""
 
-    attr: FieldAttr
+    attr: int
     value: int
     name: str
 
     @property
     def access(self) -> int:
-        return self.attr.access
+        return self.attr & 3
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfEnumerate", int]:
-        (leaf_type,) = unpack_from("<H", data, offset=offset)
-        offset += 2
+        leaf_type, attr = unpack_from("<2H", data, offset=offset)
+        offset += 4
 
-        attr, offset = FieldAttr.from_bytes(data, offset)
         value, offset = read_packed_value(data, offset)
         name, offset = read_pascal_string(data, offset)
 
@@ -144,13 +124,13 @@ class LfMember(FieldListLeaf):
     """0406: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
-    attr: FieldAttr
+    attr: int
     field_offset: int
     name: str
 
     @property
     def access(self) -> int:
-        return self.attr.access
+        return self.attr & 3
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfMember", int]:
@@ -160,13 +140,11 @@ class LfMember(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            attr, offset = FieldAttr.from_bytes(data, offset)
-            (index,) = unpack_from("<I", data, offset=offset)
-            offset += 4
+            attr, index = unpack_from("<HI", data, offset=offset)
+            offset += 6
         else:
-            (index,) = unpack_from("<H", data, offset=offset)
-            offset += 2
-            attr, offset = FieldAttr.from_bytes(data, offset)
+            index, attr = unpack_from("<2H", data, offset=offset)
+            offset += 4
 
         field_offset, offset = read_packed_value(data, offset)
         name, offset = read_pascal_string(data, offset)
@@ -179,12 +157,12 @@ class LfStaticMember(FieldListLeaf):
     """0407: lfMember / lfMember_16t, cvinfo.h"""
 
     index: int
-    attr: FieldAttr
+    attr: int
     name: str
 
     @property
     def access(self) -> int:
-        return self.attr.access
+        return self.attr & 3
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfStaticMember", int]:
@@ -194,13 +172,11 @@ class LfStaticMember(FieldListLeaf):
         is32 = leaf_type & 0x1000 == 0x1000
 
         if is32:
-            attr, offset = FieldAttr.from_bytes(data, offset)
-            (index,) = unpack_from("<I", data, offset=offset)
-            offset += 4
+            attr, index = unpack_from("<HI", data, offset=offset)
+            offset += 6
         else:
-            (index,) = unpack_from("<H", data, offset=offset)
-            offset += 2
-            attr, offset = FieldAttr.from_bytes(data, offset)
+            index, attr = unpack_from("<2H", data, offset=offset)
+            offset += 4
 
         name, offset = read_pascal_string(data, offset)
 
@@ -273,18 +249,18 @@ class LfVFuncTab(FieldListLeaf):
 class LfOneMethod(FieldListLeaf):
     """040c: lfOneMethod / lfOneMethod_16t, cvinfo.h"""
 
-    attr: FieldAttr
+    attr: int
     index: int
     vbaseoff: int
     name: str
 
     @property
     def access(self) -> int:
-        return self.attr.access
+        return self.attr & 3
 
     @property
     def mprop(self) -> int:
-        return self.attr.mprop
+        return (self.attr >> 2) & 7
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> tuple["LfOneMethod", int]:
@@ -292,13 +268,12 @@ class LfOneMethod(FieldListLeaf):
         offset += 2
         is32 = leaf_type & 0x1000 == 0x1000
 
-        attr, offset = FieldAttr.from_bytes(data, offset)
-
-        fmt = "<I" if is32 else "<H"
-        (index,) = unpack_from(fmt, data, offset=offset)
+        fmt = "<HI" if is32 else "<2H"
+        attr, index = unpack_from(fmt, data, offset=offset)
         offset += calcsize(fmt)
 
-        if attr.mprop in (MethodProp.INTRODUCING_VIRTUAL, MethodProp.PURE_INTRO):
+        mprop = (attr >> 2) & 7
+        if mprop in (MethodProp.INTRODUCING_VIRTUAL, MethodProp.PURE_INTRO):
             (vbaseoff,) = unpack_from("<I", data, offset=offset)
             offset += 4
         else:

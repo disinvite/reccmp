@@ -76,7 +76,7 @@ class LfPointerAttr(Flag):
 
 
 @dataclass(frozen=True)
-class LfMethod:
+class MethodListMethod:
     attr: int  # TODO: FieldAttr
     index: int
     vbaseoff: int
@@ -84,7 +84,7 @@ class LfMethod:
     @classmethod
     def from_bytes(
         cls, data: bytes, offset: int = 0, *, is32: bool = False
-    ) -> Iterator["LfMethod"]:
+    ) -> Iterator["MethodListMethod"]:
         while offset < len(data):
             if is32:
                 attr, index = unpack_from("<H2xI", data, offset=offset)
@@ -107,7 +107,7 @@ class LfMethod:
 class LfMethodList:
     """lfArray_16t, cvinfo.h"""
 
-    methods: tuple[LfMethod, ...]
+    methods: tuple[MethodListMethod, ...]
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfMethodList":
@@ -116,7 +116,7 @@ class LfMethodList:
         is32 = leaf_type & 0x1000 == 0x1000
 
         methods = tuple(
-            LfMethod.from_bytes(data[: leaf_size + 2], offset=offset, is32=is32)
+            MethodListMethod.from_bytes(data[: leaf_size + 2], offset=offset, is32=is32)
         )
         return cls(methods)
 

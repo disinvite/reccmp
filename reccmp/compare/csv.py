@@ -62,6 +62,7 @@ class CsvValuesType(TypedDict):
     name: NotRequired[str]
     size: NotRequired[int]
     symbol: NotRequired[str]
+    encoding: NotRequired[str]
 
     # Set implicitly via type for now
     stub: NotRequired[bool]
@@ -131,6 +132,9 @@ def _convert_attrs(values: Iterable[tuple[str, str]]) -> CsvValuesType:
 
         if key == "size":
             output["size"] = int(value)
+
+        if key == "encoding":
+            output["encoding"] = value
 
         if key == "type":
             type_name = value.strip().lower()

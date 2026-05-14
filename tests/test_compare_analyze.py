@@ -343,6 +343,33 @@ def test_complete_partial_strings_unicode_exception(db: EntityDb):
     assert e.name is None
 
 
+def test_complete_partial_strings_entity_encoding(db: EntityDb):
+    """If the string entity has an encoding, it overrides the bin_encoding setting."""
+    binfile = Mock(spec=[])
+    binfile.read_string = Mock(return_value="你吃饭了吗".encode("gb2312"))
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.STRING, encoding="gb2312")
+        batch.set(ImageId.ORIG, 200, type=EntityType.STRING)
+
+    # No project-wide encoding value, assumes latin1.
+    complete_partial_strings(db, ImageId.ORIG, binfile)
+
+    correct_string = '"你吃饭了吗"'.encode("unicode_escape").decode()
+
+    # Decoded correctly
+    e = db.get(ImageId.ORIG, 100)
+    assert e is not None
+    assert e.size(ImageId.ORIG) == 11
+    assert e.name == correct_string
+
+    # Decoded incorrectly
+    e = db.get(ImageId.ORIG, 200)
+    assert e is not None
+    assert e.size(ImageId.ORIG) == 11
+    assert e.name != correct_string
+
+
 def test_create_imports(db: EntityDb):
     """Should create IMPORT entities for imported functions using names or ordinals."""
     binfile = Mock(spec=[])

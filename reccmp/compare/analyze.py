@@ -233,7 +233,9 @@ def complete_partial_strings(
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
     with db.batch() as batch:
-        for addr, string_size, is_widechar in get_strings_without_data(db, image_id):
+        for addr, string_size, is_widechar, entity_encoding in get_strings_without_data(
+            db, image_id
+        ):
             try:
                 if is_widechar:
                     if string_size is not None:
@@ -252,7 +254,7 @@ def complete_partial_strings(
                         raw = binfile.read_string(addr)
                         string_size = len(raw) + 1
 
-                    decoded_string = raw.decode(encoding)
+                    decoded_string = raw.decode(entity_encoding or encoding)
 
                 batch.set(
                     image_id,

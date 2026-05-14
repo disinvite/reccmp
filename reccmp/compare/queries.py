@@ -162,7 +162,7 @@ def get_floats_without_data(
 
 def get_strings_without_data(
     db: EntityDb, image_id: ImageId
-) -> Iterator[tuple[int, int | None, bool]]:
+) -> Iterator[tuple[int, int | None, bool, str | None]]:
     assert image_id in (ImageId.ORIG, ImageId.RECOMP), "Invalid image id"
 
     for ent in db.all(image_id):
@@ -177,9 +177,10 @@ def get_strings_without_data(
 
         size = ent.size(image_id)
         addr = ent.addr(image_id)
+        encoding = ent.get("encoding")
 
         if isinstance(addr, int):
-            yield (addr, size, type_ == EntityType.WIDECHAR)
+            yield (addr, size, type_ == EntityType.WIDECHAR, encoding)
 
 
 def get_referencing_entity_matches(db: EntityDb) -> Iterator[tuple[int, int]]:

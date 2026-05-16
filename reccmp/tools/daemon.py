@@ -1,6 +1,7 @@
 import argparse
 import asyncio
-from aiohttp import web
+from aiohttp import ClientSession, web
+from yarl import URL
 from watchfiles import awatch
 from reccmp.compare import Compare
 from reccmp.project.detect import (
@@ -114,12 +115,13 @@ async def handle_ready(request):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="web")
+    parser.add_argument("--port", type=int, required=False, default=8080)
+    parser.add_argument("--daemon", action="store_true", default=False)
     argparse_add_project_target_args(parser)
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
+def server_main(args: argparse.Namespace):
     target = argparse_parse_project_target(args=args)
 
     app = web.Application()
@@ -136,7 +138,26 @@ def main():
             web.get("/addr/{addr}", handle_addr, name="get_addr"),
         ]
     )
-    web.run_app(app, host="127.0.0.1")
+    web.run_app(app, host="127.0.0.1", port=args.port)
+
+
+async def client_main(args: argparse.Namespace):
+    base_url = URL.build(scheme="http", host="127.0.0.1", port=args.port)
+    async with ClientSession(base_url=base_url) as session:
+        async with session.get("/list") as response:
+            jason = await response.json()
+            for ent in jason:
+                print(f"{ent['addr']:#08x}  {ent['name']}")
+
+
+def main():
+    args = parse_args()
+
+    if args.daemon:
+        server_main(args)
+        return
+
+    asyncio.run(client_main(args))
 
 
 if __name__ == "__main__":

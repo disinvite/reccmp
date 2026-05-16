@@ -8,3 +8,5 @@ pydemumble==0.0.1
 # see: https://github.com/capstone-engine/capstone/issues/2223
 setuptools ; python_version >= "3.12"
 pyghidra==2.2.0
+aiohttp==3.13.5
+asyncio==4.0.0

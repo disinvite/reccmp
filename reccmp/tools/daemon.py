@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from aiohttp import web
+from watchfiles import awatch
 from reccmp.compare import Compare
 from reccmp.project.detect import (
     RecCmpTarget,
@@ -28,12 +29,33 @@ class AppState:
 
 
 STATE_KEY = web.AppKey("app_state", AppState)
+WATCHER_KEY = web.AppKey("watcher", asyncio.Task)
 
 
 async def start_reccmp(app):
     state: AppState = app[STATE_KEY]
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, state.reset)
+
+
+async def watch_for_recompile(state: AppState):
+    try:
+        async for _ in awatch(state.target.recompiled_path):
+            print("Rebuilding...")
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, state.reset)
+    except asyncio.CancelledError:
+        pass
+
+
+async def start_watching(app):
+    state: AppState = app[STATE_KEY]
+    app[WATCHER_KEY] = asyncio.create_task(watch_for_recompile(state))
+
+
+async def stop_watching(app):
+    app[WATCHER_KEY].cancel()
+    await app[WATCHER_KEY]
 
 
 async def handle_list(request):
@@ -103,6 +125,8 @@ def main():
     app = web.Application()
     app[STATE_KEY] = AppState(target)
     app.on_startup.append(start_reccmp)
+    app.on_startup.append(start_watching)
+
     app.add_routes(
         [
             web.get("/", handle_list),

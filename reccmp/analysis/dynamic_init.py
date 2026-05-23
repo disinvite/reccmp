@@ -51,7 +51,7 @@ class InitFunctionAnalysis(ParseAsm):
                 break
 
 
-def get_instruction_fingerprint(
+def get_function_fingerprint(
     db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
 ) -> tuple[int, ...]:
     collected_addrs = []
@@ -62,13 +62,20 @@ def get_instruction_fingerprint(
         collected_addrs.append(addr)
         return None
 
-    addr_test = create_valid_addr_lookup(db, ImageId.ORIG, binfile)
-    zzz = InitFunctionAnalysis(addr_test, lookup, True)
-    zzz.analyze(binfile.read(addr, 64), addr)
+    # 64 bytes chosen arbitrarily.
+    # These functions are typically short, and we only need
+    # to read enough to create the fingerprint.
+    raw = binfile.read(addr, 64)
+
+    addr_test = create_valid_addr_lookup(db, image_id, binfile)
+    InitFunctionAnalysis(addr_test, lookup, True).analyze(raw, addr)
 
     normalized_addrs = []
     for ca in collected_addrs:
         ent = db.get(image_id, ca)
+        # Only matched entities are candidates for the fingerprint
+        # because we have an address in both address spaces.
+        # TODO: ent.get("type") == EntityType.DATA?
         if ent and ent.matched:
             normalized_addr = ent.addr(ImageId.ORIG)
             assert isinstance(normalized_addr, int)
@@ -83,6 +90,7 @@ def read_dwords_from_span(binfile: PEImage, span: range) -> Iterator[int]:
 
 
 def get_xca_range(db: EntityDb, image_id: ImageId) -> range | None:
+    # TODO: Parameterize for ___x*_a/z: c,t,p,i
     xca = None
     xcz = None
     # TODO: could exploit the fact that this is at the beginning of .data
@@ -124,7 +132,7 @@ def read_xca(
     for xc_addr in funcs:
         if xc_addr != 0:
             was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
-            fp = get_instruction_fingerprint(db, image_id, binfile, real_addr)
+            fp = get_function_fingerprint(db, image_id, binfile, real_addr)
             if fp:
                 fingerprints[real_addr] = fp
             if was_thunk:

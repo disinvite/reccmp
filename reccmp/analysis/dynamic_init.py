@@ -52,7 +52,7 @@ class InitFunctionAnalysis(ParseAsm):
 
 
 def get_instruction_fingerprint(
-    db: EntityDb, binfile: PEImage, image_id: ImageId, addr: int
+    db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
 ) -> tuple[int, ...]:
     collected_addrs = []
 
@@ -114,7 +114,7 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
 
 
 def read_xca(
-    db: EntityDb, binfile: PEImage, image_id: ImageId, span: range
+    db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
 ) -> DynamicInitResult:
     funcs = tuple(read_dwords_from_span(binfile, span))
 
@@ -124,7 +124,7 @@ def read_xca(
     for xc_addr in funcs:
         if xc_addr != 0:
             was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
-            fp = get_instruction_fingerprint(db, binfile, image_id, real_addr)
+            fp = get_instruction_fingerprint(db, image_id, binfile, real_addr)
             if fp:
                 fingerprints[real_addr] = fp
             if was_thunk:
@@ -133,17 +133,22 @@ def read_xca(
     return DynamicInitResult(fingerprints, thunks)
 
 
+def get_it(
+    db: EntityDb, image_id: ImageId, binfile: PEImage
+) -> DynamicInitResult | None:
+    xca_range = get_xca_range(db, image_id)
+    if xca_range is None:
+        return None
+
+    return read_xca(db, image_id, binfile, xca_range)
+
+
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    xca_orig_span = get_xca_range(db, ImageId.ORIG)
-    xca_recomp_span = get_xca_range(db, ImageId.RECOMP)
-    if not xca_orig_span or not xca_recomp_span:
+    dyn_orig = get_it(db, ImageId.ORIG, orig_bin)
+    dyn_recomp = get_it(db, ImageId.RECOMP, recomp_bin)
+
+    if not dyn_orig or not dyn_recomp:
         return
-
-    assert isinstance(xca_orig_span, range)
-    assert isinstance(xca_recomp_span, range)
-
-    dyn_orig = read_xca(db, orig_bin, ImageId.ORIG, xca_orig_span)
-    dyn_recomp = read_xca(db, recomp_bin, ImageId.RECOMP, xca_orig_span)
 
     invert_orig = dict((fp, addr) for addr, fp in dyn_orig.fingerprints.items())
     invert_recomp = dict((fp, addr) for addr, fp in dyn_recomp.fingerprints.items())
@@ -171,5 +176,3 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
                         name="$DynamicInitializerThunk",
                     )
                     batch.match(orig_thunk, recomp_thunk)
-
-    # breakpoint()

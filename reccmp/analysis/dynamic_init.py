@@ -1,4 +1,5 @@
 import struct
+from dataclasses import dataclass
 from typing import Iterator
 from typing_extensions import Buffer
 from reccmp.compare.asm.const import JUMP_MNEMONICS
@@ -12,6 +13,20 @@ from reccmp.compare.functions import create_valid_addr_lookup
 from reccmp.formats import PEImage
 from reccmp.types import EntityType, ImageId
 from reccmp.compare.db import EntityDb
+
+
+@dataclass
+class DynamicInitResult:
+    """Result from analyzing functions between the labels ___xc_a and ___xc_z."""
+
+    fingerprints: dict[int, tuple[int, ...]]
+    """Maps function address -> (sorted) list of matched entities used in
+    the function, normalized to orig address space. These fingerprints are
+    used to match initializer functions in orig and recomp."""
+
+    thunks: dict[int, int]
+    """Maps thunked initializer function to the thunk address.
+    The thunk is what actually appeared in the ___xc_a/z list."""
 
 
 class InitFunctionAnalysis(ParseAsm):
@@ -62,10 +77,15 @@ def get_instruction_fingerprint(
     return tuple(normalized_addrs)
 
 
-def get_xca(db: EntityDb, image_id: ImageId) -> tuple[int | None, int | None]:
+def read_dwords_from_span(binfile: PEImage, span: range) -> Iterator[int]:
+    for (addr,) in struct.iter_unpack("<I", binfile.read(span.start, len(span))):
+        yield addr
+
+
+def get_xca_range(db: EntityDb, image_id: ImageId) -> range | None:
     xca = None
     xcz = None
-    # TODO: could exploit the fact that this is in .data
+    # TODO: could exploit the fact that this is at the beginning of .data
     for ent in db.all(image_id):
         if ent.get("name") == "___xc_a":
             xca = ent.addr(image_id)
@@ -73,78 +93,82 @@ def get_xca(db: EntityDb, image_id: ImageId) -> tuple[int | None, int | None]:
             xcz = ent.addr(image_id)
 
         if xca and xcz:
-            break
+            return range(xca, xcz)
 
-    return (xca, xcz)
+    return None
 
 
 def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
+    """If there is a 5-byte JMP or CALL instruction at the given address,
+    follow it by calculating the destination address.
+    Returns either (True, jmp_destination) or (False, starting_addr)."""
     jmp = binfile.read(addr, 5)
+    # Check for CALL (0xE8) or JMP (0xE9) opcodes.
     if jmp[0] in (0xE8, 0xE9):
         (offset,) = struct.unpack("<I", jmp[1:])
+        # Add 5 because the offset is based on the address of
+        # the *next* instruction after the JMP or CALL.
         return (True, addr + 5 + offset)
 
     return (False, addr)
 
 
-def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    # Get ___xc_a in each image.
-    # Match those.
-    # Create functions for each.
-    # Analyze functions and collect "fingerprint"
-    # Match according to fingerprint (depending on previously matched functions/vars)
+def read_xca(
+    db: EntityDb, binfile: PEImage, image_id: ImageId, span: range
+) -> DynamicInitResult:
+    funcs = tuple(read_dwords_from_span(binfile, span))
 
-    xca_orig_raw = get_xca(db, ImageId.ORIG)
-    xca_recomp_raw = get_xca(db, ImageId.RECOMP)
-    if not all(xca_orig_raw) or not all(xca_recomp_raw):
+    fingerprints = {}
+    thunks = {}
+
+    for xc_addr in funcs:
+        if xc_addr != 0:
+            was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
+            fp = get_instruction_fingerprint(db, binfile, image_id, real_addr)
+            if fp:
+                fingerprints[real_addr] = fp
+            if was_thunk:
+                thunks[real_addr] = xc_addr
+
+    return DynamicInitResult(fingerprints, thunks)
+
+
+def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
+    xca_orig_span = get_xca_range(db, ImageId.ORIG)
+    xca_recomp_span = get_xca_range(db, ImageId.RECOMP)
+    if not xca_orig_span or not xca_recomp_span:
         return
 
-    # TODO: lol
-    assert isinstance(xca_orig_raw[0], int)
-    assert isinstance(xca_orig_raw[1], int)
-    assert isinstance(xca_recomp_raw[0], int)
-    assert isinstance(xca_recomp_raw[1], int)
-    xca_orig = range(xca_orig_raw[0], xca_orig_raw[1])
-    xca_recomp = range(xca_recomp_raw[0], xca_recomp_raw[1])
+    assert isinstance(xca_orig_span, range)
+    assert isinstance(xca_recomp_span, range)
 
-    def read_xc(binfile: PEImage, xca: range) -> Iterator[int]:
-        for (addr,) in struct.iter_unpack("<I", binfile.read(xca.start, len(xca))):
-            yield addr
+    dyn_orig = read_xca(db, orig_bin, ImageId.ORIG, xca_orig_span)
+    dyn_recomp = read_xca(db, recomp_bin, ImageId.RECOMP, xca_orig_span)
 
-    orig_funcs = tuple(read_xc(orig_bin, xca_orig))
-    recomp_funcs = tuple(read_xc(recomp_bin, xca_recomp))
-
-    orig_xyz = {}
-    recomp_xyz = {}
-
-    for xc_addr in orig_funcs:
-        if xc_addr != 0:
-            was_thunk, real_addr = unwrap_jump(orig_bin, xc_addr)
-            x = get_instruction_fingerprint(db, orig_bin, ImageId.ORIG, real_addr)
-            if x:
-                orig_xyz[x] = (real_addr, xc_addr if was_thunk else None)
-
-    for xc_addr in recomp_funcs:
-        if xc_addr != 0:
-            was_thunk, real_addr = unwrap_jump(recomp_bin, xc_addr)
-            x = get_instruction_fingerprint(db, recomp_bin, ImageId.RECOMP, real_addr)
-            if x:
-                recomp_xyz[x] = (real_addr, xc_addr if was_thunk else None)
+    invert_orig = dict((fp, addr) for addr, fp in dyn_orig.fingerprints.items())
+    invert_recomp = dict((fp, addr) for addr, fp in dyn_recomp.fingerprints.items())
 
     with db.batch() as batch:
-        for fingerprint, (orig_addr, orig_thunk) in orig_xyz.items():
+        for fingerprint, orig_addr in invert_orig.items():
             batch.set(
-                ImageId.ORIG, orig_addr, type=EntityType.FUNCTION, name="Initialize"
+                ImageId.ORIG,
+                orig_addr,
+                type=EntityType.FUNCTION,
+                name="$DynamicInitializer",
             )
-            if fingerprint in recomp_xyz:
-                recomp_addr, recomp_thunk = recomp_xyz[fingerprint]
+
+            if fingerprint in invert_recomp:
+                recomp_addr = invert_recomp[fingerprint]
                 batch.match(orig_addr, recomp_addr)
-                if orig_thunk and recomp_thunk:
+
+                if orig_addr in dyn_orig.thunks and recomp_addr in dyn_recomp.thunks:
+                    orig_thunk = dyn_orig.thunks[orig_addr]
+                    recomp_thunk = dyn_recomp.thunks[recomp_addr]
                     batch.set(
                         ImageId.ORIG,
                         orig_thunk,
                         type=EntityType.FUNCTION,
-                        name="Initialize",
+                        name="$DynamicInitializerThunk",
                     )
                     batch.match(orig_thunk, recomp_thunk)
 

@@ -157,8 +157,13 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
     if not dyn_orig or not dyn_recomp:
         return
 
-    invert_orig = dict((fp, addr) for addr, fp in dyn_orig.fingerprints.items() if fp is not None)
-    invert_recomp = dict((fp, addr) for addr, fp in dyn_recomp.fingerprints.items() if fp is not None)
+    # Don't match using blank fingerprints
+    invert_orig = dict(
+        (fp, addr) for addr, fp in dyn_orig.fingerprints.items() if fp is not None
+    )
+    invert_recomp = dict(
+        (fp, addr) for addr, fp in dyn_recomp.fingerprints.items() if fp is not None
+    )
 
     with db.batch() as batch:
         for fingerprint, orig_addr in invert_orig.items():

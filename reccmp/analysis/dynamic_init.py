@@ -121,7 +121,7 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     return (False, addr)
 
 
-def read_xca(
+def get_fingerprints_from_span(
     db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
 ) -> DynamicInitResult:
     funcs = tuple(read_dwords_from_span(binfile, span))
@@ -133,8 +133,7 @@ def read_xca(
         if xc_addr != 0:
             was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
             fp = get_function_fingerprint(db, image_id, binfile, real_addr)
-            if fp:
-                fingerprints[real_addr] = fp
+            fingerprints[real_addr] = fp
             if was_thunk:
                 thunks[real_addr] = xc_addr
 
@@ -148,7 +147,7 @@ def get_it(
     if xca_range is None:
         return None
 
-    return read_xca(db, image_id, binfile, xca_range)
+    return get_fingerprints_from_span(db, image_id, binfile, xca_range)
 
 
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
@@ -158,8 +157,8 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
     if not dyn_orig or not dyn_recomp:
         return
 
-    invert_orig = dict((fp, addr) for addr, fp in dyn_orig.fingerprints.items())
-    invert_recomp = dict((fp, addr) for addr, fp in dyn_recomp.fingerprints.items())
+    invert_orig = dict((fp, addr) for addr, fp in dyn_orig.fingerprints.items() if fp is not None)
+    invert_recomp = dict((fp, addr) for addr, fp in dyn_recomp.fingerprints.items() if fp is not None)
 
     with db.batch() as batch:
         for fingerprint, orig_addr in invert_orig.items():

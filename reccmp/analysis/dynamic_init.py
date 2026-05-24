@@ -44,6 +44,14 @@ _CRT_SETUP_ARRAY_BOUNDARIES = {
 }
 
 
+_CRT_FUNCTION_NAMES = {
+    CrtSetupArrayType.C_INIT: "$CRT_C_Initializer",
+    CrtSetupArrayType.CPP_INIT: "$CRT_CPP_Initializer",
+    CrtSetupArrayType.C_PRE_TERM: "$CRT_C_Pre-Terminator",
+    CrtSetupArrayType.C_TERM: "$CRT_C_Terminator",
+}
+
+
 @dataclass
 class CrtSetupArray:
     """Result from analyzing functions in a CRT setup array.
@@ -175,6 +183,8 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
 def analyze_crt_setup_functions(
     db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
 ) -> CrtSetupArray:
+    """Read the functions for a single CRT setup array and find the identifying "fingerprint"
+    of which variables are referenced."""
     funcs = tuple(read_crt_array(binfile, span))
 
     fingerprints = {}
@@ -191,16 +201,21 @@ def analyze_crt_setup_functions(
     return CrtSetupArray(fingerprints, thunks)
 
 
-def get_it(
+def analyze_crt_setup(
     db: EntityDb, image_id: ImageId, binfile: PEImage
-) -> Iterator[CrtSetupArray | None]:
+) -> Iterator[tuple[CrtSetupArrayType, CrtSetupArray | None]]:
+    """For the CRT setup arrays in the given binary, if the start and end labels are known,
+    analyze the functions in each array."""
     labels = find_crt_setup_labels(db, image_id)
-    for _, (label_start, label_end) in _CRT_SETUP_ARRAY_BOUNDARIES.items():
+    for array_type, (label_start, label_end) in _CRT_SETUP_ARRAY_BOUNDARIES.items():
         if label_start in labels and label_end in labels:
             array_range = range(labels[label_start], labels[label_end])
-            yield analyze_crt_setup_functions(db, image_id, binfile, array_range)
+            yield (
+                array_type,
+                analyze_crt_setup_functions(db, image_id, binfile, array_range),
+            )
         else:
-            yield None
+            yield (array_type, None)
 
 
 def create_crt_matches(
@@ -230,12 +245,16 @@ def create_crt_matches(
 
 
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    crt_orig = tuple(get_it(db, ImageId.ORIG, orig_bin))
-    crt_recomp = tuple(get_it(db, ImageId.RECOMP, recomp_bin))
+    crt_orig = tuple(analyze_crt_setup(db, ImageId.ORIG, orig_bin))
+    crt_recomp = tuple(analyze_crt_setup(db, ImageId.RECOMP, recomp_bin))
 
     matches = []
 
-    for orig_array, recomp_array in zip(crt_orig, crt_recomp):
+    for (orig_type, orig_array), (recomp_type, recomp_array) in zip(
+        crt_orig, crt_recomp
+    ):
+        # Safety
+        assert orig_type == recomp_type
         if orig_array and recomp_array:
             matches.extend(create_crt_matches(orig_array, recomp_array))
 
@@ -244,16 +263,19 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
             (ImageId.ORIG, crt_orig),
             (ImageId.RECOMP, crt_recomp),
         ):
-            for array in crt_arrays:
+            for array_type, array in crt_arrays:
                 if array is None:
                     continue
+
+                name = _CRT_FUNCTION_NAMES[array_type]
+                assert isinstance(name, str)
 
                 for addr in array.functions.keys():
                     batch.set(
                         image_id,
                         addr,
                         type=EntityType.FUNCTION,
-                        name="$DynamicInitializer",  # TODO: Should vary based on what array it is
+                        name=name,
                     )
 
                     if addr in array.thunks:
@@ -262,7 +284,7 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
                             image_id,
                             thunk_addr,
                             type=EntityType.FUNCTION,
-                            name="$DynamicInitializerThunk",  # TODO: Should vary based on what array it is
+                            name=name,
                         )
 
         for orig_addr, recomp_addr in matches:

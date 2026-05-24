@@ -1,7 +1,7 @@
 from reccmp.analysis.dynamic_init import (
     get_function_fingerprint,
     find_cpp_init_array,
-    get_fingerprints_from_crt_array,
+    analyze_crt_setup_functions,
 )
 from reccmp.compare.db import EntityDb
 from reccmp.formats import PEImage
@@ -90,7 +90,7 @@ def test_xca_fingerprints_empty(binfile: PEImage):
     db = EntityDb()
 
     # Baseline: no entities so all fingerprints are empty
-    result = get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    result = analyze_crt_setup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
 
     assert set(result.functions.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
     assert all(not v for v in result.functions.values())
@@ -104,7 +104,7 @@ def test_xca_fingerprints_matched(binfile: PEImage):
         batch.set(ImageId.ORIG, 0x10102B28, name="g_spawnLocations")
         batch.match(0x10102B28, 0x10102B28)
 
-    result = get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    result = analyze_crt_setup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
     assert result.functions[0x1001A6D0] == (0x10102B28,)
 
 
@@ -114,7 +114,7 @@ def test_xca_fingerprints_avoid_crash(binfile: PEImage):
     modified_range = range(XCA_XCZ_RANGE.start, XCA_XCZ_RANGE.stop - 1)
 
     try:
-        get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, modified_range)
+        analyze_crt_setup_functions(db, ImageId.ORIG, binfile, modified_range)
     # pylint: disable=bare-except
     except:
         assert False, "Should not throw"

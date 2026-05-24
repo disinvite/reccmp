@@ -1,3 +1,4 @@
+import enum
 import struct
 from dataclasses import dataclass
 from typing import Iterator
@@ -14,6 +15,33 @@ from reccmp.compare.functions import create_valid_addr_lookup
 from reccmp.formats import PEImage
 from reccmp.types import EntityType, ImageId
 from reccmp.compare.db import EntityDb
+
+
+class CrtSetupArrayType(enum.Enum):
+    C_INIT = enum.auto()
+    CPP_INIT = enum.auto()
+    C_PRE_TERM = enum.auto()
+    C_TERM = enum.auto()
+
+
+_CRT_SETUP_ARRAY_LABELS = (
+    "___xi_a",
+    "___xi_z",
+    "___xc_a",
+    "___xc_z",
+    "___xp_a",
+    "___xp_z",
+    "___xt_a",
+    "___xt_z",
+)
+
+
+_CRT_SETUP_ARRAY_BOUNDARIES = {
+    CrtSetupArrayType.C_INIT: ("___xi_a", "___xi_z"),
+    CrtSetupArrayType.CPP_INIT: ("___xc_a", "___xc_z"),
+    CrtSetupArrayType.C_PRE_TERM: ("___xp_a", "___xp_z"),
+    CrtSetupArrayType.C_TERM: ("___xt_a", "___xt_z"),
+}
 
 
 @dataclass
@@ -100,26 +128,32 @@ def get_function_fingerprint(
 
 
 def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
+    """Read 4-byte (dword) pointers from the specified range.
+    Excludes the first element, a zero."""
     try:
         for (addr,) in struct.iter_unpack("<I", binfile.read(span.start, len(span))):
-            yield addr
+            if addr != 0:
+                yield addr
     except struct.error:
         # Don't crash on bad user input: the start or end addrs are incorrect
         pass
 
 
 def find_cpp_init_array(db: EntityDb, image_id: ImageId) -> range | None:
-    xca = None
-    xcz = None
+    found = {}
 
     for ent in db.all(image_id):
-        if ent.get("name") == "___xc_a":
-            xca = ent.addr(image_id)
-        if ent.get("name") == "___xc_z":
-            xcz = ent.addr(image_id)
+        name = ent.get("name")
+        if name is not None and name in _CRT_SETUP_ARRAY_LABELS:
+            addr = ent.addr(image_id)
+            assert isinstance(addr, int)
+            found[name] = addr
 
-        if xca and xcz:
-            return range(xca, xcz)
+            if len(found) == len(_CRT_SETUP_ARRAY_LABELS):
+                break
+
+    if "___xc_a" in found and "___xc_z" in found:
+        return range(found["___xc_a"], found["___xc_z"])
 
     return None
 
@@ -129,6 +163,7 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     follow it by calculating the destination address.
     Returns either (True, jmp_destination) or (False, starting_addr)."""
     jmp = binfile.read(addr, 5)
+    # TODO: Probably wrong to assume CALLs are thunks
     # Check for CALL (0xE8) or JMP (0xE9) opcodes.
     if jmp[0] in (0xE8, 0xE9):
         (offset,) = struct.unpack("<I", jmp[1:])
@@ -139,7 +174,7 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     return (False, addr)
 
 
-def get_fingerprints_from_crt_array(
+def analyze_crt_setup_functions(
     db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
 ) -> CrtSetupArray:
     funcs = tuple(read_crt_array(binfile, span))
@@ -148,12 +183,12 @@ def get_fingerprints_from_crt_array(
     thunks = {}
 
     for xc_addr in funcs:
-        if xc_addr != 0:
-            was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
-            fp = get_function_fingerprint(db, image_id, binfile, real_addr)
-            fingerprints[real_addr] = fp
-            if was_thunk:
-                thunks[real_addr] = xc_addr
+        # n.b. The first value in the array is zero. It was excluded by read_crt_array.
+        was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
+        fp = get_function_fingerprint(db, image_id, binfile, real_addr)
+        fingerprints[real_addr] = fp
+        if was_thunk:
+            thunks[real_addr] = xc_addr
 
     return CrtSetupArray(fingerprints, thunks)
 
@@ -163,7 +198,14 @@ def get_it(db: EntityDb, image_id: ImageId, binfile: PEImage) -> CrtSetupArray |
     if cpp_init_range is None:
         return None
 
-    return get_fingerprints_from_crt_array(db, image_id, binfile, cpp_init_range)
+    return analyze_crt_setup_functions(db, image_id, binfile, cpp_init_range)
+
+
+class CrtSetup:
+    # ?
+    functions: list[tuple[ImageId, int, str]]
+    thunks: list[tuple[ImageId, int, int]]
+    matches: list[tuple[int, int]]
 
 
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):

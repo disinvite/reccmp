@@ -9,6 +9,7 @@ from reccmp.compare.asm.instgen import (
     SectionType,
 )
 from reccmp.compare.asm.parse import ParseAsm
+from reccmp.compare.asm.replacement import AddrTestProtocol
 from reccmp.compare.functions import create_valid_addr_lookup
 from reccmp.formats import PEImage
 from reccmp.types import EntityType, ImageId
@@ -29,7 +30,21 @@ class DynamicInitResult:
     The thunk is what actually appeared in the ___xc_a/z list."""
 
 
-class InitFunctionAnalysis(ParseAsm):
+class UsedAddressCollector(ParseAsm):
+    """Wraps the asm sanitize mechanism that detects pointers and address literals
+    used in the function. Instead of replacing the addresses, just store them
+    in a list for review."""
+
+    seen_addrs: list[int]
+    """List of addrs that would be replaced by a name or placeholder."""
+
+    def __init__(self, addr_test: AddrTestProtocol | None = None) -> None:
+        super().__init__(addr_test, None, True)
+        self.seen_addrs = []
+
+    def lookup(self, addr: int, exact: bool = False, indirect: bool = False) -> None:
+        self.seen_addrs.append(addr)
+
     def analyze(self, data: Buffer, start_addr: int):
         ig = InstructGen(bytes(data), start_addr, self.is_32bit)
 
@@ -45,8 +60,11 @@ class InitFunctionAnalysis(ParseAsm):
             if "0x" in inst.op_str and (
                 inst.mnemonic in JUMP_MNEMONICS or inst.size > 4 or not self.is_32bit
             ):
+                # Read the instruction and make calls to the lookup() function
                 self.sanitize(inst)
 
+            # The functions we are looking at should not have complex logic
+            # that creates multiple exits.
             if inst.mnemonic == "ret":
                 break
 
@@ -54,24 +72,17 @@ class InitFunctionAnalysis(ParseAsm):
 def get_function_fingerprint(
     db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
 ) -> tuple[int, ...]:
-    collected_addrs = []
-
-    # pylint: disable=unused-argument
-    # pylint: disable=useless-return
-    def lookup(addr: int, exact: bool = False, indirect: bool = False) -> str | None:
-        collected_addrs.append(addr)
-        return None
-
     # 64 bytes chosen arbitrarily.
     # These functions are typically short, and we only need
     # to read enough to create the fingerprint.
     raw = binfile.read(addr, 64)
 
     addr_test = create_valid_addr_lookup(db, image_id, binfile)
-    InitFunctionAnalysis(addr_test, lookup, True).analyze(raw, addr)
+    collector = UsedAddressCollector(addr_test)
+    collector.analyze(raw, addr)
 
     normalized_addrs = []
-    for ca in collected_addrs:
+    for ca in collector.seen_addrs:
         ent = db.get(image_id, ca)
         # Only matched entities are candidates for the fingerprint
         # because we have an address in both address spaces.

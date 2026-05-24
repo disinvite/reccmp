@@ -17,10 +17,13 @@ from reccmp.compare.db import EntityDb
 
 
 @dataclass
-class DynamicInitResult:
-    """Result from analyzing functions between the labels ___xc_a and ___xc_z."""
+class CrtSetupArray:
+    """Result from analyzing functions in a CRT setup array.
+    The functions within are called before main() is executed.
+    For example: addresses of C++ initializer functions are between
+    the labels ___xc_a and ___xc_z."""
 
-    fingerprints: dict[int, tuple[int, ...]]
+    functions: dict[int, tuple[int, ...]]
     """Maps function address -> (sorted) list of matched entities used in
     the function, normalized to orig address space. These fingerprints are
     used to match initializer functions in orig and recomp."""
@@ -60,7 +63,8 @@ class UsedAddressCollector(ParseAsm):
             if "0x" in inst.op_str and (
                 inst.mnemonic in JUMP_MNEMONICS or inst.size > 4 or not self.is_32bit
             ):
-                # Read the instruction and make calls to the lookup() function
+                # Reading the function will call the lookup() function
+                # and collect the addresses.
                 self.sanitize(inst)
 
             # The functions we are looking at should not have complex logic
@@ -95,16 +99,19 @@ def get_function_fingerprint(
     return tuple(normalized_addrs)
 
 
-def read_dwords_from_span(binfile: PEImage, span: range) -> Iterator[int]:
-    for (addr,) in struct.iter_unpack("<I", binfile.read(span.start, len(span))):
-        yield addr
+def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
+    try:
+        for (addr,) in struct.iter_unpack("<I", binfile.read(span.start, len(span))):
+            yield addr
+    except struct.error:
+        # Don't crash on bad user input: the start or end addrs are incorrect
+        pass
 
 
-def get_xca_range(db: EntityDb, image_id: ImageId) -> range | None:
-    # TODO: Parameterize for ___x*_a/z: c,t,p,i
+def find_cpp_init_array(db: EntityDb, image_id: ImageId) -> range | None:
     xca = None
     xcz = None
-    # TODO: could exploit the fact that this is at the beginning of .data
+
     for ent in db.all(image_id):
         if ent.get("name") == "___xc_a":
             xca = ent.addr(image_id)
@@ -132,10 +139,10 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     return (False, addr)
 
 
-def get_fingerprints_from_span(
+def get_fingerprints_from_crt_array(
     db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
-) -> DynamicInitResult:
-    funcs = tuple(read_dwords_from_span(binfile, span))
+) -> CrtSetupArray:
+    funcs = tuple(read_crt_array(binfile, span))
 
     fingerprints = {}
     thunks = {}
@@ -148,17 +155,15 @@ def get_fingerprints_from_span(
             if was_thunk:
                 thunks[real_addr] = xc_addr
 
-    return DynamicInitResult(fingerprints, thunks)
+    return CrtSetupArray(fingerprints, thunks)
 
 
-def get_it(
-    db: EntityDb, image_id: ImageId, binfile: PEImage
-) -> DynamicInitResult | None:
-    xca_range = get_xca_range(db, image_id)
-    if xca_range is None:
+def get_it(db: EntityDb, image_id: ImageId, binfile: PEImage) -> CrtSetupArray | None:
+    cpp_init_range = find_cpp_init_array(db, image_id)
+    if cpp_init_range is None:
         return None
 
-    return get_fingerprints_from_span(db, image_id, binfile, xca_range)
+    return get_fingerprints_from_crt_array(db, image_id, binfile, cpp_init_range)
 
 
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
@@ -170,10 +175,10 @@ def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage
 
     # Don't match using blank fingerprints
     invert_orig = dict(
-        (fp, addr) for addr, fp in dyn_orig.fingerprints.items() if fp is not None
+        (fp, addr) for addr, fp in dyn_orig.functions.items() if fp is not None
     )
     invert_recomp = dict(
-        (fp, addr) for addr, fp in dyn_recomp.fingerprints.items() if fp is not None
+        (fp, addr) for addr, fp in dyn_recomp.functions.items() if fp is not None
     )
 
     with db.batch() as batch:

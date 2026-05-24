@@ -1,7 +1,7 @@
 from reccmp.analysis.dynamic_init import (
     get_function_fingerprint,
-    get_xca_range,
-    get_fingerprints_from_span,
+    find_cpp_init_array,
+    get_fingerprints_from_crt_array,
 )
 from reccmp.compare.db import EntityDb
 from reccmp.formats import PEImage
@@ -43,34 +43,34 @@ def test_get_function_fingerprint_matched(binfile: PEImage):
 XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
 
 
-def test_get_xca_range_empty():
+def test_find_cpp_init_array_empty():
     db = EntityDb()
-    assert get_xca_range(db, ImageId.ORIG) is None
+    assert find_cpp_init_array(db, ImageId.ORIG) is None
 
 
-def test_get_xca_range_start_only():
+def test_find_cpp_init_array_start_only():
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
 
-    assert get_xca_range(db, ImageId.ORIG) is None
+    assert find_cpp_init_array(db, ImageId.ORIG) is None
 
 
-def test_get_xca_range_end_only():
+def test_find_cpp_init_array_end_only():
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.stop, name="___xc_z")
 
-    assert get_xca_range(db, ImageId.ORIG) is None
+    assert find_cpp_init_array(db, ImageId.ORIG) is None
 
 
-def test_get_xca_range_start_and_end():
+def test_find_cpp_init_array_start_and_end():
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.stop, name="___xc_z")
 
-    assert get_xca_range(db, ImageId.ORIG) == XCA_XCZ_RANGE
+    assert find_cpp_init_array(db, ImageId.ORIG) == XCA_XCZ_RANGE
 
 
 # Maps function addr to thunk.
@@ -90,10 +90,10 @@ def test_xca_fingerprints_empty(binfile: PEImage):
     db = EntityDb()
 
     # Baseline: no entities so all fingerprints are empty
-    result = get_fingerprints_from_span(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    result = get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
 
-    assert set(result.fingerprints.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
-    assert all(not v for v in result.fingerprints.values())
+    assert set(result.functions.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
+    assert all(not v for v in result.functions.values())
 
     assert tuple(result.thunks.items()) == XCA_THUNK_MAPPING
 
@@ -104,5 +104,17 @@ def test_xca_fingerprints_matched(binfile: PEImage):
         batch.set(ImageId.ORIG, 0x10102B28, name="g_spawnLocations")
         batch.match(0x10102B28, 0x10102B28)
 
-    result = get_fingerprints_from_span(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
-    assert result.fingerprints[0x1001A6D0] == (0x10102B28,)
+    result = get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    assert result.functions[0x1001A6D0] == (0x10102B28,)
+
+
+def test_xca_fingerprints_avoid_crash(binfile: PEImage):
+    db = EntityDb()
+    # Misaligned end address will cause struct.iter_unpack to raise struct.error.
+    modified_range = range(XCA_XCZ_RANGE.start, XCA_XCZ_RANGE.stop - 1)
+
+    try:
+        get_fingerprints_from_crt_array(db, ImageId.ORIG, binfile, modified_range)
+    # pylint: disable=bare-except
+    except:
+        assert False, "Should not throw"

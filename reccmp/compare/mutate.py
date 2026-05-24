@@ -4,7 +4,7 @@ These functions create or update entities using the current information in the d
 
 import logging
 from functools import cache
-from reccmp.analysis.crt_startup import variable_init_functions as VIF
+from reccmp.analysis.crt_startup import match_crt_startup as _match_crt_startup
 from reccmp.cvdump.demangler import (
     get_function_arg_string,
 )
@@ -166,5 +166,6 @@ def unique_names_for_overloaded_functions(db: EntityDb):
                 batch.set(ImageId.RECOMP, func.recomp_addr, computed_name=new_name)
 
 
-def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    VIF(db, orig_bin, recomp_bin)
+def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
+    # Alias to keep this module's scope small
+    _match_crt_startup(db, orig_bin, recomp_bin)

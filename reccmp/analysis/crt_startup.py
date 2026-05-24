@@ -17,14 +17,14 @@ from reccmp.types import EntityType, ImageId
 from reccmp.compare.db import EntityDb
 
 
-class CrtSetupArrayType(enum.Enum):
+class CrtStartupArrayType(enum.Enum):
     C_INIT = enum.auto()
     CPP_INIT = enum.auto()
     C_PRE_TERM = enum.auto()
     C_TERM = enum.auto()
 
 
-_CRT_SETUP_ARRAY_LABELS = (
+_CRT_STARTUP_ARRAY_LABELS = (
     "___xi_a",
     "___xi_z",
     "___xc_a",
@@ -36,25 +36,25 @@ _CRT_SETUP_ARRAY_LABELS = (
 )
 
 
-_CRT_SETUP_ARRAY_BOUNDARIES = {
-    CrtSetupArrayType.C_INIT: ("___xi_a", "___xi_z"),
-    CrtSetupArrayType.CPP_INIT: ("___xc_a", "___xc_z"),
-    CrtSetupArrayType.C_PRE_TERM: ("___xp_a", "___xp_z"),
-    CrtSetupArrayType.C_TERM: ("___xt_a", "___xt_z"),
+_CRT_STARTUP_ARRAY_BOUNDARIES = {
+    CrtStartupArrayType.C_INIT: ("___xi_a", "___xi_z"),
+    CrtStartupArrayType.CPP_INIT: ("___xc_a", "___xc_z"),
+    CrtStartupArrayType.C_PRE_TERM: ("___xp_a", "___xp_z"),
+    CrtStartupArrayType.C_TERM: ("___xt_a", "___xt_z"),
 }
 
 
 _CRT_FUNCTION_NAMES = {
-    CrtSetupArrayType.C_INIT: "$CRT_C_Initializer",
-    CrtSetupArrayType.CPP_INIT: "$CRT_CPP_Initializer",
-    CrtSetupArrayType.C_PRE_TERM: "$CRT_C_Pre-Terminator",
-    CrtSetupArrayType.C_TERM: "$CRT_C_Terminator",
+    CrtStartupArrayType.C_INIT: "$CRT_C_Initializer",
+    CrtStartupArrayType.CPP_INIT: "$CRT_CPP_Initializer",
+    CrtStartupArrayType.C_PRE_TERM: "$CRT_C_Pre-Terminator",
+    CrtStartupArrayType.C_TERM: "$CRT_C_Terminator",
 }
 
 
 @dataclass
-class CrtSetupArray:
-    """Result from analyzing functions in a CRT setup array.
+class CrtStartupArray:
+    """Result from analyzing functions in a CRT startup array.
     The functions within are called before main() is executed.
     For example: addresses of C++ initializer functions are between
     the labels ___xc_a and ___xc_z."""
@@ -147,17 +147,17 @@ def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
         pass
 
 
-def find_crt_setup_labels(db: EntityDb, image_id: ImageId) -> dict[str, int]:
+def find_crt_startup_labels(db: EntityDb, image_id: ImageId) -> dict[str, int]:
     found = {}
 
     for ent in db.all(image_id):
         name = ent.get("name")
-        if name is not None and name in _CRT_SETUP_ARRAY_LABELS:
+        if name is not None and name in _CRT_STARTUP_ARRAY_LABELS:
             addr = ent.addr(image_id)
             assert isinstance(addr, int)
             found[name] = addr
 
-            if len(found) == len(_CRT_SETUP_ARRAY_LABELS):
+            if len(found) == len(_CRT_STARTUP_ARRAY_LABELS):
                 break
 
     return found
@@ -180,10 +180,10 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     return (False, addr)
 
 
-def analyze_crt_setup_functions(
+def analyze_crt_startup_functions(
     db: EntityDb, image_id: ImageId, binfile: PEImage, span: range
-) -> CrtSetupArray:
-    """Read the functions for a single CRT setup array and find the identifying "fingerprint"
+) -> CrtStartupArray:
+    """Read the functions for a single CRT startup array and find the identifying "fingerprint"
     of which variables are referenced."""
     funcs = tuple(read_crt_array(binfile, span))
 
@@ -198,28 +198,28 @@ def analyze_crt_setup_functions(
         if was_thunk:
             thunks[real_addr] = xc_addr
 
-    return CrtSetupArray(fingerprints, thunks)
+    return CrtStartupArray(fingerprints, thunks)
 
 
-def analyze_crt_setup(
+def analyze_crt_startup(
     db: EntityDb, image_id: ImageId, binfile: PEImage
-) -> Iterator[tuple[CrtSetupArrayType, CrtSetupArray | None]]:
-    """For the CRT setup arrays in the given binary, if the start and end labels are known,
+) -> Iterator[tuple[CrtStartupArrayType, CrtStartupArray | None]]:
+    """For the CRT startup arrays in the given binary, if the start and end labels are known,
     analyze the functions in each array."""
-    labels = find_crt_setup_labels(db, image_id)
-    for array_type, (label_start, label_end) in _CRT_SETUP_ARRAY_BOUNDARIES.items():
+    labels = find_crt_startup_labels(db, image_id)
+    for array_type, (label_start, label_end) in _CRT_STARTUP_ARRAY_BOUNDARIES.items():
         if label_start in labels and label_end in labels:
             array_range = range(labels[label_start], labels[label_end])
             yield (
                 array_type,
-                analyze_crt_setup_functions(db, image_id, binfile, array_range),
+                analyze_crt_startup_functions(db, image_id, binfile, array_range),
             )
         else:
             yield (array_type, None)
 
 
 def create_crt_matches(
-    orig_array: CrtSetupArray, recomp_array: CrtSetupArray
+    orig_array: CrtStartupArray, recomp_array: CrtStartupArray
 ) -> list[tuple[int, int]]:
     # Don't match using blank fingerprints
     invert_orig = dict(
@@ -244,9 +244,9 @@ def create_crt_matches(
     return matches
 
 
-def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    crt_orig = tuple(analyze_crt_setup(db, ImageId.ORIG, orig_bin))
-    crt_recomp = tuple(analyze_crt_setup(db, ImageId.RECOMP, recomp_bin))
+def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
+    crt_orig = tuple(analyze_crt_startup(db, ImageId.ORIG, orig_bin))
+    crt_recomp = tuple(analyze_crt_startup(db, ImageId.RECOMP, recomp_bin))
 
     matches = []
 

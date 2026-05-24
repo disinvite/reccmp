@@ -1,7 +1,7 @@
 from reccmp.analysis.crt_startup import (
     get_function_fingerprint,
-    find_crt_setup_labels,
-    analyze_crt_setup_functions,
+    find_crt_startup_labels,
+    analyze_crt_startup_functions,
 )
 from reccmp.compare.db import EntityDb
 from reccmp.formats import PEImage
@@ -43,18 +43,18 @@ def test_get_function_fingerprint_matched(binfile: PEImage):
 XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
 
 
-def test_find_crt_setup_labels_empty():
+def test_find_crt_startup_labels_empty():
     db = EntityDb()
-    assert not find_crt_setup_labels(db, ImageId.ORIG)
+    assert not find_crt_startup_labels(db, ImageId.ORIG)
 
 
-def test_find_crt_setup_labels_cpp_init():
+def test_find_crt_startup_labels_cpp_init():
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.stop, name="___xc_z")
 
-    labels = find_crt_setup_labels(db, ImageId.ORIG)
+    labels = find_crt_startup_labels(db, ImageId.ORIG)
     assert labels["___xc_a"] == XCA_XCZ_RANGE.start
     assert labels["___xc_z"] == XCA_XCZ_RANGE.stop
 
@@ -76,7 +76,7 @@ def test_xca_fingerprints_empty(binfile: PEImage):
     db = EntityDb()
 
     # Baseline: no entities so all fingerprints are empty
-    result = analyze_crt_setup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    result = analyze_crt_startup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
 
     assert set(result.functions.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
     assert all(not v for v in result.functions.values())
@@ -90,7 +90,7 @@ def test_xca_fingerprints_matched(binfile: PEImage):
         batch.set(ImageId.ORIG, 0x10102B28, name="g_spawnLocations")
         batch.match(0x10102B28, 0x10102B28)
 
-    result = analyze_crt_setup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
+    result = analyze_crt_startup_functions(db, ImageId.ORIG, binfile, XCA_XCZ_RANGE)
     assert result.functions[0x1001A6D0] == (0x10102B28,)
 
 
@@ -100,7 +100,7 @@ def test_xca_fingerprints_avoid_crash(binfile: PEImage):
     modified_range = range(XCA_XCZ_RANGE.start, XCA_XCZ_RANGE.stop - 1)
 
     try:
-        analyze_crt_setup_functions(db, ImageId.ORIG, binfile, modified_range)
+        analyze_crt_startup_functions(db, ImageId.ORIG, binfile, modified_range)
     # pylint: disable=bare-except
     except:
         assert False, "Should not throw"

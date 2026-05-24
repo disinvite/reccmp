@@ -1,4 +1,4 @@
-from reccmp.analysis.dynamic_init import (
+from reccmp.analysis.crt_startup import (
     get_function_fingerprint,
     find_crt_setup_labels,
     analyze_crt_setup_functions,

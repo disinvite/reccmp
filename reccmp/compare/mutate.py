@@ -4,7 +4,7 @@ These functions create or update entities using the current information in the d
 
 import logging
 from functools import cache
-from reccmp.analysis.dynamic_init import variable_init_functions as VIF
+from reccmp.analysis.crt_startup import variable_init_functions as VIF
 from reccmp.cvdump.demangler import (
     get_function_arg_string,
 )

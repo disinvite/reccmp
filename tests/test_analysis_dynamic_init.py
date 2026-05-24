@@ -1,6 +1,6 @@
 from reccmp.analysis.dynamic_init import (
     get_function_fingerprint,
-    find_cpp_init_array,
+    find_crt_setup_labels,
     analyze_crt_setup_functions,
 )
 from reccmp.compare.db import EntityDb
@@ -43,34 +43,20 @@ def test_get_function_fingerprint_matched(binfile: PEImage):
 XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
 
 
-def test_find_cpp_init_array_empty():
+def test_find_crt_setup_labels_empty():
     db = EntityDb()
-    assert find_cpp_init_array(db, ImageId.ORIG) is None
+    assert not find_crt_setup_labels(db, ImageId.ORIG)
 
 
-def test_find_cpp_init_array_start_only():
-    db = EntityDb()
-    with db.batch() as batch:
-        batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
-
-    assert find_cpp_init_array(db, ImageId.ORIG) is None
-
-
-def test_find_cpp_init_array_end_only():
-    db = EntityDb()
-    with db.batch() as batch:
-        batch.set(ImageId.ORIG, XCA_XCZ_RANGE.stop, name="___xc_z")
-
-    assert find_cpp_init_array(db, ImageId.ORIG) is None
-
-
-def test_find_cpp_init_array_start_and_end():
+def test_find_crt_setup_labels_cpp_init():
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.stop, name="___xc_z")
 
-    assert find_cpp_init_array(db, ImageId.ORIG) == XCA_XCZ_RANGE
+    labels = find_crt_setup_labels(db, ImageId.ORIG)
+    assert labels["___xc_a"] == XCA_XCZ_RANGE.start
+    assert labels["___xc_z"] == XCA_XCZ_RANGE.stop
 
 
 # Maps function addr to thunk.

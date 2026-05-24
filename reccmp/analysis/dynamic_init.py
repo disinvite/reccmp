@@ -139,7 +139,7 @@ def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
         pass
 
 
-def find_cpp_init_array(db: EntityDb, image_id: ImageId) -> range | None:
+def find_crt_setup_labels(db: EntityDb, image_id: ImageId) -> dict[str, int]:
     found = {}
 
     for ent in db.all(image_id):
@@ -152,10 +152,7 @@ def find_cpp_init_array(db: EntityDb, image_id: ImageId) -> range | None:
             if len(found) == len(_CRT_SETUP_ARRAY_LABELS):
                 break
 
-    if "___xc_a" in found and "___xc_z" in found:
-        return range(found["___xc_a"], found["___xc_z"])
-
-    return None
+    return found
 
 
 def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
@@ -163,13 +160,14 @@ def unwrap_jump(binfile: PEImage, addr: int) -> tuple[bool, int]:
     follow it by calculating the destination address.
     Returns either (True, jmp_destination) or (False, starting_addr)."""
     jmp = binfile.read(addr, 5)
-    # TODO: Probably wrong to assume CALLs are thunks
     # Check for CALL (0xE8) or JMP (0xE9) opcodes.
     if jmp[0] in (0xE8, 0xE9):
-        (offset,) = struct.unpack("<I", jmp[1:])
-        # Add 5 because the offset is based on the address of
-        # the *next* instruction after the JMP or CALL.
-        return (True, addr + 5 + offset)
+        (offset,) = struct.unpack("<i", jmp[1:])
+        # Follow the jump only if it is small.
+        if abs(offset) <= 16:
+            # Add 5 because the offset is based on the address of
+            # the *next* instruction after the JMP.
+            return (True, addr + 5 + offset)
 
     return (False, addr)
 
@@ -193,56 +191,79 @@ def analyze_crt_setup_functions(
     return CrtSetupArray(fingerprints, thunks)
 
 
-def get_it(db: EntityDb, image_id: ImageId, binfile: PEImage) -> CrtSetupArray | None:
-    cpp_init_range = find_cpp_init_array(db, image_id)
-    if cpp_init_range is None:
-        return None
+def get_it(
+    db: EntityDb, image_id: ImageId, binfile: PEImage
+) -> Iterator[CrtSetupArray | None]:
+    labels = find_crt_setup_labels(db, image_id)
+    for _, (label_start, label_end) in _CRT_SETUP_ARRAY_BOUNDARIES.items():
+        if label_start in labels and label_end in labels:
+            array_range = range(labels[label_start], labels[label_end])
+            yield analyze_crt_setup_functions(db, image_id, binfile, array_range)
+        else:
+            yield None
 
-    return analyze_crt_setup_functions(db, image_id, binfile, cpp_init_range)
 
+def create_crt_matches(
+    orig_array: CrtSetupArray, recomp_array: CrtSetupArray
+) -> list[tuple[int, int]]:
+    # Don't match using blank fingerprints
+    invert_orig = dict(
+        (fp, addr) for addr, fp in orig_array.functions.items() if fp is not None
+    )
+    invert_recomp = dict(
+        (fp, addr) for addr, fp in recomp_array.functions.items() if fp is not None
+    )
 
-class CrtSetup:
-    # ?
-    functions: list[tuple[ImageId, int, str]]
-    thunks: list[tuple[ImageId, int, int]]
-    matches: list[tuple[int, int]]
+    matches = []
+
+    for fingerprint, orig_addr in invert_orig.items():
+        if fingerprint in invert_recomp:
+            recomp_addr = invert_recomp[fingerprint]
+            matches.append((orig_addr, recomp_addr))
+
+            if orig_addr in orig_array.thunks and recomp_addr in recomp_array.thunks:
+                orig_thunk = orig_array.thunks[orig_addr]
+                recomp_thunk = recomp_array.thunks[recomp_addr]
+                matches.append((orig_thunk, recomp_thunk))
+
+    return matches
 
 
 def variable_init_functions(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
-    dyn_orig = get_it(db, ImageId.ORIG, orig_bin)
-    dyn_recomp = get_it(db, ImageId.RECOMP, recomp_bin)
+    crt_orig = tuple(get_it(db, ImageId.ORIG, orig_bin))
+    crt_recomp = tuple(get_it(db, ImageId.RECOMP, recomp_bin))
 
-    if not dyn_orig or not dyn_recomp:
-        return
+    matches = []
 
-    # Don't match using blank fingerprints
-    invert_orig = dict(
-        (fp, addr) for addr, fp in dyn_orig.functions.items() if fp is not None
-    )
-    invert_recomp = dict(
-        (fp, addr) for addr, fp in dyn_recomp.functions.items() if fp is not None
-    )
+    for orig_array, recomp_array in zip(crt_orig, crt_recomp):
+        if orig_array and recomp_array:
+            matches.extend(create_crt_matches(orig_array, recomp_array))
 
     with db.batch() as batch:
-        for fingerprint, orig_addr in invert_orig.items():
-            batch.set(
-                ImageId.ORIG,
-                orig_addr,
-                type=EntityType.FUNCTION,
-                name="$DynamicInitializer",
-            )
+        for image_id, crt_arrays in (
+            (ImageId.ORIG, crt_orig),
+            (ImageId.RECOMP, crt_recomp),
+        ):
+            for array in crt_arrays:
+                if array is None:
+                    continue
 
-            if fingerprint in invert_recomp:
-                recomp_addr = invert_recomp[fingerprint]
-                batch.match(orig_addr, recomp_addr)
-
-                if orig_addr in dyn_orig.thunks and recomp_addr in dyn_recomp.thunks:
-                    orig_thunk = dyn_orig.thunks[orig_addr]
-                    recomp_thunk = dyn_recomp.thunks[recomp_addr]
+                for addr in array.functions.keys():
                     batch.set(
-                        ImageId.ORIG,
-                        orig_thunk,
+                        image_id,
+                        addr,
                         type=EntityType.FUNCTION,
-                        name="$DynamicInitializerThunk",
+                        name="$DynamicInitializer",  # TODO: Should vary based on what array it is
                     )
-                    batch.match(orig_thunk, recomp_thunk)
+
+                    if addr in array.thunks:
+                        thunk_addr = array.thunks[addr]
+                        batch.set(
+                            image_id,
+                            thunk_addr,
+                            type=EntityType.FUNCTION,
+                            name="$DynamicInitializerThunk",  # TODO: Should vary based on what array it is
+                        )
+
+        for orig_addr, recomp_addr in matches:
+            batch.match(orig_addr, recomp_addr)

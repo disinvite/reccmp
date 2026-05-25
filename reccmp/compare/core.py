@@ -1,6 +1,7 @@
 import logging
 import difflib
 import struct
+import time
 from typing import Iterable, Iterator
 from typing_extensions import Self
 from reccmp.project.detect import RecCmpTarget
@@ -19,13 +20,14 @@ from reccmp.compare.event import (
     ReccmpReportProtocol,
     create_logging_wrapper,
 )
+from .dependency import (
+    ReccmpOptions,
+    DependencyManager,
+    ReccmpDepType,
+    InternalManager,
+)
+from .director import build_task_list
 from .match_msvc import (
-    match_lines,
-    match_symbols,
-    match_functions,
-    match_vtables,
-    match_static_variables,
-    match_variables,
     match_strings,
     match_ref,
     match_imports,
@@ -34,27 +36,9 @@ from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .diff import DiffReport
 from .lines import LinesDb
 from .analyze import (
-    create_imports,
-    create_import_thunks,
-    create_thunks,
-    create_analysis_floats,
-    create_analysis_strings,
-    create_analysis_vtordisps,
-    create_seh_entities,
-    complete_partial_floats,
-    complete_partial_strings,
-    match_entry,
     match_exports,
 )
-from .ingest import (
-    load_cvdump,
-    load_cvdump_types,
-    load_cvdump_lines,
-    load_markers,
-    load_data_sources,
-)
 from .mutate import (
-    match_array_elements,
     name_thunks,
     unique_names_for_overloaded_functions,
 )
@@ -128,47 +112,39 @@ class Compare:
         ):
             return
 
-        load_cvdump_types(self.cvdump_analysis, self.types)
-        load_cvdump(self.cvdump_analysis, self._db, self.recomp_bin)
-        load_cvdump_lines(self.cvdump_analysis, self._lines_db, self.recomp_bin)
-
-        match_entry(self._db, self.orig_bin, self.recomp_bin)
-
-        load_markers(
-            self.code_files,
-            self._lines_db,
-            self.orig_bin,
-            self.target_id,
-            self._db,
-            self.bin_encoding,
-            self.report,
+        options = ReccmpOptions(
+            bin_encoding=self.bin_encoding, src_encoding=self.src_encoding
         )
 
-        load_data_sources(self._db, self.data_sources)
+        deps = DependencyManager()
+        deps.add_dependency(ImageId.ORIG, ReccmpDepType.BINARY, self.orig_bin)
+        deps.add_dependency(ImageId.RECOMP, ReccmpDepType.BINARY, self.recomp_bin)
+        deps.add_dependency(
+            ImageId.RECOMP, ReccmpDepType.PDB_FILE, self.cvdump_analysis
+        )
+        deps.add_dependency(
+            ImageId.ORIG, ReccmpDepType.CODE_FILE, tuple(self.code_files)
+        )
+        deps.add_dependency(
+            ImageId.ORIG, ReccmpDepType.CSV_FILE, tuple(self.data_sources)
+        )
+        deps.add_dependency(ImageId.ORIG, ReccmpDepType.OPTIONS, options)
 
-        # Match using PDB and annotation data
-        match_symbols(self._db, self.report, truncate=True)
-        match_functions(self._db, self.report, truncate=True)
-        match_vtables(self._db, self.report)
-        match_static_variables(self._db, self.report)
-        match_variables(self._db, self.report)
-        match_lines(self._db, self._lines_db, self.report)
+        internals = InternalManager(
+            target_id=self.target_id,
+            types_db=self.types,
+            lines_db=self._lines_db,
+            entity_db=self._db,
+            report=self.report,
+        )
 
-        match_array_elements(self._db, self.types)
-        # Detect floats first to eliminate potential overlap with string data
-        for img_id, binfile in (
-            (ImageId.ORIG, self.orig_bin),
-            (ImageId.RECOMP, self.recomp_bin),
-        ):
-            create_imports(self._db, img_id, binfile)
-            create_import_thunks(self._db, img_id, binfile)
-            create_analysis_floats(self._db, img_id, binfile)
-            create_analysis_strings(self._db, img_id, binfile, self.bin_encoding)
-            create_seh_entities(self._db, img_id, binfile)
-            create_thunks(self._db, img_id, binfile)
-            create_analysis_vtordisps(self._db, img_id, binfile)
-            complete_partial_floats(self._db, img_id, binfile)
-            complete_partial_strings(self._db, img_id, binfile, self.bin_encoding)
+        tasks = build_task_list(deps, internals)
+        for task_name, task_fn in tasks:
+            # Time in/out
+            start = time.time_ns() // 1_000_000
+            task_fn()
+            end = time.time_ns() // 1_000_000
+            logger.info("%-60s %5dms", task_name, end - start)
 
         match_imports(self._db)
         match_exports(self._db, self.orig_bin, self.recomp_bin)

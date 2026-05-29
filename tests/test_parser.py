@@ -792,3 +792,35 @@ def test_variables_calling_constructor(parser):
     assert len(parser.alerts) == 0
     assert parser.variables[0].offset == 0x10065B54
     assert parser.variables[0].name == "g_floatConst4096"
+
+
+def test_issue_434_equal_same_line(parser):
+    """Should not start a new namespace for a struct variable definition."""
+    parser.read("""\
+        // GLOBAL: A 0x10007930
+        struct GlobalState g_state = {
+          1,
+          0,
+          1
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert parser.variables[0].name == "g_state"
+
+
+def test_issue_434_equal_newline(parser):
+    """Should not start a new namespace for a struct variable definition."""
+    parser.read("""\
+        // GLOBAL: A 0x10007930
+        struct GlobalState g_state
+        =
+        {
+          1,
+          0,
+          1
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert parser.variables[0].name == "g_state"

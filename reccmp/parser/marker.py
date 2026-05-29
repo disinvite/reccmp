@@ -1,6 +1,6 @@
 import re
 from enum import Enum
-
+from .tokenizer import CodeToken
 
 class MarkerCategory(Enum):
     """For the purposes of grouping multiple different DecompMarkers together,

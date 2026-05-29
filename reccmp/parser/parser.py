@@ -30,6 +30,14 @@ from .node import (
     ParserString,
 )
 from .error import ParserAlert, AlertCode
+from .tokenizer import (
+    CodeToken,
+    get_line_column_pos,
+    get_newlines_from_text,
+    get_scopes_from_tokens,
+    get_token_groups,
+    tokenize_code_file,
+)
 
 
 class ReaderState(Enum):
@@ -109,6 +117,7 @@ class CurlyManager:
     def read_line(self, raw_line: str):
         """Read a line of code and update the stack."""
         line = sanitize_code_line(raw_line)
+        print(line, self._stack)
         if (match := scopeDetectRegex.match(line)) is not None:
             if not line.endswith(";"):
                 self._stack.append(match.group("name"))
@@ -591,9 +600,112 @@ class DecompParser:
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)
 
+    def code_function(self, text: str, tokens: list[CodeToken], start: int):
+        # TODO: redundant
+        scopes = get_scopes_from_tokens(text, tokens)
+        newlines = get_newlines_from_text(text)
+
+        for i in range(start, len(tokens)):
+            (span, token) = tokens[i]
+            if token == ";":
+                # TODO: It's not the function declaration.
+                self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+                return
+            if token == "{":
+                break
+        else:
+            # Ran to end without finding it
+            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            return
+
+        # TODO: conversion between text pos and index is dangerous.
+
+        # `span` now equals curly token position.
+        (self.line_number, _) = get_line_column_pos(newlines, span.start)
+        self._function_starts_here()
+        try:
+            scope_range = next(scope[1] for scope in scopes if scope[1].start == i)
+        except StopIteration as ex:
+            breakpoint()
+            raise ex
+
+        (span, _) = tokens[scope_range.stop]
+        (self.line_number, _) = get_line_column_pos(newlines, span.start)
+        self._function_done()
+
+    def read_comment_block(self, text: str, tokens: list[CodeToken]):
+        # TODO: redundant
+        newlines = get_newlines_from_text(text)
+
+        for (span, token) in tokens:
+            excerpt = text[span.start : span.stop]
+            (line_no, _) = get_line_column_pos(newlines, span.start)
+            self.line_number = line_no
+
+            if token == "LINE COMMENT":
+                marker = match_marker(excerpt)
+                if marker is not None:
+                    self._handle_marker(marker)
+                else:
+                    if self.state in (ReaderState.IN_GLOBAL,):
+                        variable_name = get_synthetic_name(excerpt)
+                        self._variable_done(variable_name, None)
+
+                    elif self.state in (ReaderState.IN_VTABLE,):
+                        vtable_class = get_class_name(excerpt)
+                        if vtable_class is not None:
+                            self._vtable_done(class_name=vtable_class)
+
+                    elif self.state != ReaderState.SEARCH:
+                        synthetic_name = get_synthetic_name(excerpt)
+                        assert synthetic_name is not None
+                        self.function_sig = synthetic_name
+                        self._function_starts_here()
+                        self._function_done(lookup_by_name=True)
+
+
     def read(self, text: str):
-        for line in io.StringIO(text, newline=None):
-            self.read_line(line)
+        tokens = list(tokenize_code_file(text))
+        def curly_counter(token: str) -> int:
+            if token == "{":
+                return 1
+            if token == "}":
+                return -1
+            return 0
+
+        if sum(curly_counter(token) for _, token in tokens) != 0:
+            return
+
+        scopes = get_scopes_from_tokens(text, tokens)
+        newlines = get_newlines_from_text(text)
+        group_ranges = list(get_token_groups(text, tokens))
+        # Collect consecutive comments that are markers.
+        # For each one: satisfy what is missing.
+
+        for group_span in group_ranges:
+            token_group = tokens[group_span.start : group_span.stop]
+            self.read_comment_block(text, token_group)
+
+            # Error or completed
+            if self.state == ReaderState.SEARCH:
+                continue
+
+            # We have unfinished markers.
+            if self.state == ReaderState.WANT_SIG:
+                self.code_function(text, tokens, group_span.stop)
+            else:
+                # TODO: ignoring other types for test
+                self._recover()
+
+        # n.b. CODE token blocks may have whitespace only
+        # FUNCTION: comment (name) OR identifier between here and next scope, whichever is first.
+        # .. store function and addrs for each target. to be used with STATICS.
+        # GLOBAL: comment (name) OR identifier
+        # .. if inside function, look it up
+        # STRING: next string token.
+        # VTABLE: identifier before next scope.
+        # LINE: Just record it.
+
 
     def finish(self):
         if self.state != ReaderState.SEARCH:

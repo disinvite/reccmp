@@ -600,6 +600,30 @@ class DecompParser:
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)
 
+    def code_vtable(self, text: str, tokens: list[CodeToken], start: int):
+        # TODO: redundant
+        scopes = get_scopes_from_tokens(text, tokens)
+        newlines = get_newlines_from_text(text)
+
+        name = None
+
+        for i in range(start, len(tokens)):
+            (span, token) = tokens[i]
+            if token == "CODE":
+                excerpt = text[span.start : span.stop]
+                name = get_class_name(excerpt.strip()) # TODO
+            if token in ("{", ";"):
+                break
+        else:
+            # Ran to end without finding it
+            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            return
+
+        if name:
+            self._vtable_done(name)
+        else:
+            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+
     def code_function(self, text: str, tokens: list[CodeToken], start: int):
         # TODO: redundant
         scopes = get_scopes_from_tokens(text, tokens)
@@ -673,8 +697,8 @@ class DecompParser:
                 return -1
             return 0
 
-        if sum(curly_counter(token) for _, token in tokens) != 0:
-            return
+        #if sum(curly_counter(token) for _, token in tokens) != 0:
+        #    return
 
         scopes = get_scopes_from_tokens(text, tokens)
         newlines = get_newlines_from_text(text)
@@ -693,6 +717,8 @@ class DecompParser:
             # We have unfinished markers.
             if self.state == ReaderState.WANT_SIG:
                 self.code_function(text, tokens, group_span.stop)
+            elif self.state == ReaderState.IN_VTABLE:
+                self.code_vtable(text, tokens, group_span.stop)
             else:
                 # TODO: ignoring other types for test
                 self._recover()

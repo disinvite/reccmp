@@ -824,3 +824,15 @@ def test_issue_434_equal_newline(parser):
 
     assert len(parser.alerts) == 0
     assert parser.variables[0].name == "g_state"
+
+
+def test_template_class_t(parser):
+    parser.read("""\
+        template <class T>
+        class MxPoint {
+        protected:
+            T m_x;
+            T m_y;
+        };
+    """)
+    assert False

@@ -3,7 +3,18 @@ import re
 from typing import Iterator
 
 # TODO: L-string L-char.
-r_charsOfImport = re.compile(r"(?<!\\)[\"']|[{}=;]|//|/\*|\*/|\n")
+r_charsOfImport = re.compile(
+    r"""
+\#\S+(?=\s)|
+(?<!\\)[\"']|
+[{}=;]|
+//|
+/\*|
+\*/|
+\\?\n
+""",
+    flags=re.X,
+)
 
 
 r_realClassStart = re.compile(r"(?:class|struct|namespace)\s+(\w+)\s*$")
@@ -14,6 +25,7 @@ CodeToken = tuple[range, str]
 
 def tokenize_code_file(text: str) -> Iterator[CodeToken]:
     mode = "nothing"
+    ppc_mode = False
 
     start = 0
     end = 0
@@ -22,7 +34,8 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
         pos = match.start()
         token = match.group(0)
 
-        if mode == "nothing" and token in {"{", "}", "=", ";"}:
+        # Suppress typical breaks if we are in a #define expression (except strings)
+        if mode == "nothing" and token in {"{", "}", "=", ";"} and not ppc_mode:
             if end != pos:
                 yield (range(end, pos), "CODE")
             end = pos + 1  # ?
@@ -72,10 +85,25 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
             end = pos + 2
             yield (range(start, end), "BLOCK COMMENT")
 
-        elif token == "\n" and mode == "line_comment":
-            mode = "nothing"
-            end = pos + 1
-            yield (range(start, end), "LINE COMMENT")
+        elif token in ("\\\n", "\n"):
+            # TODO: comment disrupting continuation char
+            if token == "\n":
+                ppc_mode = False
+
+            if mode == "line_comment":
+                mode = "nothing"
+                end = pos + 1
+                yield (range(start, end), "LINE COMMENT")
+
+        elif token and token[0] == "#":
+            if mode == "nothing":
+                ppc_mode = True
+                start = pos
+                if end != pos:
+                    yield (range(end, pos), "CODE")
+
+                end = pos + len(token)
+                yield (range(start, end), token)
 
 
 def get_newlines_from_text(text: str) -> list[int]:
@@ -85,6 +113,9 @@ def get_newlines_from_text(text: str) -> list[int]:
 def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     # bisect etc
     i = bisect.bisect_left(newlines, offset)
+    if i == 0:
+        return (1, 1)
+
     pos = newlines[i - 1]
     return (i, offset - pos)
 

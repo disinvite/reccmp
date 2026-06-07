@@ -2,7 +2,6 @@ import bisect
 import re
 from typing import Iterator
 
-
 # TODO: L-string L-char.
 r_charsOfImport = re.compile(r"(?<!\\)[\"']|[{}=;]|//|/\*|\*/|\n")
 
@@ -26,7 +25,7 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
         if mode == "nothing" and token in {"{", "}", "=", ";"}:
             if end != pos:
                 yield (range(end, pos), "CODE")
-            end = pos + 1 # ?
+            end = pos + 1  # ?
             yield (range(pos, pos + 1), token)
             continue
 
@@ -86,8 +85,8 @@ def get_newlines_from_text(text: str) -> list[int]:
 def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     # bisect etc
     i = bisect.bisect_left(newlines, offset)
-    pos = newlines[i]
-    return (i + 1, pos - offset)
+    pos = newlines[i - 1]
+    return (i, offset - pos)
 
 
 def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[range]:
@@ -107,40 +106,97 @@ def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[range]:
         yield range(start, i)
 
 
-def get_scopes_from_tokens(text: str, tokens: list[CodeToken]) -> list[tuple[str, range]]:
+r_indent_detector = re.compile(
+    r"""
+([\ \t]*) # Count spaces and tabs leading each line.
+([^\n]*)  # Read the remainder of the line.
+(?:\n|\Z) # Stop.
+""",
+    flags=re.X,
+)
+
+
+def get_curly_tab_stops(
+    text: str, tokens: list[CodeToken]
+) -> Iterator[tuple[int, str, int]]:
+    newlines = get_newlines_from_text(text)
+
+    tab_stops_per_line = {
+        i: len(match.group(1))
+        for i, match in enumerate(r_indent_detector.finditer(text), start=1)
+    }
+
+    for i, (span, token) in enumerate(tokens):
+        if token in ("{", "}"):
+            row, col = get_line_column_pos(newlines, span.start)
+            # Token index, tab stops
+            yield (i, token, tab_stops_per_line[row])
+
+
+def get_enclosures(text: str, tokens: list[CodeToken]) -> list[range]:
     stack = []
+    enclosures = []
 
-    scopes = []
+    # TODO: redundant
+    newlines = get_newlines_from_text(text)
 
-    def get_scope_name() -> str:
-        return "::".join(s for (i, s) in stack if i == -1)
-
-    # Prepend a sentinel so we can look back safely.
-    padded = [(range(0, 0), ""), *tokens]
-    for i in range(1, len(padded)):
-        (span, token) = padded[i]
-
+    for index, token, tabstop in get_curly_tab_stops(text, tokens):
+        # TODO: debug
+        print(
+            [
+                (get_line_column_pos(newlines, tokens[x][0].start), level)
+                for x, level in stack
+            ]
+        )
         if token == "{":
-            prev_span, prev_token = padded[i - 1]
+
+            if stack and tabstop < stack[-1][1]:
+                stack.clear()
+
+            stack.append((index, tabstop))
+        elif token == "}" and stack:
+            last_index, last_stop = stack[-1]
+            if last_stop == tabstop:
+                stack.pop()
+                enclosures.append(range(last_index, index))
+
+                # Remove duplicated brackets from ifdef.
+                # while stack and stack[-1][1] == tabstop:
+                #    stack.pop()
+
+    if stack:
+        enclosures.append(range(last_index, index))
+
+    return sorted(enclosures, key=lambda r: r.start)
+
+
+def get_scopes_from_tokens(
+    text: str, tokens: list[CodeToken], enclosures: list[range]
+) -> list[tuple[range, str]]:
+    names = []
+
+    for scope_span in enclosures:
+        curly_idx = scope_span.start
+        if curly_idx > 0:
+            prev_span, prev_token = tokens[curly_idx - 1]
             if prev_token == "CODE":
                 excerpt = text[prev_span.start : prev_span.stop]
                 match = r_realClassStart.search(excerpt)
                 if match is not None:
                     scope_name = match.group(1)
-                    stack.append((-1, scope_name))
+                    names.append((scope_span, scope_name))
 
-            stack.append((i - 1, "{"))
+    return names
 
-        elif token == "}":
-            scope_end = i - 1
-            if stack:
-                (scope_start, _) = stack.pop()
 
-            if stack and stack[-1][1] != "{":
-                scopes.append((get_scope_name(), range(scope_start, scope_end)))
-                stack.pop()
-            else:
-                scopes.append(("", range(scope_start, scope_end)))
+def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
+    stack = []
 
-    scopes.sort(key=lambda s: s[1].start)
-    return scopes
+    for span, name in scopes:
+        if pos in span:
+            stack.append(name)
+
+        if pos > span.stop:
+            break
+
+    return "::".join(stack)

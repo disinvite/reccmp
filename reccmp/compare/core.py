@@ -6,6 +6,7 @@ from typing import Iterable, Iterator
 from typing_extensions import Self
 from reccmp.project.detect import RecCmpTarget
 from reccmp.compare.diff import EntityCompareResult, RawDiffOutput
+from reccmp.parser.marker import ProjectAliases, normalize_project_aliases
 from reccmp.dir import source_code_search
 from reccmp.compare.functions import FunctionComparator
 from reccmp.formats import (
@@ -41,6 +42,7 @@ from .analyze import (
 from .mutate import (
     name_thunks,
     unique_names_for_overloaded_functions,
+    set_max_size,
 )
 from .verify import (
     check_vtables,
@@ -64,6 +66,7 @@ class Compare:
     types: CvdumpTypesParser
     function_comparator: FunctionComparator
     data_sources: list[TextFile]
+    project_aliases: ProjectAliases
 
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-positional-arguments
@@ -76,6 +79,7 @@ class Compare:
         encoding: str | None = None,
         code_files: list[TextFile] | None = None,
         data_sources: list[TextFile] | None = None,
+        project_aliases: ProjectAliases | None = None,
     ):
         self.orig_bin = orig_bin
         self.recomp_bin = recomp_bin
@@ -83,6 +87,7 @@ class Compare:
         self.target_id = target_id
         self.src_encoding = encoding or "utf-8"
         self.bin_encoding = encoding or "latin1"
+        self.project_aliases = normalize_project_aliases(project_aliases or {})
 
         if isinstance(code_files, list):
             self.code_files = code_files
@@ -148,6 +153,10 @@ class Compare:
 
         match_imports(self._db)
         match_exports(self._db, self.orig_bin, self.recomp_bin)
+
+        for img_id in (ImageId.ORIG, ImageId.RECOMP):
+            set_max_size(self._db, img_id)
+
         check_vtables(self._db, self.orig_bin)
         match_ref(self._db, self.report)
         unique_names_for_overloaded_functions(self._db)
@@ -188,6 +197,8 @@ class Compare:
             )
         )
 
+        project_aliases = {target.target_id: target.marker_aliases}
+
         compare = cls(
             origfile,
             recompfile,
@@ -196,6 +207,7 @@ class Compare:
             encoding=target.encoding,
             data_sources=data_sources,
             code_files=code_files,
+            project_aliases=project_aliases,
         )
         compare.run()
         return compare
@@ -292,14 +304,6 @@ class Compare:
 
         assert match.entity_type is not None
         assert match.name is not None
-        if match.get("stub", False):
-            return DiffReport(
-                match_type=EntityType(match.entity_type),
-                orig_addr=match.orig_addr,
-                recomp_addr=match.recomp_addr,
-                name=match.name,
-                is_stub=True,
-            )
 
         # We only compare certain entity types in reccmp-asmcmp:
         if match.entity_type in (EntityType.FUNCTION, EntityType.VTORDISP):
@@ -325,6 +329,7 @@ class Compare:
             name=best_name,
             result=result,
             is_library=match.get("library", False),
+            is_stub=match.get("stub", False),
         )
 
     ## Public API

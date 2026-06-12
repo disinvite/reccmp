@@ -171,6 +171,7 @@ def load_code_files(
             target_id,
             entity_db,
             options.bin_encoding,
+            {},  # TODO: aliases
             report,
         ),
     )

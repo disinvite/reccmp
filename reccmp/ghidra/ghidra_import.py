@@ -46,7 +46,6 @@ def main():
 
     with program_context(args) as program:
         from ghidra.program.flatapi import FlatProgramAPI
-        from ghidra.app.script import GhidraScriptUtil
         from reccmp.ghidra.importer.importer import import_target_into_ghidra
 
         logger.info("Program opened. Starting reccmp import...")
@@ -70,18 +69,12 @@ def main():
             if not target.ghidra_config.allow_hash_mismatch:
                 return 1
 
-        # Not exactly sure why this is necessary, but it can't hurt
-        GhidraScriptUtil.acquireBundleHostReference()
-
         transaction = program.startTransaction(TRANSACTION_NAME)
         api = FlatProgramAPI(program)
         import_target_into_ghidra(target, api)
 
         commit = True
         program.endTransaction(transaction, commit)
-
-        # Not exactly sure why this is necessary, but it can't hurt
-        GhidraScriptUtil.releaseBundleHostReference()
 
     logger.info("Done!")
     return 0
@@ -228,7 +221,9 @@ def shared_repository_program(args: argparse.Namespace):
                     create_keep_file,
                 )
 
-                dom_file.checkin(checkin_handler, TaskMonitor.DUMMY)
+                dom_file.checkin(  # codespell:ignore checkin
+                    checkin_handler, TaskMonitor.DUMMY
+                )
 
                 logger.debug("DomainFile checked in successfully.")
 

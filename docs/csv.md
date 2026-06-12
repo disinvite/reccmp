@@ -96,7 +96,7 @@ If you need to escape the _escape character_, use two backslashes, as in:
 
 ```csv
 address,name
-10004000,te\\st
+10004000,de\\mo
 ```
 
 ### Non-standard syntax
@@ -129,5 +129,6 @@ These fields can appear in the CSV file:
 | `name` | Name for the entity (e.g. the fully-qualified function name) | text |
 | `symbol` | Linker name | text |
 | `type` | Entity type | one of: `function, template, synthetic, library, stub, global, string, widechar, float, vtable` |
+| `size` | Size of the entity in bytes | Decimal number, or hex number with `0x` prefix |
 
 All other fields are ignored.

@@ -7,10 +7,12 @@ from typing import NamedTuple, Sequence
 
 import colorama
 import reccmp
+import reccmp.color
 from reccmp.compare import Compare
 from reccmp.compare.diff import (
     CombinedDiffOutput,
     MatchingOrMismatchingBlock,
+    raw_diff_to_udiff,
 )
 from reccmp.cvdump.symbols import SymbolsEntry
 from reccmp.project.detect import (
@@ -19,7 +21,10 @@ from reccmp.project.detect import (
     RecCmpProjectException,
 )
 from reccmp.cvdump.types import CvdumpTypeKey
-from reccmp.project.logging import argparse_add_logging_args, argparse_parse_logging
+from reccmp.project.logging import (
+    argparse_add_logging_args,
+    argparse_parse_logging,
+)
 
 # pylint: disable=duplicate-code # misdetects a code duplication with reccmp
 
@@ -27,10 +32,10 @@ logger = logging.getLogger(__name__)
 
 colorama.just_fix_windows_console()
 
-CHECK_ICON = f"{colorama.Fore.GREEN}✓{colorama.Style.RESET_ALL}"
-SWAP_ICON = f"{colorama.Fore.YELLOW}⇄{colorama.Style.RESET_ALL}"
-ERROR_ICON = f"{colorama.Fore.RED}✗{colorama.Style.RESET_ALL}"
-UNCLEAR_ICON = f"{colorama.Fore.BLUE}?{colorama.Style.RESET_ALL}"
+CHECK_ICON = f"{reccmp.color.Fore.GREEN}✓{reccmp.color.Style.RESET_ALL}"
+SWAP_ICON = f"{reccmp.color.Fore.YELLOW}⇄{reccmp.color.Style.RESET_ALL}"
+ERROR_ICON = f"{reccmp.color.Fore.RED}✗{reccmp.color.Style.RESET_ALL}"
+UNCLEAR_ICON = f"{reccmp.color.Fore.BLUE}?{reccmp.color.Style.RESET_ALL}"
 
 
 STACK_ENTRY_REGEX = re.compile(
@@ -159,7 +164,7 @@ def analyze_diff(diff: MatchingOrMismatchingBlock, warnings: Warnings) -> StackP
 
 def print_bijective_match(left: str, right: str, exact: bool):
     icon = CHECK_ICON if exact else SWAP_ICON
-    print(f"{icon}{colorama.Style.RESET_ALL}  {left}: {right}")
+    print(f"{icon}{reccmp.color.Style.RESET_ALL}  {left}: {right}")
 
 
 def print_non_bijective_match(left: str, right: str):
@@ -171,7 +176,7 @@ def print_structural_mismatch(
 ) -> str:
     orig_str = "\n".join(f"-{x[1]}" for x in orig) if orig else "-"
     recomp_str = "\n".join(f"+{x[1]}" for x in recomp) if recomp else "+"
-    return f"{colorama.Fore.RED}{orig_str}\n{colorama.Fore.GREEN}{recomp_str}\n{colorama.Style.RESET_ALL}"
+    return f"{reccmp.color.Fore.RED}{orig_str}\n{reccmp.color.Fore.GREEN}{recomp_str}\n{reccmp.color.Style.RESET_ALL}"
 
 
 def format_list_of_offsets(offsets: list[StackRegisterOffset]) -> str:
@@ -196,7 +201,7 @@ def compare_function_stacks(udiff: CombinedDiffOutput, fn_symbol: SymbolsEntry):
 
     stack_symbols: dict[int, StackSymbol] = {}
 
-    for symbol in fn_symbol.stack_symbols:
+    for symbol in fn_symbol.symbols:
         if symbol.symbol_type == "S_BPREL32":
             # convert hex to signed 32 bit integer
             hex_bytes = bytes.fromhex(symbol.location[1:-1])
@@ -322,7 +327,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main():
+def main() -> int:
     args = parse_args()
 
     try:
@@ -333,9 +338,6 @@ def main():
 
     compare = Compare.from_target(target)
 
-    if args.loglevel == logging.DEBUG:
-        compare.debug = True
-
     print()
 
     match = compare.compare_address(args.address)
@@ -343,7 +345,11 @@ def main():
         print(f"Failed to find a match at address 0x{args.address:x}")
         return 1
 
-    assert match.udiff is not None
+    assert match.result is not None
+    # Analyze the entire function, including long sections that already match.
+    # This comment explains why this is necessary:
+    # https://github.com/isledecomp/reccmp/pull/307#issuecomment-3796146436
+    udiff = raw_diff_to_udiff(match.result.diff, grouped=False)
 
     function_data = next(
         (y for y in compare.cvdump_analysis.nodes if y.addr == match.recomp_addr),
@@ -352,7 +358,7 @@ def main():
     assert function_data is not None
     assert function_data.symbol_entry is not None
 
-    compare_function_stacks(match.udiff, function_data.symbol_entry)
+    compare_function_stacks(udiff, function_data.symbol_entry)
     return 0
 
 

@@ -2,6 +2,7 @@
 
 from typing import Callable, Iterable, Iterator
 from reccmp.formats import TextFile
+from .marker import ProjectAliases
 from .parser import DecompParser
 from .node import (
     ParserLineSymbol,
@@ -14,15 +15,20 @@ from .node import (
 
 
 class DecompCodebase:
-    def __init__(self, files: Iterable[TextFile], module: str) -> None:
+    def __init__(
+        self,
+        files: Iterable[TextFile],
+        module: str,
+        aliases: ProjectAliases | None = None,
+    ) -> None:
         self._symbols: list[ParserSymbol] = []
 
-        parser = DecompParser()
+        parser = DecompParser(aliases)
         for f in files:
             parser.reset_and_set_filename(f.path)
             parser.read(f.text)
 
-            self._symbols += parser.iter_symbols(module)
+            self._symbols += parser.iter_symbols(module.upper())
 
     def prune_invalid_addrs(
         self, is_valid: Callable[[int], bool]
@@ -44,7 +50,11 @@ class DecompCodebase:
         unique = []
 
         for s in self._symbols:
-            if s.offset in used_addr:
+            # Must retain FOLDED functions because they will reuse the address.
+            # Question: should we keep *all* annotations for this address if *any* are folded?
+            if s.offset in used_addr and not (
+                isinstance(s, ParserFunction) and s.is_folded
+            ):
                 duplicates.append(s)
             else:
                 unique.append(s)

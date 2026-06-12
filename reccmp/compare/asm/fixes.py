@@ -24,8 +24,8 @@ def jump_swap_ok(a: str, b: str) -> bool:
     """For the instructions a,b, are they both jump instructions
     that are compatible with a swapped cmp operand order?"""
     # Grab the mnemonic
-    (jmp_a, _, __) = a.partition(" ")
-    (jmp_b, _, __) = b.partition(" ")
+    jmp_a, _, __ = a.partition(" ")
+    jmp_b, _, __ = b.partition(" ")
 
     return (jmp_a, jmp_b) in ALLOWED_JUMP_SWAPS
 
@@ -37,7 +37,7 @@ def _mnemonic(inst: str) -> str:
 
 
 def _split_operands(inst: str) -> list[str]:
-    (_, _, operand_str) = inst.partition(" ")
+    _, _, operand_str = inst.partition(" ")
     if not operand_str:
         return []
     return [operand.strip() for operand in operand_str.split(",") if operand.strip()]
@@ -62,8 +62,8 @@ def get_patched_jump(a: str, b: str) -> str:
     the jump instructions might use different displacement offsets
     or labels. If we just replace `b` with `a`, this diff would be
     incorrectly eliminated."""
-    (mnemonic_a, _, __) = a.partition(" ")
-    (_, __, operand_b) = b.partition(" ")
+    mnemonic_a, _, __ = a.partition(" ")
+    _, __, operand_b = b.partition(" ")
 
     return mnemonic_a + " " + operand_b
 
@@ -95,8 +95,10 @@ def patch_mov_compare_jmp(
     )
 
     # return if not found, or only found on first or last line
+    # pylint: disable=too-many-boolean-expressions
     if (
         cmp_index in (-1, 0, len(orig) - 1)
+        or cmp_index >= len(recomp) - 1
         or
         # recomp should also have a cmp in the same line
         not recomp[cmp_index].startswith(cmp_instruction)
@@ -212,6 +214,7 @@ def patch_compare_jmp(
     # return if not found, or only found on the last line
     if (
         cmp_index in (-1, len(orig) - 1)
+        or cmp_index >= len(recomp) - 1
         or
         # recomp should also have a cmp in the same line
         not recomp[cmp_index].startswith(cmp_instruction)
@@ -249,17 +252,18 @@ def patch_fld_fmul(orig: list[str], recomp: list[str]) -> set[int]:
     # return if not found, or only found on the last line
     if (
         fld_index in (-1, len(orig) - 1)
+        or fld_index >= len(recomp) - 1
         or
         # recomp should also have a fld in the same line
         not recomp[fld_index].startswith("fld")
     ):
         return set()
 
-    (_, _, orig_operand_a) = orig[fld_index].partition(" ")
-    (orig_mnemonic_b, _, orig_operand_b) = orig[fld_index + 1].partition(" ")
+    _, _, orig_operand_a = orig[fld_index].partition(" ")
+    orig_mnemonic_b, _, orig_operand_b = orig[fld_index + 1].partition(" ")
 
-    (_, _, recomp_operand_a) = recomp[fld_index].partition(" ")
-    (recomp_mnemonic_b, _, recomp_operand_b) = recomp[fld_index + 1].partition(" ")
+    _, _, recomp_operand_a = recomp[fld_index].partition(" ")
+    recomp_mnemonic_b, _, recomp_operand_b = recomp[fld_index + 1].partition(" ")
 
     # fld must be followed by fmul/fadd and orig and recomp must have the same mnenomic
     # and the operands must be swapped
@@ -389,8 +393,8 @@ MODIFIER_INSTRUCTIONS = ("adc", "add", "lea", "mov", "neg", "sbb", "sub", "pop",
 
 
 def instruction_alters_regs(inst: str, regs: set[str]) -> bool:
-    (mnemonic, _, op_str) = inst.partition(" ")
-    (first_operand, _, __) = op_str.partition(", ")
+    mnemonic, _, op_str = inst.partition(" ")
+    first_operand, _, __ = op_str.partition(", ")
 
     return (mnemonic in MODIFIER_INSTRUCTIONS and first_operand in regs) or (
         mnemonic == "call" and "eax" in regs

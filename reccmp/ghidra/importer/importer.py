@@ -21,7 +21,6 @@ from .vtable_importer import import_vftables_into_ghidra
 from .globals import GLOBALS
 from .types import CompiledRegexReplacements
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -91,10 +90,6 @@ def _do_execute_import(
     name_substitutions: list[tuple[str, str]],
 ):
     pdb_functions = extraction.get_function_list()
-
-    if api is None:
-        logger.info("Completed the dry run outside Ghidra.")
-        return
 
     # pylint: disable=possibly-used-before-assignment
     type_importer = PdbTypeImporter(api, extraction, ignore_types=ignore_types)

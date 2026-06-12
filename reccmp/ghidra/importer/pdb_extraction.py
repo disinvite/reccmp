@@ -31,12 +31,11 @@ class CppRegisterSymbol(CppStackOrRegisterSymbol):
 
 @dataclass
 class FunctionSignature:
-    original_function_symbol: SymbolsEntry
     call_type: str
     arglist: list[CvdumpTypeKey]
     return_type: CvdumpTypeKey
     class_type: CvdumpTypeKey | None
-    stack_symbols: list[CppStackOrRegisterSymbol]
+    symbols: list[CppStackOrRegisterSymbol]
     # if non-zero: an offset to the `this` parameter in a __thiscall
     this_adjust: int
 
@@ -61,6 +60,7 @@ class PdbFunctionExtractor:
         "ThisCall": "__thiscall",
         "C Near": "default",
         "STD Near": "__stdcall",
+        "Fast Near": "__fastcall",
     }
 
     def _get_cvdump_type(
@@ -68,7 +68,7 @@ class PdbFunctionExtractor:
     ) -> CvdumpParsedType | None:
         return None if type_key is None else self.compare.types.keys.get(type_key)
 
-    def get_func_signature(self, fn: SymbolsEntry) -> FunctionSignature | None:
+    def _get_func_signature(self, fn: SymbolsEntry) -> FunctionSignature | None:
         function_type_key = fn.func_type
         if function_type_key == CVInfoTypeEnum.T_NOTYPE:
             logger.debug("Treating NOTYPE function as thunk: %s", fn.name)
@@ -90,15 +90,15 @@ class PdbFunctionExtractor:
         arg_list_pdb_types = arg_list_type.get("args", [])
         assert arg_list_type["argcount"] == len(arg_list_pdb_types)
 
-        stack_symbols: list[CppStackOrRegisterSymbol] = []
+        symbols: list[CppStackOrRegisterSymbol] = []
 
         # for some unexplained reason, the reported stack is offset by 4 when this flag is set.
         # Note that this affects the arguments (ebp + ...) but not the function stack (ebp - ...)
         stack_offset_delta = -4 if fn.frame_pointer_present else 0
 
-        for symbol in fn.stack_symbols:
+        for symbol in fn.symbols:
             if symbol.symbol_type == "S_REGISTER":
-                stack_symbols.append(
+                symbols.append(
                     CppRegisterSymbol(
                         symbol.name,
                         symbol.data_type,
@@ -107,7 +107,7 @@ class PdbFunctionExtractor:
                 )
             elif symbol.symbol_type == "S_BPREL32":
                 stack_offset = int(symbol.location[1:-1], 16)
-                stack_symbols.append(
+                symbols.append(
                     CppStackSymbol(
                         symbol.name,
                         symbol.data_type,
@@ -119,23 +119,22 @@ class PdbFunctionExtractor:
         this_adjust = function_type.get("this_adjust", 0)
 
         return FunctionSignature(
-            original_function_symbol=fn,
             call_type=call_type,
             arglist=arg_list_pdb_types,
             return_type=function_type["return_type"],
             class_type=class_type,
-            stack_symbols=stack_symbols,
+            symbols=symbols,
             this_adjust=this_adjust,
         )
 
     def get_function_list(self) -> list[PdbFunction]:
         handled = (
-            self.handle_matched_function(match)
+            self._handle_matched_function(match)
             for match in self.compare.get_functions()
         )
         return [signature for signature in handled if signature is not None]
 
-    def handle_matched_function(self, match_info: ReccmpMatch) -> PdbFunction | None:
+    def _handle_matched_function(self, match_info: ReccmpMatch) -> PdbFunction | None:
         function_data = next(
             (
                 y
@@ -149,7 +148,7 @@ class PdbFunctionExtractor:
                 # this can be either a thunk (which we want) or an external function
                 # (which we don't want), so we tell them apart based on the validity of their address.
                 self.compare.orig_bin.get_relative_addr(match_info.orig_addr)
-                return PdbFunction(match_info, None, False)
+                return PdbFunction(match_info, None, is_stub=False)
             except InvalidVirtualAddressError:
                 logger.debug(
                     "Skipping external function %s (address 0x%x not in original binary)",
@@ -161,12 +160,12 @@ class PdbFunctionExtractor:
         function_symbol = function_data.symbol_entry
         if function_symbol is None:
             logger.debug(
-                "Could not find function symbol (likely a PUBLICS entry): %s",
+                "Could not find function symbol '%s' (likely a PUBLICS entry), importing by name only",
                 match_info.name,
             )
-            return None
+            return PdbFunction(match_info, None, is_stub=False)
 
-        function_signature = self.get_func_signature(function_symbol)
+        function_signature = self._get_func_signature(function_symbol)
 
         is_stub = bool(match_info.get("stub", False))
 

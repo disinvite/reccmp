@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from typing import Literal, Iterable, Iterator
 from pydantic import BaseModel, ValidationError
 from pydantic_core import from_json
-from .diff import CombinedDiffOutput
+from reccmp.types import EntityType
+from .diff import CombinedDiffOutput, DiffReport, RawDiffOutput, raw_diff_to_udiff
 
 
 class ReccmpReportDeserializeError(Exception):
@@ -16,13 +17,23 @@ class ReccmpReportSameSourceError(Exception):
 
 @dataclass
 class ReccmpComparedEntity:
+    # pylint:disable=too-many-instance-attributes
     orig_addr: str
     name: str
     accuracy: float
+    # Version 1 files have no type, so it is optional.
+    type: EntityType | None = None
     recomp_addr: str | None = None
     is_effective_match: bool = False
     is_stub: bool = False
-    diff: CombinedDiffOutput | None = None
+    rdiff: RawDiffOutput | None = None
+
+    # Legacy field for importing version 1 files (aggregate).
+    udiff: CombinedDiffOutput | None = None
+
+    @property
+    def effective_accuracy(self) -> float:
+        return 1.0 if self.is_effective_match else self.accuracy
 
 
 class ReccmpStatusReport:
@@ -37,14 +48,90 @@ class ReccmpStatusReport:
     # Using orig addr as the key.
     entities: dict[str, ReccmpComparedEntity]
 
-    def __init__(self, filename: str, timestamp: datetime | None = None) -> None:
+    # Only set during deserialize.
+    from_version: int | None
+
+    def __init__(
+        self,
+        filename: str,
+        timestamp: datetime | None = None,
+        from_version: int | None = None,
+    ) -> None:
         self.filename = filename
+        self.from_version = from_version
         if timestamp is not None:
             self.timestamp = timestamp
         else:
             self.timestamp = datetime.now().replace(microsecond=0)
 
         self.entities = {}
+
+    def add_match(self, match: DiffReport):
+        orig_addr = f"0x{match.orig_addr:x}"
+        recomp_addr = f"0x{match.recomp_addr:x}"
+
+        self.entities[orig_addr] = ReccmpComparedEntity(
+            orig_addr=orig_addr,
+            name=match.name,
+            type=match.match_type,
+            accuracy=match.ratio,
+            recomp_addr=recomp_addr,
+            is_effective_match=match.is_effective_match,
+            is_stub=match.is_stub,
+            rdiff=match.result.diff,
+        )
+
+    def has_same_source(self, other: "ReccmpStatusReport") -> bool:
+        """Were both reports derived from the same reccmp target?"""
+        return self.filename.lower() == other.filename.lower()
+
+
+def report_function_alignment(report: ReccmpStatusReport) -> int:
+    """Report the count of all (non-contiguous) functions where
+    the address is the same in both binaries."""
+    count = 0
+    for ent in report.entities.values():
+        if ent.type == EntityType.FUNCTION and ent.orig_addr == ent.recomp_addr:
+            count += 1
+
+    return count
+
+
+def report_function_accuracy(report: ReccmpStatusReport) -> tuple[int, float, float]:
+    """Collects the accuracy and effective accuracy of all compared functions in the report.
+    Returns (function_count, total_accuracy, total_effective_accuracy).
+    Stubs are not compared so they are excluded.
+    The accuracy scores are raw score values. Divide by the function_count to get the percentage.
+    """
+    function_count = 0
+    total_accuracy = 0.0
+    total_effective_accuracy = 0.0
+
+    for ent in report.entities.values():
+        if ent.type == EntityType.FUNCTION and not ent.is_stub:
+            function_count += 1
+            total_accuracy += ent.accuracy
+            total_effective_accuracy += ent.effective_accuracy
+
+    return (function_count, total_accuracy, total_effective_accuracy)
+
+
+def report_progress_stats(report: ReccmpStatusReport) -> tuple[int, float]:
+    """Count comparable functions in the report and sum their effective-match accuracy.
+
+    Returns (implemented_funcs, raw_accuracy). Stubs and non-FUNCTION entities are excluded.
+    Entities with no recorded type (older reports that did not serialize the field) are
+    treated as functions to preserve backward-compatible behavior."""
+    implemented = 0
+    raw_accuracy = 0.0
+    for entity in report.entities.values():
+        if entity.is_stub:
+            continue
+        if entity.type is not None and entity.type != EntityType.FUNCTION:
+            continue
+        implemented += 1
+        raw_accuracy += entity.effective_accuracy
+    return implemented, raw_accuracy
 
 
 def _get_entity_for_addr(
@@ -80,7 +167,7 @@ def combine_reports(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
     accuracy score from any report."""
     assert len(samples) > 0
 
-    if not all(samples[0].filename == s.filename for s in samples):
+    if not all(samples[0].has_same_source(s) for s in samples):
         raise ReccmpReportSameSourceError
 
     output = ReccmpStatusReport(filename=samples[0].filename)
@@ -107,11 +194,42 @@ def combine_reports(samples: list[ReccmpStatusReport]) -> ReccmpStatusReport:
     return output
 
 
+def get_udiff_for_entity(entity: ReccmpComparedEntity) -> CombinedDiffOutput | None:
+    """Create a unified diff for this entity to add to a version 1 report.
+
+    If the entity was imported from a version 1 report and we already have a unified diff, use it.
+    This can occur with `reccmp-aggregate` where we copy the entity with the highest accuracy score.
+
+    If there is no unified diff, create a new one using the entity's raw diff, if it exists.
+
+    If we return None, no diff is possible because the entity matches 100%, is a stub,
+    or was created from a deserialized report without diff data."""
+    if entity.udiff is not None:
+        # An aggregate report may already have a deserialized udiff.
+        return entity.udiff
+
+    if entity.rdiff is None:
+        # We need data to create the unified diff.
+        return None
+
+    if entity.type == EntityType.VTABLE:
+        # Complete diff is always shown for vtables, even if they match.
+        return raw_diff_to_udiff(entity.rdiff, grouped=False)
+
+    if entity.is_effective_match or entity.accuracy != 1.0:
+        # Show grouped diff for effective match.
+        return raw_diff_to_udiff(entity.rdiff, grouped=True)
+
+    # Display nothing for matching functions.
+    return None
+
+
 #### JSON schemas and conversion functions ####
 
 
 @dataclass
 class JSONEntityVersion1:
+    # pylint:disable=too-many-instance-attributes
     address: str
     name: str
     matching: float
@@ -120,6 +238,8 @@ class JSONEntityVersion1:
     stub: bool = False
     effective: bool = False
     diff: CombinedDiffOutput | None = None
+    # EntityType as int. Older reports do not include this field.
+    type: int | None = None
 
 
 class JSONReportVersion1(BaseModel):
@@ -132,7 +252,7 @@ class JSONReportVersion1(BaseModel):
 def _serialize_version_1(
     report: ReccmpStatusReport, diff_included: bool = False
 ) -> JSONReportVersion1:
-    """The HTML file needs the diff data, but it is omitted from the JSON report."""
+    """The JSON report can exclude the diff to make deserialization faster."""
     entities = [
         JSONEntityVersion1(
             address=addr,  # prefer dict key over redundant value in entity
@@ -141,7 +261,8 @@ def _serialize_version_1(
             recomp=e.recomp_addr,
             stub=e.is_stub,
             effective=e.is_effective_match,
-            diff=e.diff if diff_included else None,
+            diff=get_udiff_for_entity(e) if diff_included else None,
+            type=int(e.type) if e.type is not None else None,
         )
         for addr, e in report.entities.items()
     ]
@@ -156,18 +277,26 @@ def _serialize_version_1(
 
 def _deserialize_version_1(obj: JSONReportVersion1) -> ReccmpStatusReport:
     report = ReccmpStatusReport(
-        filename=obj.file, timestamp=datetime.fromtimestamp(obj.timestamp)
+        filename=obj.file,
+        timestamp=datetime.fromtimestamp(obj.timestamp),
+        from_version=1,
     )
 
     for e in obj.data:
+        try:
+            entity_type = EntityType(e.type) if e.type is not None else None
+        except ValueError:
+            entity_type = None
+
         report.entities[e.address] = ReccmpComparedEntity(
             orig_addr=e.address,
             name=e.name,
             accuracy=e.matching,
+            type=entity_type,
             recomp_addr=e.recomp,
             is_stub=e.stub,
             is_effective_match=e.effective,
-            diff=e.diff,
+            udiff=e.diff,
         )
 
     return report

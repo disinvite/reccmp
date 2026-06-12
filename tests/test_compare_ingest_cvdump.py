@@ -3,8 +3,7 @@ from reccmp.formats import PEImage
 from reccmp.cvdump import CvdumpAnalysis, CvdumpParser
 from reccmp.compare.db import EntityDb
 from reccmp.compare.ingest import load_cvdump
-from reccmp.types import EntityType
-
+from reccmp.types import EntityType, ImageId
 
 # These functions use our sample PE image to "cheat" and not have to mock as much.
 # This sets up the imagebase and valid section boundaries for calculation inside load_cvdump.
@@ -32,28 +31,26 @@ def test_size_estimate(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "PUBLICS",
-        dedent(
-            """\
+        dedent("""\
         S_PUB32: [0003:0001292A], Flags: 00000000, __OP_LOG10jmptab
         S_PUB32: [0003:0001294A], Flags: 00000000, __OP_LOGjmptab
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
     # There are 32 bytes between this and __OP_LOGjmptab
-    entity = db.get_by_recomp(0x1010292A)
+    entity = db.get(ImageId.RECOMP, 0x1010292A)
     assert entity is not None
     assert entity.get("symbol") == "__OP_LOG10jmptab"
-    assert entity.get("size") == 0x20
+    assert entity.any_size() == 0x20
 
     # Calculate the distance to the end of the .data section.
-    entity = db.get_by_recomp(0x1010294A)
+    entity = db.get(ImageId.RECOMP, 0x1010294A)
     assert entity is not None
     assert entity.get("symbol") == "__OP_LOGjmptab"
-    assert entity.get("size") == 0x100F0000 + 0x1A734 - 0x1010294A
+    assert entity.any_size() == 0x100F0000 + 0x1A734 - 0x1010294A
 
 
 def test_size_estimate_different_sections(binfile: PEImage):
@@ -62,12 +59,10 @@ def test_size_estimate_different_sections(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "PUBLICS",
-        dedent(
-            """\
+        dedent("""\
         S_PUB32: [0002:00000018], Flags: 00000000, ??_7Score@@6B@
         S_PUB32: [0003:0001292A], Flags: 00000000, __OP_LOG10jmptab
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
@@ -76,14 +71,14 @@ def test_size_estimate_different_sections(binfile: PEImage):
     # Calculate the distance to the end of the .rdata section.
     # n.b. The physical size is aligned to the image FileAlignment value
     # so it is used instead of the smaller virtual size.
-    entity = db.get_by_recomp(0x100D4018)
+    entity = db.get(ImageId.RECOMP, 0x100D4018)
     assert entity is not None
-    assert entity.get("size") == 0x100D4000 + 0x1B600 - 0x100D4018
+    assert entity.any_size() == 0x100D4000 + 0x1B600 - 0x100D4018
 
     # Calculate the distance to the end of the .data section.
-    entity = db.get_by_recomp(0x1010292A)
+    entity = db.get(ImageId.RECOMP, 0x1010292A)
     assert entity is not None
-    assert entity.get("size") == 0x100F0000 + 0x1A734 - 0x1010292A
+    assert entity.any_size() == 0x100F0000 + 0x1A734 - 0x1010292A
 
 
 def test_size_estimate_section_contrib(binfile: PEImage):
@@ -93,45 +88,41 @@ def test_size_estimate_section_contrib(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "PUBLICS",
-        dedent(
-            """\
+        dedent("""\
         S_PUB32: [0003:0001292A], Flags: 00000000, __OP_LOG10jmptab
         S_PUB32: [0003:0001294A], Flags: 00000000, __OP_LOGjmptab
         S_PUB32: [0003:0001296A], Flags: 00000000, __OP_EXPjmptab
-        """
-        ),
+        """),
     )
     parser.read_section(
         "SECTION CONTRIBUTIONS",
-        dedent(
-            """\
+        dedent("""\
           0032  0003:0001292A  00000100  40303040
           0032  0003:0001294A  00000010  40303040
           0032  0003:0001296A  00000010  40303040
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
     # Distance to next entity is smaller than section contribution.
-    entity = db.get_by_recomp(0x1010292A)
+    entity = db.get(ImageId.RECOMP, 0x1010292A)
     assert entity is not None
     assert entity.get("symbol") == "__OP_LOG10jmptab"
-    assert entity.get("size") == 0x20
+    assert entity.any_size() == 0x20
 
     # Section contribution size is smaller than distance to next entity.
-    entity = db.get_by_recomp(0x1010294A)
+    entity = db.get(ImageId.RECOMP, 0x1010294A)
     assert entity is not None
     assert entity.get("symbol") == "__OP_LOGjmptab"
-    assert entity.get("size") == 0x10
+    assert entity.any_size() == 0x10
 
     # Prefer section contribution size over distance to end of section.
-    entity = db.get_by_recomp(0x1010296A)
+    entity = db.get(ImageId.RECOMP, 0x1010296A)
     assert entity is not None
     assert entity.get("symbol") == "__OP_EXPjmptab"
-    assert entity.get("size") == 0x10
+    assert entity.any_size() == 0x10
 
 
 def test_no_entity_for_section_contributions_only(binfile: PEImage):
@@ -146,7 +137,7 @@ def test_no_entity_for_section_contributions_only(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    assert db.get_by_recomp(0x1010292A) is None
+    assert db.get(ImageId.RECOMP, 0x1010292A) is None
 
 
 def test_symbol_overwrite(binfile: PEImage):
@@ -157,18 +148,16 @@ def test_symbol_overwrite(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "PUBLICS",
-        dedent(
-            """\
+        dedent("""\
             S_PUB32: [0001:0008B410], Flags: 00000000, __strlwr
             S_PUB32: [0001:0008B410], Flags: 00000000, _strlwr
-            """
-        ),
+            """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x1008C410)
+    entity = db.get(ImageId.RECOMP, 0x1008C410)
     assert entity is not None
     assert entity.get("symbol") == "_strlwr"
 
@@ -186,7 +175,7 @@ def test_string_without_section_contrib(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100DB57C)
+    entity = db.get(ImageId.RECOMP, 0x100DB57C)
     assert entity is not None
     assert entity.get("type") == EntityType.STRING
     assert entity.get("symbol") == "??_C@_08LIDF@December?$AA@"
@@ -195,7 +184,7 @@ def test_string_without_section_contrib(binfile: PEImage):
     assert entity.get("name") is None
 
     # Size will be determined after reading from the binary.
-    assert entity.get("size") is None
+    assert entity.size(ImageId.RECOMP) is None
 
 
 def test_string_with_section_contrib(binfile: PEImage):
@@ -216,7 +205,7 @@ def test_string_with_section_contrib(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100DB57C)
+    entity = db.get(ImageId.RECOMP, 0x100DB57C)
     assert entity is not None
     assert entity.get("type") == EntityType.STRING
     assert entity.get("symbol") == "??_C@_08LIDF@December?$AA@"
@@ -225,7 +214,7 @@ def test_string_with_section_contrib(binfile: PEImage):
     assert entity.get("name") is None
 
     # Size includes null-terminator
-    assert entity.get("size") == 9
+    assert entity.any_size() == 9
 
 
 def test_utf16_without_section_contrib(binfile: PEImage):
@@ -241,7 +230,7 @@ def test_utf16_without_section_contrib(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100DAAA0)
+    entity = db.get(ImageId.RECOMP, 0x100DAAA0)
     assert entity is not None
     assert entity.get("type") == EntityType.WIDECHAR
     assert (
@@ -253,7 +242,7 @@ def test_utf16_without_section_contrib(binfile: PEImage):
     assert entity.get("name") is None
 
     # Size will be determined after reading from the binary.
-    assert entity.get("size") is None
+    assert entity.size(ImageId.RECOMP) is None
 
 
 def test_utf16_with_section_contrib(binfile: PEImage):
@@ -272,7 +261,7 @@ def test_utf16_with_section_contrib(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100DAAA0)
+    entity = db.get(ImageId.RECOMP, 0x100DAAA0)
     assert entity is not None
     assert entity.get("type") == EntityType.WIDECHAR
     assert (
@@ -284,7 +273,7 @@ def test_utf16_with_section_contrib(binfile: PEImage):
     assert entity.get("name") is None
 
     # Size includes two-byte null-terminator
-    assert entity.get("size") == 14
+    assert entity.any_size() == 14
 
 
 def test_vtable(binfile: PEImage):
@@ -299,7 +288,7 @@ def test_vtable(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100D4018)
+    entity = db.get(ImageId.RECOMP, 0x100D4018)
     assert entity is not None
     assert entity.get("type") == EntityType.VTABLE
     assert entity.get("name") == "Score::`vftable'"
@@ -318,7 +307,7 @@ def test_vtable_with_vbclass(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100D6860)
+    entity = db.get(ImageId.RECOMP, 0x100D6860)
     assert entity is not None
     assert entity.get("type") == EntityType.VTABLE
     assert entity.get("name") == "BumpBouy::`vftable'{for `OgelAnimActor'}"
@@ -337,7 +326,7 @@ def test_vbtable(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100D6788)
+    entity = db.get(ImageId.RECOMP, 0x100D6788)
     assert entity is not None
     assert entity.get("type") == EntityType.DATA
     assert entity.get("name") == "BumpBouy::`vbtable'"
@@ -361,7 +350,7 @@ def test_gdata32(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100D94F8)
+    entity = db.get(ImageId.RECOMP, 0x100D94F8)
     assert entity is not None
     assert entity.get("type") == EntityType.DATA
     assert entity.get("name") == "g_pizzaHitSounds"
@@ -379,7 +368,7 @@ def test_ldata32(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x100D4000)
+    entity = db.get(ImageId.RECOMP, 0x100D4000)
     assert entity is not None
     assert entity.get("type") == EntityType.DATA
     assert entity.get("name") == "Pi"
@@ -403,9 +392,9 @@ def test_variable_size_scalar_type(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x10102B24)
+    entity = db.get(ImageId.RECOMP, 0x10102B24)
     assert entity is not None
-    assert entity.get("size") == 4
+    assert entity.any_size() == 4
     assert entity.get("name") == "g_nextInterruptWavIndex"
 
 
@@ -424,13 +413,13 @@ def test_variable_size_without_type_info(binfile: PEImage):
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x101015B8)
+    entity = db.get(ImageId.RECOMP, 0x101015B8)
     assert entity is not None
     assert entity.get("name") == "g_hdPath"
 
     # Asserting it this way because the current behavior is to estimate the entity size
     # using the distance between the address and the end of the section.
-    assert entity.get("size") != 1024
+    assert entity.any_size() != 1024
 
 
 def test_variable_size_with_type_info(binfile: PEImage):
@@ -447,22 +436,20 @@ def test_variable_size_with_type_info(binfile: PEImage):
     )
     parser.read_section(
         "TYPES",
-        dedent(
-            """\
+        dedent("""\
             0x1424 : Length = 14, Leaf = 0x1503 LF_ARRAY
                 Element type = T_RCHAR(0070)
                 Index type = T_SHORT(0011)
                 length = 1024
                 Name = 
-        """
-        ),
+        """),
     )
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x101015B8)
+    entity = db.get(ImageId.RECOMP, 0x101015B8)
     assert entity is not None
-    assert entity.get("size") == 1024
+    assert entity.any_size() == 1024
     assert entity.get("data_type") == 0x1424
 
 
@@ -472,8 +459,7 @@ def test_gproc32(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "SYMBOLS",
-        dedent(
-            """\
+        dedent("""\
         (00038C) S_GPROC32: [0001:00037220], Cb: 0000008B, Type:             0x2068, Pizza::Start
                  Parent: 00000000, End: 000003E8, Next: 00000000
                  Debug start: 00000001, Debug end: 00000087
@@ -482,17 +468,16 @@ def test_gproc32(binfile: PEImage):
         (0003D0)  S_BPREL32: [00000004], Type:             0x1134, p_objectId
 
         (0003E8) S_END
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x10038220)
+    entity = db.get(ImageId.RECOMP, 0x10038220)
     assert entity is not None
     assert entity.get("type") == EntityType.FUNCTION
-    assert entity.get("size") == 0x8B
+    assert entity.any_size() == 0x8B
     assert entity.get("name") == "Pizza::Start"
 
 
@@ -502,23 +487,21 @@ def test_lproc32(binfile: PEImage):
     parser = CvdumpParser()
     parser.read_section(
         "SYMBOLS",
-        dedent(
-            """\
+        dedent("""\
         (0000A8) S_LPROC32: [0001:00091350], Cb: 00000005, Type:             0x164F, $E28
                  Parent: 00000000, End: 000000D4, Next: 00000000
                  Debug start: 00000000, Debug end: 00000005
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
     # This is one of the ___xc_a functions.
-    entity = db.get_by_recomp(0x10092350)
+    entity = db.get(ImageId.RECOMP, 0x10092350)
     assert entity is not None
     assert entity.get("type") == EntityType.FUNCTION
-    assert entity.get("size") == 5
+    assert entity.any_size() == 5
     assert entity.get("name") == "$E28"
 
 
@@ -550,8 +533,7 @@ def test_gproc_with_static_var(binfile: PEImage):
     # MSVC 4.20 doesn't indicate static variables like this.
     parser.read_section(
         "SYMBOLS",
-        dedent(
-            """\
+        dedent("""\
         (000780) S_GPROC32: [0001:0009CA20], Cb: 00000051, Type:             0x234C, EnableResizing
                  Parent: 00000000, End: 000007EC, Next: 00000000
                  Debug start: 00000007, Debug end: 0000004E
@@ -560,21 +542,20 @@ def test_gproc_with_static_var(binfile: PEImage):
         (0007CC)  S_LDATA32: [0003:00019594], Type:       T_UINT4(0075), g_dwStyle
 
         (0007EC) S_END
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
-    entity = db.get_by_recomp(0x10109594)
+    entity = db.get(ImageId.RECOMP, 0x10109594)
     assert entity is not None
     assert entity.get("type") == EntityType.DATA
     assert entity.get("name") == "g_dwStyle"
 
     # We can get the size from just the scalar type for now.
     # We may need to preload the types db with MSVC-specific data later. TODO: #106
-    assert entity.get("size") == 4
+    assert entity.any_size() == 4
 
     # TODO: #102. The parent function's address should be set instead.
     symbol = entity.get("symbol")
@@ -583,38 +564,67 @@ def test_gproc_with_static_var(binfile: PEImage):
     assert "EnableResizing" in symbol
 
 
-def test_floats(binfile: PEImage):
+def test_float_symbols_with_size(binfile: PEImage):
     db = EntityDb()
     parser = CvdumpParser()
     parser.read_section(
         "PUBLICS",
-        dedent(
-            """\
+        dedent("""\
         S_PUB32: [0002:00001740], Flags: 00000000, __real@4@00000000000000000000
         S_PUB32: [0002:00001748], Flags: 00000000, __real@8@00000000000000000000
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
     # Zero in single precision
-    entity = db.get_by_recomp(0x100D5740)
+    entity = db.get(ImageId.RECOMP, 0x100D5740)
     assert entity is not None
     assert entity.get("symbol") == "__real@4@00000000000000000000"
     assert entity.get("type") == EntityType.FLOAT
-    assert entity.get("size") == 4
+    assert entity.any_size() == 4
 
     # The name will be blank until we read from the binary in a later step.
     assert entity.get("name") is None
 
     # Zero in double precision
-    entity = db.get_by_recomp(0x100D5748)
+    entity = db.get(ImageId.RECOMP, 0x100D5748)
     assert entity is not None
     assert entity.get("symbol") == "__real@8@00000000000000000000"
     assert entity.get("type") == EntityType.FLOAT
-    assert entity.get("size") == 8
+    assert entity.any_size() == 8
+    assert entity.get("name") is None
+
+
+def test_float_symbols_without_size(binfile: PEImage):
+    db = EntityDb()
+    parser = CvdumpParser()
+    parser.read_section(
+        "PUBLICS",
+        dedent("""\
+        S_PUB32: [0002:00001740], Flags: 00000000, __real@3b95a025
+        S_PUB32: [0002:00001748], Flags: 00000000, __real@0000000000000000
+        """),
+    )
+
+    cvdump_analysis = CvdumpAnalysis(parser)
+    load_cvdump(cvdump_analysis, db, binfile)
+
+    entity = db.get(ImageId.RECOMP, 0x100D5740)
+    assert entity is not None
+    assert entity.get("symbol") == "__real@3b95a025"
+    assert entity.get("type") == EntityType.FLOAT
+    assert entity.size(ImageId.RECOMP) == 4
+
+    # The name will be blank until we read from the binary in a later step.
+    assert entity.get("name") is None
+
+    entity = db.get(ImageId.RECOMP, 0x100D5748)
+    assert entity is not None
+    assert entity.get("symbol") == "__real@0000000000000000"
+    assert entity.get("type") == EntityType.FLOAT
+    assert entity.size(ImageId.RECOMP) == 8
     assert entity.get("name") is None
 
 
@@ -629,19 +639,17 @@ def test_skip_global_without_matching_public(binfile: PEImage):
     )
     parser.read_section(
         "GLOBALS",
-        dedent(
-            """\
+        dedent("""\
         S_GDATA32: [0004:0002F6BC], Type:             0x10D5, g_infomainScript
         S_GDATA32: [0004:0000C718], Type:             0x10D5, g_infomainScript
-        """
-        ),
+        """),
     )
 
     cvdump_analysis = CvdumpAnalysis(parser)
     load_cvdump(cvdump_analysis, db, binfile)
 
     # Should skip the entry at 0004:0000C718
-    assert db.get_by_recomp(0x101DF718) is None
+    assert db.get(ImageId.RECOMP, 0x101DF718) is None
 
     # Should create an entry at 0004:0002F6BC
-    assert db.get_by_recomp(0x1013A6BC) is not None
+    assert db.get(ImageId.RECOMP, 0x1013A6BC) is not None

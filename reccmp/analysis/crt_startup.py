@@ -65,51 +65,81 @@ class CrtStartupArray:
     """Maps thunked initializer function to the thunk address.
     The thunk is what actually appeared in the ___xc_a/z list."""
 
+    atexit: dict[int, tuple[int, ...]]
+
 
 ADDR_REGEX = re.compile(r"0x[0-9a-f]{6,8}")
 
 
-class UsedAddressCollector:
-    seen_addrs: list[UsedAddress]
-    """List of addrs that would be replaced by a name or placeholder."""
+def collect_used_addresses(
+    instructions: list[DisasmLiteInst], is_entity: Callable[[int], bool]
+) -> list[UsedAddress]:
+    seen_addrs = []
 
-    is_entity: Callable[[int], bool]
-    """Test whether the address is a known entity in the database."""
-
-    def __init__(self, is_entity: Callable[[int], bool]) -> None:
-        self.is_entity = is_entity
-        self.seen_addrs = []
-
-    def _append_addrs(self, text: str, is_write: bool):
+    def _append_addrs(text: str, is_write: bool):
         for hex_str in ADDR_REGEX.findall(text):
             addr = int(hex_str, 16)
-            if self.is_entity(addr):
-                self.seen_addrs.append((addr, is_write))
+            if is_entity(addr):
+                seen_addrs.append((addr, is_write))
 
-    def analyze(self, data: Buffer, start_addr: int):
-        ig = InstructGen(bytes(data), start_addr, True)
+    for inst in instructions:
+        if inst.mnemonic in JUMP_MNEMONICS:
+            continue
 
-        instructions = (
-            inst
-            for section in ig.sections
-            for inst in section.contents
-            if section.type == SectionType.CODE
-        )
+        if inst.mnemonic in ("mov", "fstp"):
+            dst_operand, _, src_operand = inst.op_str.partition(", ")
+            _append_addrs(dst_operand, True)
+            _append_addrs(src_operand, False)
+        else:
+            _append_addrs(inst.op_str, False)
 
-        for inst in instructions:
-            assert isinstance(inst, DisasmLiteInst)
-            if inst.mnemonic == "ret":
-                break
+    return seen_addrs
 
-            if inst.mnemonic in JUMP_MNEMONICS:
-                continue
 
-            if inst.mnemonic in ("mov", "fstp"):
-                dst_operand, _, src_operand = inst.op_str.partition(", ")
-                self._append_addrs(dst_operand, True)
-                self._append_addrs(src_operand, False)
-            else:
-                self._append_addrs(inst.op_str, False)
+def collect_atexit_args(
+    instructions: list[DisasmLiteInst], get_name: Callable[[int], str]
+) -> list[int]:
+    def is_atexit(inst: DisasmLiteInst) -> bool:
+        if inst.mnemonic == "call":
+            for hex_str in ADDR_REGEX.findall(inst.op_str):
+                addr = int(hex_str, 16)
+                return "atexit" in get_name(addr)
+
+        return False
+
+    for i, inst in enumerate(instructions):
+        if is_atexit(inst):
+            break
+    else:
+        return []
+
+    pushed_addrs = []
+    for inst in instructions[:i]:
+        if inst.mnemonic == "push":
+            for hex_str in ADDR_REGEX.findall(inst.op_str):
+                addr = int(hex_str, 16)
+                pushed_addrs.append(addr)
+
+    return pushed_addrs
+
+
+def disassemble_to_first_ret(data: Buffer, start_addr: int) -> Iterator[DisasmLiteInst]:
+    ig = InstructGen(bytes(data), start_addr, True)
+
+    instructions = (
+        inst
+        for section in ig.sections
+        for inst in section.contents
+        if section.type == SectionType.CODE
+    )
+
+    for inst in instructions:
+        assert isinstance(inst, DisasmLiteInst)
+
+        yield inst
+
+        if inst.mnemonic == "ret":
+            break
 
 
 def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:
@@ -130,6 +160,23 @@ def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:
     return 1000
 
 
+def get_atexit_addrs(
+    db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
+) -> tuple[int, ...]:
+    size = get_function_sample_size(db, image_id, addr)
+    raw = binfile.read(addr, size)
+
+    def entity_name(test_addr: int) -> str:
+        ent = db.get(image_id, test_addr, exact=True)
+        if ent:
+            return ent.get("name", "")
+
+        return ""
+
+    instructions = list(disassemble_to_first_ret(raw, addr))
+    return tuple(collect_atexit_args(instructions, entity_name))
+
+
 def get_function_fingerprint(
     db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
 ) -> tuple[UsedAddress, ...]:
@@ -143,11 +190,11 @@ def get_function_fingerprint(
     def entity_exists(test_addr: int) -> bool:
         return db.get(image_id, test_addr, exact=True) is not None
 
-    collector = UsedAddressCollector(entity_exists)
-    collector.analyze(raw, addr)
+    instructions = list(disassemble_to_first_ret(raw, addr))
+    seen_addrs = collect_used_addresses(instructions, entity_exists)
 
     normalized_addrs = []
-    for sample_addr, is_write in collector.seen_addrs:
+    for sample_addr, is_write in seen_addrs:
         ent = db.get(image_id, sample_addr)
         # Only matched entities are candidates for the fingerprint
         # because we have an address in both address spaces.
@@ -157,6 +204,14 @@ def get_function_fingerprint(
             normalized_addrs.append((normalized_addr, is_write))
 
     return tuple(normalized_addrs)
+
+
+def get_instructions(
+    db: EntityDb, image_id: ImageId, binfile: PEImage, addr: int
+) -> list[DisasmLiteInst]:
+    size = get_function_sample_size(db, image_id, addr)
+    raw = binfile.read(addr, size)
+    return list(disassemble_to_first_ret(raw, addr))
 
 
 def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
@@ -219,16 +274,18 @@ def analyze_crt_startup_functions(
 
     fingerprints = {}
     thunks = {}
+    atexit = {}
 
     for xc_addr in funcs:
         # n.b. The first value in the array is zero. It was excluded by read_crt_array.
         was_thunk, real_addr = unwrap_jump(binfile, xc_addr)
         fp = get_function_fingerprint(db, image_id, binfile, real_addr)
+        atexit[real_addr] = get_atexit_addrs(db, image_id, binfile, real_addr)
         fingerprints[real_addr] = fp
         if was_thunk:
             thunks[real_addr] = xc_addr
 
-    return CrtStartupArray(fingerprints, thunks)
+    return CrtStartupArray(fingerprints, thunks, atexit)
 
 
 def detect_crt_startup_arrays(
@@ -298,11 +355,18 @@ def create_crt_matches(
 
     # Add any pairs of thunks that point to an already matched function.
     thunks = []
+    atexit: list[tuple[int, int]] = []
     for orig_addr, recomp_addr in matches:
+        if orig_addr in orig_array.atexit and recomp_addr in recomp_array.atexit:
+            atexit.extend(
+                zip(orig_array.atexit[orig_addr], recomp_array.atexit[recomp_addr])
+            )
+
         if orig_addr in orig_array.thunks and recomp_addr in recomp_array.thunks:
             thunks.append(
                 (orig_array.thunks[orig_addr], recomp_array.thunks[recomp_addr])
             )
 
     matches.extend(thunks)
+    matches.extend(atexit)
     return matches

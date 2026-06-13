@@ -1,5 +1,6 @@
 import bisect
 import re
+import string
 from typing import Iterator
 
 # TODO: L-string L-char.
@@ -63,6 +64,10 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
                 yield (range(start, end), "CHAR")
 
             elif mode == "nothing":
+                # digit separator
+                if pos > 0 and text[pos - 1] in string.hexdigits:
+                    continue
+
                 mode = "char"
                 start = pos
                 if end != pos:

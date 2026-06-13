@@ -236,3 +236,69 @@ def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
             break
 
     return "::".join(stack)
+
+
+def reduce_scopes(tokens: list[CodeToken]) -> tuple[list[range], list[CodeToken]]:
+    start = [
+        (i, token)
+        for i, (_, token) in enumerate(tokens)
+        if token != "CODE"
+        and (
+            token in ("{", "}")
+            or (token.startswith("#") and ("if" in token or "el" in token))
+        )
+    ]
+
+    ranges = []
+    done = set()
+    while True:
+        stack = []
+        did_something = False
+        for i, token in start:
+            if i in done:
+                continue
+
+            # print(stack, token)
+            if token in ("}", "#endif"):
+                crop = []
+                for last_i, last_token in stack[::-1]:
+                    if token == "}":
+                        if last_token == "{":
+                            crop = [(last_i, last_token)]
+                        break
+
+                    if token == "#endif":
+                        if last_token in ("{", "}"):
+                            crop = []
+                            break
+
+                        crop.append((last_i, last_token))
+                        if (
+                            "if" in last_token
+                            and "end" not in last_token
+                            and "el" not in last_token
+                        ):
+                            break
+                else:
+                    crop = []
+
+                if crop:
+                    for _ in range(len(crop)):
+                        stack.pop()
+
+                    last_i, _ = crop[-1]
+                    did_something = True
+                    # hack to include else
+                    done.update(range(last_i, i + 1))
+                    if token == "}":
+                        ranges.append(range(last_i, i + 1))
+                else:
+                    stack.append((i, token))
+
+            else:
+                stack.append((i, token))
+
+        if not did_something:
+            break
+
+    return (ranges, [(i, token) for i, token in start if i not in done])

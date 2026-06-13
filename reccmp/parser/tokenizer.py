@@ -5,8 +5,8 @@ from typing import Iterator
 # TODO: L-string L-char.
 r_charsOfImport = re.compile(
     r"""
-\#\S+(?=\s)|
-(?<!\\)[\"']|
+\#\s*[a-z]+(?=\s)|
+\\?[\\\"']|
 [{}=;]|
 //|
 /\*|

@@ -238,8 +238,11 @@ def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
     return "::".join(stack)
 
 
-def reduce_scopes(tokens: list[CodeToken]) -> tuple[list[range], list[CodeToken]]:
-    start = [
+IndexToken = tuple[int, str]
+
+
+def scope_tokens_only(tokens: list[CodeToken]) -> list[IndexToken]:
+    return [
         (i, token)
         for i, (_, token) in enumerate(tokens)
         if token != "CODE"
@@ -249,12 +252,14 @@ def reduce_scopes(tokens: list[CodeToken]) -> tuple[list[range], list[CodeToken]
         )
     ]
 
+
+def reduce_scopes(tokens: list[IndexToken]) -> tuple[list[range], list[IndexToken]]:
     ranges = []
     done = set()
     while True:
         stack = []
         did_something = False
-        for i, token in start:
+        for i, token in tokens:
             if i in done:
                 continue
 
@@ -301,4 +306,98 @@ def reduce_scopes(tokens: list[CodeToken]) -> tuple[list[range], list[CodeToken]
         if not did_something:
             break
 
-    return (ranges, [(i, token) for i, token in start if i not in done])
+    return (ranges, [(i, token) for i, token in tokens if i not in done])
+
+
+def reduced_tagger(remain: list[IndexToken]) -> set[int]:
+    """Group leftover ppc and curly brackets into groups.
+    If there is an uninterrupted group where all legs have the same curly offset
+    use any subgroup and discard the rest.
+
+    Sample debug output: mxdsobject.cpp
+    REMAINING:
+      179,     1,  i:  357   pos: 3497 : {       (0, 0)
+      184,     1,  i:  365   pos: 3558 : #ifdef       (1, -1)
+      186,    40,  i:  377   pos: 3630 : {       (1, 0)
+      187,     1,  i:  379   pos: 3632 : #else       (1, -1)
+      188,    49,  i:  389   pos: 3686 : {       (1, 1)
+      189,     1,  i:  391   pos: 3688 : #endif       (1, -1)
+      199,     2,  i:  428   pos: 4004 : }       (0, 0)
+      206,     1,  i:  440   pos: 4073 : }       (0, 0)
+    """
+    interrupted = False
+    global_mask = set()
+    mask = set()
+    legs = []
+
+    for i, token in remain:
+        mask.add(i)
+
+        if token in ("{", "}"):
+            if legs:
+                legs[-1].append(i)
+
+        elif "if" in token and "el" not in token and "end" not in token:
+            interrupted = False
+            mask = {i}
+            legs = [[]]
+
+        elif "el" in token:
+            legs.append([])
+
+        elif "endif" in token:
+            # Do it before popping so we tag with the current group.
+            if not interrupted and all(len(leg) == len(legs[0]) for leg in legs):
+                keepers = set(legs[0])
+                global_mask |= mask - keepers
+
+            interrupted = True
+            legs.clear()
+            mask.clear()
+
+    return global_mask
+
+
+def enable_all_and_reduce(
+    tokens: list[IndexToken],
+) -> tuple[list[range], list[IndexToken]]:
+    remain = [(i, token) for i, token in tokens if token in ("{", "}")]
+    return reduce_scopes(remain)
+
+
+def scope_detect_churn(tokens: list[CodeToken]) -> tuple[list[range], list[IndexToken]]:
+    remain = scope_tokens_only(tokens)
+
+    out_ranges = []
+
+    reduced_this_step = False
+    for _ in range(10):
+        # Trivial match of curly brackets that are next to each other.
+        new_ranges, new_remain = reduce_scopes(remain)
+        if new_ranges:
+            out_ranges.extend(new_ranges)
+            remain = new_remain  # ?
+            reduced_this_step = True
+
+        # End early if there are no PPC tokens left.
+        if not new_remain:
+            break
+
+        # Can we simply enable all PPC regions and match remaining brackets?
+        new_ranges, new_remain = enable_all_and_reduce(remain)
+        # If there is nothing left, this was successful.
+        # Otherwise, do not update the lists with partial matches.
+        if not new_remain:
+            out_ranges.extend(new_ranges)
+            remain = new_remain
+            break
+
+        mask = reduced_tagger(remain)
+        if mask:
+            remain = [(i, token) for i, token in remain if i not in mask]
+            reduced_this_step = True
+
+        if not reduced_this_step:
+            break
+
+    return (sorted(out_ranges, key=lambda r: r.start), remain)

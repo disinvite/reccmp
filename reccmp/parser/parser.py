@@ -35,7 +35,7 @@ from .tokenizer import (
     get_line_column_pos,
     get_newlines_from_text,
     get_token_groups,
-    get_enclosures,
+    scope_detect_churn,
     tokenize_code_file,
 )
 
@@ -176,6 +176,9 @@ class DecompParser:
 
         self.filename: PurePath = PurePath("")
 
+        self.newlines: list[int] = []
+        self.enclosures: list[range] | None = None
+
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
         self.alerts = []
@@ -196,6 +199,8 @@ class DecompParser:
         self.filename = filename
 
         self.curly.reset()
+        self.newlines = []
+        self.enclosures = None
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -601,9 +606,6 @@ class DecompParser:
                 self._vtable_done(class_name=vtable_class)
 
     def code_vtable(self, text: str, tokens: list[CodeToken], start: int):
-        # TODO: redundant
-        newlines = get_newlines_from_text(text)
-
         name = None
 
         for i in range(start, len(tokens)):
@@ -624,9 +626,8 @@ class DecompParser:
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
 
     def code_function(self, text: str, tokens: list[CodeToken], start: int):
-        # TODO: redundant
-        enclosures = get_enclosures(text, tokens)
-        newlines = get_newlines_from_text(text)
+        if self.enclosures is None:
+            self.enclosures, _ = scope_detect_churn(tokens)
 
         for i in range(start, len(tokens)):
             span, token = tokens[i]
@@ -644,31 +645,28 @@ class DecompParser:
         # TODO: conversion between text pos and index is dangerous.
 
         # `span` now equals curly token position.
-        self.line_number, _ = get_line_column_pos(newlines, span.start)
+        self.line_number, _ = get_line_column_pos(self.newlines, span.start)
         self._function_starts_here()
         try:
             scope_range = next(
-                enclosure for enclosure in enclosures if enclosure.start == i
+                enclosure for enclosure in self.enclosures if enclosure.start == i
             )
         except StopIteration as ex:
             breakpoint()
             raise ex
 
         try:
-            span, _ = tokens[scope_range.stop]
+            span, _ = tokens[scope_range.stop - 1]
         except IndexError:
             breakpoint()
 
-        self.line_number, _ = get_line_column_pos(newlines, span.start)
+        self.line_number, _ = get_line_column_pos(self.newlines, span.start)
         self._function_done()
 
     def read_comment_block(self, text: str, tokens: list[CodeToken]):
-        # TODO: redundant
-        newlines = get_newlines_from_text(text)
-
         for span, token in tokens:
             excerpt = text[span.start : span.stop]
-            line_no, _ = get_line_column_pos(newlines, span.start)
+            line_no, _ = get_line_column_pos(self.newlines, span.start)
             self.line_number = line_no
 
             if token == "LINE COMMENT":
@@ -694,6 +692,7 @@ class DecompParser:
 
     def read(self, text: str):
         tokens = list(tokenize_code_file(text))
+        self.newlines = get_newlines_from_text(text)
 
         def curly_counter(token: str) -> int:
             if token == "{":
@@ -705,7 +704,6 @@ class DecompParser:
         # if sum(curly_counter(token) for _, token in tokens) != 0:
         #    return
 
-        newlines = get_newlines_from_text(text)
         group_ranges = list(get_token_groups(text, tokens))
         # Collect consecutive comments that are markers.
         # For each one: satisfy what is missing.

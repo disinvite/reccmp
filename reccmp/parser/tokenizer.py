@@ -93,7 +93,22 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
         elif token in ("\\\n", "\n"):
             # TODO: comment disrupting continuation char
             if token == "\n":
+                if mode == "nothing" and ppc_mode:
+                    end = pos
+                    yield (range(start, end), "CODE")
+                    start = end
+
                 ppc_mode = False
+                if mode == "string":
+                    mode = "nothing"
+                    end = pos
+                    yield (range(start, end), "STRING")
+                    start = end
+                elif mode == "char":
+                    mode = "nothing"
+                    end = pos
+                    yield (range(start, end), "CHAR")
+                    start = end
 
             if mode == "line_comment":
                 mode = "nothing"
@@ -103,12 +118,28 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
         elif token and token[0] == "#":
             if mode == "nothing":
                 ppc_mode = True
-                start = pos
-                if end != pos:
-                    yield (range(end, pos), "CODE")
+                if start != pos:
+                    yield (range(start, pos), "CODE")
 
                 end = pos + len(token)
-                yield (range(start, end), token)
+                yield (range(pos, end), token)
+                # This is not a paired delimiter.
+                # The next token starts where this one ends.
+                start = end
+
+    # Unfinished token
+    if end < len(text) - 1:
+        last_range = range(start, len(text))
+        if mode == "line_comment":
+            yield (last_range, "LINE COMMENT")
+        elif mode == "block_comment":
+            yield (last_range, "BLOCK COMMENT")
+        elif mode == "string":
+            yield (last_range, "STRING")
+        elif mode == "char":
+            yield (last_range, "CHAR")
+        else:
+            yield (last_range, "CODE")
 
 
 def get_newlines_from_text(text: str) -> list[int]:

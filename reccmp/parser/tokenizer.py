@@ -28,40 +28,41 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
     mode = "nothing"
     ppc_mode = False
 
+    # Start of code token between delimiters.
     start = 0
-    end = 0
 
     for match in r_charsOfImport.finditer(text):
         pos = match.start()
+        stop = match.end()  # performant?
         token = match.group(0)
 
         # Suppress typical breaks if we are in a #define expression (except strings)
         if mode == "nothing" and token in {"{", "}", "=", ";"} and not ppc_mode:
-            if end != pos:
-                yield (range(end, pos), "CODE")
-            end = pos + 1  # ?
-            yield (range(pos, pos + 1), token)
-            continue
+            if start != pos:
+                yield (range(start, pos), "CODE")
+                start = pos
 
-        # yield (range(start, end), mode) ?
+            yield (range(pos, stop), token)
+            start = stop
+            continue
 
         if token == '"':
             if mode == "string":
                 mode = "nothing"
-                end = pos + 1
-                yield (range(start, end), "STRING")
+                yield (range(start, stop), "STRING")
+                start = stop
 
             elif mode == "nothing":
                 mode = "string"
-                start = pos
-                if end != pos:
-                    yield (range(end, pos), "CODE")
+                if start != pos:
+                    yield (range(start, pos), "CODE")
+                    start = pos
 
         elif token == "'":
             if mode == "char":
                 mode = "nothing"
-                end = pos + 1
-                yield (range(start, end), "CHAR")
+                yield (range(start, stop), "CHAR")
+                start = stop
 
             elif mode == "nothing":
                 # digit separator
@@ -69,77 +70,72 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
                     continue
 
                 mode = "char"
-                start = pos
-                if end != pos:
-                    yield (range(end, pos), "CODE")
+                if start != pos:
+                    yield (range(start, pos), "CODE")
+                    start = pos
 
         elif token == "//" and mode == "nothing":
             mode = "line_comment"
-            start = pos
-            if end != pos:
-                yield (range(end, pos), "CODE")
+            if start != pos:
+                yield (range(start, pos), "CODE")
+                start = pos
 
         elif token == "/*" and mode == "nothing":
             mode = "block_comment"
-            start = pos
-            if end != pos:
-                yield (range(end, pos), "CODE")
+            if start != pos:
+                yield (range(start, pos), "CODE")
+                start = pos
 
         elif token == "*/" and mode == "block_comment":
             mode = "nothing"
-            end = pos + 2
-            yield (range(start, end), "BLOCK COMMENT")
+            yield (range(start, stop), "BLOCK COMMENT")
+            start = stop
 
         elif token in ("\\\n", "\n"):
             # TODO: comment disrupting continuation char
             if token == "\n":
-                if mode == "nothing" and ppc_mode:
-                    end = pos
-                    yield (range(start, end), "CODE")
-                    start = end
-
                 ppc_mode = False
                 if mode == "string":
                     mode = "nothing"
-                    end = pos
-                    yield (range(start, end), "STRING")
-                    start = end
+                    # newline not part of string (?)
+                    yield (range(start, pos), "STRING")
+                    start = pos
                 elif mode == "char":
                     mode = "nothing"
-                    end = pos
-                    yield (range(start, end), "CHAR")
-                    start = end
+                    # newline not part of char (?)
+                    yield (range(start, pos), "CHAR")
+                    start = pos
 
             if mode == "line_comment":
                 mode = "nothing"
-                end = pos + 1
-                yield (range(start, end), "LINE COMMENT")
+                # Newline IS part of line comment
+                yield (range(start, stop), "LINE COMMENT")
+                start = stop
 
         elif token and token[0] == "#":
             if mode == "nothing":
                 ppc_mode = True
                 if start != pos:
                     yield (range(start, pos), "CODE")
+                    start = pos
 
-                end = pos + len(token)
-                yield (range(pos, end), token)
+                yield (range(pos, stop), token)
                 # This is not a paired delimiter.
                 # The next token starts where this one ends.
-                start = end
+                start = stop
 
     # Unfinished token
-    if end < len(text) - 1:
-        last_range = range(start, len(text))
-        if mode == "line_comment":
-            yield (last_range, "LINE COMMENT")
-        elif mode == "block_comment":
-            yield (last_range, "BLOCK COMMENT")
-        elif mode == "string":
-            yield (last_range, "STRING")
-        elif mode == "char":
-            yield (last_range, "CHAR")
-        else:
-            yield (last_range, "CODE")
+    last_range = range(start, len(text))
+    if mode == "line_comment":
+        yield (last_range, "LINE COMMENT")
+    elif mode == "block_comment":
+        yield (last_range, "BLOCK COMMENT")
+    elif mode == "string":
+        yield (last_range, "STRING")
+    elif mode == "char":
+        yield (last_range, "CHAR")
+    elif start < len(text) - 1:
+        yield (last_range, "CODE")
 
 
 def get_newlines_from_text(text: str) -> list[int]:

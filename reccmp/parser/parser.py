@@ -176,7 +176,7 @@ class DecompParser:
         self.filename: PurePath = PurePath("")
 
         self.newlines: list[int] = []
-        self.enclosures: list[range] | None = None
+        self.enclosures: list[tuple[int, int]] | None = None
 
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
@@ -608,9 +608,9 @@ class DecompParser:
         name = None
 
         for i in range(start, len(tokens)):
-            span, token = tokens[i]
+            start, stop, token = tokens[i]
             if token == "CODE":
-                excerpt = text[span.start : span.stop]
+                excerpt = text[start:stop]
                 name = get_class_name(excerpt.strip())  # TODO
             if token in ("{", ";"):
                 break
@@ -629,7 +629,7 @@ class DecompParser:
             self.enclosures, _ = scope_detect_churn(tokens)
 
         for i in range(start, len(tokens)):
-            span, token = tokens[i]
+            t_start, t_stop, token = tokens[i]
             if token == ";":
                 # TODO: It's not the function declaration.
                 self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
@@ -643,29 +643,29 @@ class DecompParser:
 
         # TODO: conversion between text pos and index is dangerous.
 
-        # `span` now equals curly token position.
-        self.line_number, _ = get_line_column_pos(self.newlines, span.start)
+        # `t_start` now equals curly token position.
+        self.line_number, _ = get_line_column_pos(self.newlines, t_start)
         self._function_starts_here()
         try:
             scope_range = next(
-                enclosure for enclosure in self.enclosures if enclosure.start == i
+                enclosure for enclosure in self.enclosures if enclosure[0] == i
             )
         except StopIteration as ex:
             breakpoint()
             raise ex
 
         try:
-            span, _ = tokens[scope_range.stop - 1]
+            func_end, __, ___ = tokens[scope_range[1] - 1]
         except IndexError:
             breakpoint()
 
-        self.line_number, _ = get_line_column_pos(self.newlines, span.start)
+        self.line_number, _ = get_line_column_pos(self.newlines, func_end)
         self._function_done()
 
     def read_comment_block(self, text: str, tokens: list[CodeToken]):
-        for span, token in tokens:
-            excerpt = text[span.start : span.stop]
-            line_no, _ = get_line_column_pos(self.newlines, span.start)
+        for start, stop, token in tokens:
+            excerpt = text[start:stop]
+            line_no, _ = get_line_column_pos(self.newlines, start)
             self.line_number = line_no
 
             if token == "LINE COMMENT":

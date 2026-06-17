@@ -1,6 +1,5 @@
 # C++ file parser
 
-import io
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Iterator
@@ -693,16 +692,6 @@ class DecompParser:
     def read(self, text: str):
         tokens = list(tokenize_code_file(text))
         self.newlines = get_newlines_from_text(text)
-
-        def curly_counter(token: str) -> int:
-            if token == "{":
-                return 1
-            if token == "}":
-                return -1
-            return 0
-
-        # if sum(curly_counter(token) for _, token in tokens) != 0:
-        #    return
 
         group_ranges = list(get_token_groups(text, tokens))
         # Collect consecutive comments that are markers.

@@ -1,6 +1,5 @@
 import re
 from enum import Enum
-from .tokenizer import CodeToken
 
 
 class MarkerCategory(Enum):

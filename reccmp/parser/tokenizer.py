@@ -212,11 +212,8 @@ def scope_tokens_only(tokens: list[CodeToken]) -> list[IndexToken]:
     return [
         (i, token)
         for i, (_, token) in enumerate(tokens)
-        if token != "CODE"
-        and (
-            token in ("{", "}")
-            or (token.startswith("#") and ("if" in token or "el" in token))
-        )
+        if token in ("{", "}")
+        or (token.startswith("#") and ("if" in token or "el" in token))
     ]
 
 

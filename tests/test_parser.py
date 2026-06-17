@@ -168,7 +168,7 @@ def test_multiple_vtables(parser):
     parser.read("""\
         // VTABLE: HELLO 0x1234
         // VTABLE: TEST 0x5432
-        class MxString : public MxCore {
+        class MxString : public MxCore {};
         """)
     assert len(parser.alerts) == 0
     assert len(parser.vtables) == 2
@@ -180,7 +180,7 @@ def test_multiple_vtables_same_module(parser):
     parser.read("""\
         // VTABLE: HELLO 0x1234
         // VTABLE: HELLO 0x5432
-        class MxString : public MxCore {
+        class MxString : public MxCore {};
         """)
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.DUPLICATE_MODULE

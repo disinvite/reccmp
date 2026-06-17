@@ -158,7 +158,9 @@ def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[range]:
     start = None
 
     for i, (span, token) in enumerate(tokens):
-        if token == "LINE COMMENT" or (token == "CODE" and not token.strip()):
+        if token == "LINE COMMENT" or (
+            token == "CODE" and not text[span.start : span.stop].strip()
+        ):
             if start is None:
                 start = i
         elif start is not None:

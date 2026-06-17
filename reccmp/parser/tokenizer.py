@@ -152,23 +152,25 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     return (i, offset - pos)
 
 
-def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[range]:
+def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, ...]]:
     """Groups of whitespace or line comments.
-    Returned ranges are spans of token list index."""
-    start = None
+    Returned ranges are ids of tokens."""
+    ids = []
 
     for i, (span, token) in enumerate(tokens):
-        if token == "LINE COMMENT" or (
-            token == "CODE" and not text[span.start : span.stop].strip()
-        ):
-            if start is None:
-                start = i
-        elif start is not None:
-            yield range(start, i)
-            start = None
+        if token == "LINE COMMENT":
+            ids.append(i)
+            continue
 
-    if start is not None:
-        yield range(start, i)
+        if token == "CODE" and not text[span.start : span.stop].strip():
+            continue
+
+        if ids:
+            yield tuple(ids)
+            ids.clear()
+
+    if ids:
+        yield tuple(ids)
 
 
 r_indent_detector = re.compile(

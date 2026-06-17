@@ -708,19 +708,22 @@ class DecompParser:
         # Collect consecutive comments that are markers.
         # For each one: satisfy what is missing.
 
-        for group_span in group_ranges:
-            token_group = tokens[group_span.start : group_span.stop]
+        for group_set in group_ranges:
+            token_group = [tokens[i] for i in group_set]
             self.read_comment_block(text, token_group)
 
             # Error or completed
             if self.state == ReaderState.SEARCH:
                 continue
 
+            # index
+            group_end = group_set[-1]
+
             # We have unfinished markers.
             if self.state == ReaderState.WANT_SIG:
-                self.code_function(text, tokens, group_span.stop)
+                self.code_function(text, tokens, group_end)
             elif self.state == ReaderState.IN_VTABLE:
-                self.code_vtable(text, tokens, group_span.stop)
+                self.code_vtable(text, tokens, group_end)
             else:
                 # TODO: ignoring other types for test
                 self._recover()

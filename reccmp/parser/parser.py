@@ -36,6 +36,7 @@ from .tokenizer import (
     get_token_groups,
     scope_detect_churn,
     tokenize_code_file,
+    TokenType,
 )
 
 
@@ -609,10 +610,10 @@ class DecompParser:
 
         for i in range(start, len(tokens)):
             start, stop, token = tokens[i]
-            if token == "CODE":
+            if token == TokenType.CODE:
                 excerpt = text[start:stop]
                 name = get_class_name(excerpt.strip())  # TODO
-            if token in ("{", ";"):
+            if token in (TokenType.CURLY_OPEN, TokenType.SEMICOLON):
                 break
         else:
             # Ran to end without finding it
@@ -630,11 +631,11 @@ class DecompParser:
 
         for i in range(start, len(tokens)):
             t_start, t_stop, token = tokens[i]
-            if token == ";":
+            if token == TokenType.SEMICOLON:
                 # TODO: It's not the function declaration.
                 self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
                 return
-            if token == "{":
+            if token == TokenType.CURLY_OPEN:
                 break
         else:
             # Ran to end without finding it
@@ -668,7 +669,7 @@ class DecompParser:
             line_no, _ = get_line_column_pos(self.newlines, start)
             self.line_number = line_no
 
-            if token == "LINE COMMENT":
+            if token == TokenType.LINE_COMMENT:
                 marker = match_marker(excerpt)
                 if marker is not None:
                     self._handle_marker(marker)

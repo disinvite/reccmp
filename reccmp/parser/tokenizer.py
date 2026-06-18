@@ -1,6 +1,7 @@
 import bisect
 import re
 import string
+import enum
 from typing import Iterator
 
 # TODO: L-string L-char.
@@ -16,6 +17,22 @@ r_charsOfImport = re.compile(
 """,
     flags=re.X,
 )
+
+
+class TokenType(enum.IntEnum):
+    CURLY_OPEN = enum.auto()
+    CURLY_CLOSE = enum.auto()
+    PPC_IF = enum.auto()
+    PPC_ELSE = enum.auto()
+    PPC_END = enum.auto()
+    PPC_OTHER = enum.auto()
+    SEMICOLON = enum.auto()
+    EQUAL = enum.auto()
+    LINE_COMMENT = enum.auto()
+    BLOCK_COMMENT = enum.auto()
+    STRING = enum.auto()
+    CHAR = enum.auto()
+    CODE = enum.auto()
 
 
 r_newSplitter = re.compile(
@@ -34,53 +51,58 @@ L?\'(?:[^'\n\\]|\\.)*['\n]|
 r_realClassStart = re.compile(r"(?:class|struct|namespace)\s+(\w+)\s*$")
 
 
-CodeToken = tuple[int, int, str]
+CodeToken = tuple[int, int, TokenType]
 
 
 def tokenize_code_file(text: str) -> Iterator[CodeToken]:
-    mode = "nothing"
-    ppc_mode = False
-
     # Start of code token between delimiters.
     start = 0
 
     for match in r_newSplitter.finditer(text):
         pos, stop = match.span()
-        token = match.group(0)
-
         first = text[pos]
-        token_type = "CODE"
+        token_type = TokenType.CODE
 
         if first == "{":
-            token_type = "{"
+            token_type = TokenType.CURLY_OPEN
         elif first == "}":
-            token_type = "}"
+            token_type = TokenType.CURLY_CLOSE
         elif first == "=":
-            token_type = "="
+            token_type = TokenType.EQUAL
         elif first == ";":
-            token_type = ";"
+            token_type = TokenType.SEMICOLON
         elif first == '"':
-            token_type = "STRING"
+            token_type = TokenType.STRING
         elif first == "'":
             if pos and text[pos - 1] in string.hexdigits:
                 continue
 
-            token_type = "CHAR"
+            token_type = TokenType.CHAR
         elif first == "#":
-            ppc_name = match.group(1)
-            token_type = "#" + ppc_name
+            ppc_name = match.group(1).lower()
+            if ppc_name.startswith("if"):
+                token_type = TokenType.PPC_IF
+            elif ppc_name.startswith("el"):
+                token_type = TokenType.PPC_ELSE
+            elif ppc_name == "endif":
+                token_type = TokenType.PPC_END
+            else:
+                token_type = TokenType.PPC_OTHER
+
         elif first == "/":
             second = text[pos + 1]
-            token_type = "LINE COMMENT" if second == "/" else "BLOCK COMMENT"
+            token_type = (
+                TokenType.LINE_COMMENT if second == "/" else TokenType.BLOCK_COMMENT
+            )
 
         if start < pos:
-            yield (start, pos, "CODE")
+            yield (start, pos, TokenType.CODE)
 
         yield (pos, stop, token_type)
         start = stop
 
     if start < len(text):
-        yield (start, len(text), "CODE")
+        yield (start, len(text), TokenType.CODE)
 
 
 def get_newlines_from_text(text: str) -> list[int]:
@@ -103,11 +125,11 @@ def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, 
     ids = []
 
     for i, (start, stop, token) in enumerate(tokens):
-        if token == "LINE COMMENT":
+        if token == TokenType.LINE_COMMENT:
             ids.append(i)
             continue
 
-        if token == "CODE" and not text[start:stop].strip():
+        if token == TokenType.CODE and not text[start:stop].strip():
             continue
 
         if ids:
@@ -126,7 +148,7 @@ def get_scopes_from_tokens(
     for scope_start, scope_stop in enclosures:
         if scope_start > 0:
             prev_start, prev_stop, prev_token = tokens[scope_start - 1]
-            if prev_token == "CODE":
+            if prev_token == TokenType.CODE:
                 excerpt = text[prev_start:prev_stop]
                 match = r_realClassStart.search(excerpt)
                 if match is not None:
@@ -149,15 +171,21 @@ def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
     return "::".join(stack)
 
 
-IndexToken = tuple[int, str]
+IndexToken = tuple[int, TokenType]
 
 
 def scope_tokens_only(tokens: list[CodeToken]) -> list[IndexToken]:
     return [
         (i, token)
         for i, (_, __, token) in enumerate(tokens)
-        if token in ("{", "}")
-        or (token.startswith("#") and ("if" in token or "el" in token))
+        if token
+        in {
+            TokenType.CURLY_OPEN,
+            TokenType.CURLY_CLOSE,
+            TokenType.PPC_IF,
+            TokenType.PPC_ELSE,
+            TokenType.PPC_END,
+        }
     ]
 
 
@@ -174,25 +202,21 @@ def reduce_scopes(
                 continue
 
             # print(stack, token)
-            if token in ("}", "#endif"):
-                crop = []
+            if token in (TokenType.CURLY_CLOSE, TokenType.PPC_END):
+                crop: list[IndexToken] = []
                 for last_i, last_token in stack[::-1]:
-                    if token == "}":
-                        if last_token == "{":
+                    if token == TokenType.CURLY_CLOSE:
+                        if last_token == TokenType.CURLY_OPEN:
                             crop = [(last_i, last_token)]
                         break
 
-                    if token == "#endif":
-                        if last_token in ("{", "}"):
+                    if token == TokenType.PPC_END:
+                        if last_token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
                             crop = []
                             break
 
                         crop.append((last_i, last_token))
-                        if (
-                            "if" in last_token
-                            and "end" not in last_token
-                            and "el" not in last_token
-                        ):
+                        if last_token == TokenType.PPC_IF:
                             break
                 else:
                     crop = []
@@ -205,7 +229,7 @@ def reduce_scopes(
                     did_something = True
                     # hack to include else
                     done.update(range(last_i, i + 1))
-                    if token == "}":
+                    if token == TokenType.CURLY_CLOSE:
                         ranges.append((last_i, i + 1))
                 else:
                     stack.append((i, token))
@@ -243,19 +267,19 @@ def reduced_tagger(remain: list[IndexToken]) -> set[int]:
     for i, token in remain:
         mask.add(i)
 
-        if token in ("{", "}"):
+        if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
             if legs:
                 legs[-1].append(i)
 
-        elif "if" in token and "el" not in token and "end" not in token:
+        elif token == TokenType.PPC_IF:
             interrupted = False
             mask = {i}
             legs = [[]]
 
-        elif "el" in token:
+        elif token == TokenType.PPC_ELSE:
             legs.append([])
 
-        elif "endif" in token:
+        elif token == TokenType.PPC_END:
             # Do it before popping so we tag with the current group.
             if not interrupted and all(len(leg) == len(legs[0]) for leg in legs):
                 keepers = set(legs[0])
@@ -271,7 +295,11 @@ def reduced_tagger(remain: list[IndexToken]) -> set[int]:
 def enable_all_and_reduce(
     tokens: list[IndexToken],
 ) -> tuple[list[tuple[int, int]], list[IndexToken]]:
-    remain = [(i, token) for i, token in tokens if token in ("{", "}")]
+    remain: list[IndexToken] = [
+        (i, token)
+        for i, token in tokens
+        if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE)
+    ]
     return reduce_scopes(remain)
 
 

@@ -18,6 +18,19 @@ r_charsOfImport = re.compile(
 )
 
 
+r_newSplitter = re.compile(
+    r"""
+//[^\n]*|
+/\*.*\*/|
+L?\"(?:[^\"\n\\]|\\.)*[\"\n]|
+L?\'(?:[^'\n\\]|\\.)*['\n]|
+\#\s*(\w+)(?:\\\n|[^\n])*|
+[{}=;]
+""",
+    flags=re.X | re.DOTALL,
+)
+
+
 r_realClassStart = re.compile(r"(?:class|struct|namespace)\s+(\w+)\s*$")
 
 
@@ -31,110 +44,43 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
     # Start of code token between delimiters.
     start = 0
 
-    for match in r_charsOfImport.finditer(text):
+    for match in r_newSplitter.finditer(text):
         pos, stop = match.span()
         token = match.group(0)
 
-        # Suppress typical breaks if we are in a #define expression (except strings)
-        if mode == "nothing" and token in {"{", "}", "=", ";"} and not ppc_mode:
-            if start != pos:
-                yield (start, pos, "CODE")
-                start = pos
+        first = text[pos]
+        token_type = "CODE"
 
-            yield (pos, stop, token)
-            start = stop
-            continue
+        if first == "{":
+            token_type = "{"
+        elif first == "}":
+            token_type = "}"
+        elif first == "=":
+            token_type = "="
+        elif first == ";":
+            token_type = ";"
+        elif first == '"':
+            token_type = "STRING"
+        elif first == "'":
+            if pos and text[pos - 1] in string.hexdigits:
+                continue
 
-        if token == '"':
-            if mode == "string":
-                mode = "nothing"
-                yield (start, stop, "STRING")
-                start = stop
+            token_type = "CHAR"
+        elif first == "#":
+            ppc_name = match.group(1)
+            token_type = "#" + ppc_name
+        elif first == "/":
+            second = text[pos + 1]
+            token_type = "LINE COMMENT" if second == "/" else "BLOCK COMMENT"
 
-            elif mode == "nothing":
-                mode = "string"
-                if start != pos:
-                    yield (start, pos, "CODE")
-                    start = pos
+        if start < pos:
+            yield (start, pos, "CODE")
 
-        elif token == "'":
-            if mode == "char":
-                mode = "nothing"
-                yield (start, stop, "CHAR")
-                start = stop
+        yield (pos, stop, token_type)
+        start = stop
 
-            elif mode == "nothing":
-                # digit separator
-                if pos > 0 and text[pos - 1] in string.hexdigits:
-                    continue
-
-                mode = "char"
-                if start != pos:
-                    yield (start, pos, "CODE")
-                    start = pos
-
-        elif token == "//" and mode == "nothing":
-            mode = "line_comment"
-            if start != pos:
-                yield (start, pos, "CODE")
-                start = pos
-
-        elif token == "/*" and mode == "nothing":
-            mode = "block_comment"
-            if start != pos:
-                yield (start, pos, "CODE")
-                start = pos
-
-        elif token == "*/" and mode == "block_comment":
-            mode = "nothing"
-            yield (start, stop, "BLOCK COMMENT")
-            start = stop
-
-        elif token in ("\\\n", "\n"):
-            # TODO: comment disrupting continuation char
-            if token == "\n":
-                ppc_mode = False
-                if mode == "string":
-                    mode = "nothing"
-                    # newline not part of string (?)
-                    yield (start, pos, "STRING")
-                    start = pos
-                elif mode == "char":
-                    mode = "nothing"
-                    # newline not part of char (?)
-                    yield (start, pos, "CHAR")
-                    start = pos
-
-            if mode == "line_comment":
-                mode = "nothing"
-                # Newline IS part of line comment
-                yield (start, stop, "LINE COMMENT")
-                start = stop
-
-        elif token and token[0] == "#":
-            if mode == "nothing":
-                ppc_mode = True
-                if start != pos:
-                    yield (start, pos, "CODE")
-                    start = pos
-
-                yield (pos, stop, token)
-                # This is not a paired delimiter.
-                # The next token starts where this one ends.
-                start = stop
-
-    # Unfinished token
-    last_range = (start, len(text))
-    if mode == "line_comment":
-        yield (*last_range, "LINE COMMENT")
-    elif mode == "block_comment":
-        yield (*last_range, "BLOCK COMMENT")
-    elif mode == "string":
-        yield (*last_range, "STRING")
-    elif mode == "char":
-        yield (*last_range, "CHAR")
-    elif start < len(text) - 1:
-        yield (*last_range, "CODE")
+    if start < len(text):
+        yield (start, len(text), "CODE")
 
 
 def get_newlines_from_text(text: str) -> list[int]:

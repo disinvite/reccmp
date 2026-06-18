@@ -190,6 +190,8 @@ def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
 
 def reduce_scopes(
     tokens: list[CodeToken],
+    *,
+    enable_ppc: bool,
 ) -> tuple[list[tuple[int, int]], list[CodeToken]]:
     ranges = []
     done: set[int] = set()
@@ -209,7 +211,11 @@ def reduce_scopes(
                     did_something = True
             elif token == TokenType.CURLY_OPEN:
                 stack.append(start)
-            elif token in {TokenType.PPC_IF, TokenType.PPC_ELSE, TokenType.PPC_END}:
+            elif enable_ppc and token in {
+                TokenType.PPC_IF,
+                TokenType.PPC_ELSE,
+                TokenType.PPC_END,
+            }:
                 stack.clear()
 
         if not did_something:
@@ -270,17 +276,6 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
     return global_mask
 
 
-def enable_all_and_reduce(
-    tokens: list[CodeToken],
-) -> tuple[list[tuple[int, int]], list[CodeToken]]:
-    remain: list[CodeToken] = [
-        (start, stop, token)
-        for start, stop, token in tokens
-        if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE)
-    ]
-    return reduce_scopes(remain)
-
-
 def scope_detect_churn(
     tokens: list[CodeToken],
 ) -> tuple[list[tuple[int, int]], list[CodeToken]]:
@@ -291,7 +286,7 @@ def scope_detect_churn(
     reduced_this_step = False
     for _ in range(10):
         # Trivial match of curly brackets that are next to each other.
-        new_ranges, new_remain = reduce_scopes(remain)
+        new_ranges, new_remain = reduce_scopes(remain, enable_ppc=True)
         if new_ranges:
             out_ranges.extend(new_ranges)
             remain = new_remain  # ?
@@ -302,7 +297,7 @@ def scope_detect_churn(
             break
 
         # Can we simply enable all PPC regions and match remaining brackets?
-        new_ranges, new_remain = enable_all_and_reduce(remain)
+        new_ranges, new_remain = reduce_scopes(remain, enable_ppc=False)
         # If there is nothing left, this was successful.
         # Otherwise, do not update the lists with partial matches.
         if not new_remain:

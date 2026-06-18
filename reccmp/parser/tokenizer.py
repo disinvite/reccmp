@@ -173,55 +173,55 @@ def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
     return "::".join(stack)
 
 
-IndexToken = tuple[int, TokenType]
-
-
-def scope_tokens_only(tokens: list[CodeToken]) -> list[IndexToken]:
+def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
     return [
-        (i, token)
-        for i, (_, __, token) in enumerate(tokens)
+        (start, stop, token)
+        for (start, stop, token) in tokens
         if token
-        # in {
-        #    TokenType.CURLY_OPEN,
-        #    TokenType.CURLY_CLOSE,
-        #    TokenType.PPC_IF,
-        #    TokenType.PPC_ELSE,
-        #    TokenType.PPC_END,
-        # }
+        in {
+            TokenType.CURLY_OPEN,
+            TokenType.CURLY_CLOSE,
+            TokenType.PPC_IF,
+            TokenType.PPC_ELSE,
+            TokenType.PPC_END,
+        }
     ]
 
 
 def reduce_scopes(
-    tokens: list[IndexToken],
-) -> tuple[list[tuple[int, int]], list[IndexToken]]:
+    tokens: list[CodeToken],
+) -> tuple[list[tuple[int, int]], list[CodeToken]]:
     ranges = []
     done: set[int] = set()
     while True:
         stack: list[int] = []
         did_something = False
-        for i, token in tokens:
-            if i in done:
+        for start, _, token in tokens:
+            if start in done:
                 continue
 
             if token == TokenType.CURLY_CLOSE:
                 if stack:
-                    last_i = stack.pop()
-                    ranges.append((last_i, i))
-                    done.add(i)
-                    done.add(last_i)
+                    last_start = stack.pop()
+                    ranges.append((last_start, start))
+                    done.add(start)
+                    done.add(last_start)
                     did_something = True
             elif token == TokenType.CURLY_OPEN:
-                stack.append(i)
+                stack.append(start)
             elif token in {TokenType.PPC_IF, TokenType.PPC_ELSE, TokenType.PPC_END}:
                 stack.clear()
 
         if not did_something:
             break
 
-    return (ranges, [(i, token) for i, token in tokens if i not in done])
+    return (
+        ranges,
+        [(start, stop, token) for start, stop, token in tokens if start not in done],
+    )
 
 
-def reduced_tagger(remain: list[IndexToken]) -> set[int]:
+def reduced_tagger(remain: list[CodeToken]) -> set[int]:
     """Group leftover ppc and curly brackets into groups.
     If there is an uninterrupted group where all legs have the same curly offset
     use any subgroup and discard the rest.
@@ -242,16 +242,16 @@ def reduced_tagger(remain: list[IndexToken]) -> set[int]:
     mask = set()
     legs: list[list[int]] = []
 
-    for i, token in remain:
-        mask.add(i)
+    for start, _, token in remain:
+        mask.add(start)
 
         if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
             if legs:
-                legs[-1].append(i)
+                legs[-1].append(start)
 
         elif token == TokenType.PPC_IF:
             interrupted = False
-            mask = {i}
+            mask = {start}
             legs = [[]]
 
         elif token == TokenType.PPC_ELSE:
@@ -271,11 +271,11 @@ def reduced_tagger(remain: list[IndexToken]) -> set[int]:
 
 
 def enable_all_and_reduce(
-    tokens: list[IndexToken],
-) -> tuple[list[tuple[int, int]], list[IndexToken]]:
-    remain: list[IndexToken] = [
-        (i, token)
-        for i, token in tokens
+    tokens: list[CodeToken],
+) -> tuple[list[tuple[int, int]], list[CodeToken]]:
+    remain: list[CodeToken] = [
+        (start, stop, token)
+        for start, stop, token in tokens
         if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE)
     ]
     return reduce_scopes(remain)
@@ -283,7 +283,7 @@ def enable_all_and_reduce(
 
 def scope_detect_churn(
     tokens: list[CodeToken],
-) -> tuple[list[tuple[int, int]], list[IndexToken]]:
+) -> tuple[list[tuple[int, int]], list[CodeToken]]:
     remain = scope_tokens_only(tokens)
 
     out_ranges = []
@@ -312,7 +312,11 @@ def scope_detect_churn(
 
         mask = reduced_tagger(remain)
         if mask:
-            remain = [(i, token) for i, token in remain if i not in mask]
+            remain = [
+                (start, stop, token)
+                for start, stop, token in remain
+                if start not in mask
+            ]
             reduced_this_step = True
 
         if not reduced_this_step:

@@ -645,17 +645,12 @@ class DecompParser:
         self.line_number, _ = get_line_column_pos(self.newlines, t_start)
         self._function_starts_here()
         try:
-            scope_range = next(
-                enclosure for enclosure in self.enclosures if enclosure[0] == i
+            func_end, __ = next(
+                enclosure for enclosure in self.enclosures if enclosure[0] == t_start
             )
         except StopIteration as ex:
             breakpoint()
             raise ex
-
-        try:
-            func_end, __, ___ = tokens[scope_range[1] - 1]
-        except IndexError:
-            breakpoint()
 
         self.line_number, _ = get_line_column_pos(self.newlines, func_end)
         self._function_done()

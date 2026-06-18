@@ -106,6 +106,8 @@ def get_class_name(line: str) -> str | None:
     return None
 
 
+# Previously we allowed `=` or `;` to end the variable name.
+# These are now distinct tokens, so we stop at the end of the CODE token.
 global_regex = re.compile(
     r"""
     (?P<name>(?:\w+::)*\w+)       # Any identifier with 0-N namespace qualifiers
@@ -113,8 +115,7 @@ global_regex = re.compile(
         \(\w|                     # - Open paren: call constructor
         \)\(|                     # - Close paren, open paren: function pointer variable
         \[.*|                     # - Open bracket: array with or without size
-        \s*=.*|                   # - Direct assignment
-        ;                         # - Not initialized
+        \s*$                      # - End of string
     )
 """,
     flags=re.X,

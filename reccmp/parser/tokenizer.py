@@ -121,6 +121,17 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     return (i, offset - pos)
 
 
+def find_next_token_type(
+    tokens: list[CodeToken], start: int, types: set[TokenType]
+) -> int | None:
+    for i in range(start, len(tokens)):
+        _, __, token = tokens[i]
+        if token in types:
+            return i
+
+    return None
+
+
 def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, ...]]:
     """Groups of whitespace or line comments.
     Returned ranges are ids of tokens."""

@@ -36,6 +36,7 @@ from .tokenizer import (
     get_token_groups,
     scope_detect_churn,
     tokenize_code_file,
+    find_next_token_type,
     TokenType,
 )
 
@@ -608,17 +609,20 @@ class DecompParser:
     def code_vtable(self, text: str, tokens: list[CodeToken], start: int):
         name = None
 
-        for i in range(start, len(tokens)):
+        finish = find_next_token_type(
+            tokens, start, {TokenType.CURLY_OPEN, TokenType.SEMICOLON}
+        )
+        if finish is None:
+            # Ran to end without finding it
+            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            return
+
+        for i in range(finish, start, -1):
             start, stop, token = tokens[i]
             if token == TokenType.CODE:
                 excerpt = text[start:stop]
                 name = get_class_name(excerpt.strip())  # TODO
-            if token in (TokenType.CURLY_OPEN, TokenType.SEMICOLON):
                 break
-        else:
-            # Ran to end without finding it
-            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
-            return
 
         if name:
             self._vtable_done(name)
@@ -626,34 +630,61 @@ class DecompParser:
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
 
     def code_function(self, text: str, tokens: list[CodeToken], start: int):
-        for i in range(start, len(tokens)):
-            t_start, t_stop, token = tokens[i]
-            if token == TokenType.SEMICOLON:
-                # TODO: It's not the function declaration.
-                self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
-                return
-            if token == TokenType.CURLY_OPEN:
-                break
-        else:
+        finish = find_next_token_type(
+            tokens, start, {TokenType.CURLY_OPEN, TokenType.SEMICOLON}
+        )
+        if finish is None:
             # Ran to end without finding it
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
             return
 
-        # TODO: conversion between text pos and index is dangerous.
+        func_start, _, token = tokens[finish]
+        if token == TokenType.SEMICOLON:
+            # TODO: New error. This is not the function declaration.
+            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            return
 
-        # `t_start` now equals curly token position.
-        self.line_number, _ = get_line_column_pos(self.newlines, t_start)
+        self.line_number, _ = get_line_column_pos(self.newlines, func_start)
         self._function_starts_here()
+
+        # Now find the scope that matches this function.
         try:
             func_end, __ = next(
-                enclosure for enclosure in self.enclosures if enclosure[0] == t_start
+                enclosure for enclosure in self.enclosures if enclosure[0] == func_start
             )
         except StopIteration as ex:
-            breakpoint()
+            breakpoint()  # TODO (obviously)
             raise ex
 
         self.line_number, _ = get_line_column_pos(self.newlines, func_end)
         self._function_done()
+
+    def code_variable(self, text: str, tokens: list[CodeToken], start: int):
+        variable_name = None
+        string_text = None
+
+        for t_start, t_stop, token in tokens[start:]:
+            if token == TokenType.CODE:
+                excerpt = text[t_start:t_stop]
+                variable_name = get_variable_name(excerpt)
+                break
+
+        # TODO: static vars.
+
+        # TODO: read from #define
+        finish = find_next_token_type(
+            tokens, start, {TokenType.STRING, TokenType.SEMICOLON}
+        )
+        if finish:
+            t_start, t_stop, token = tokens[finish]
+            if token == TokenType.STRING:
+                excerpt = text[t_start:t_stop]
+                string_text = get_string_contents(excerpt)
+
+        if variable_name or string_text:
+            self._variable_done(variable_name, string_text)
+        else:
+            self._syntax_error(AlertCode.NO_SUITABLE_NAME)
 
     def read_comment_block(self, text: str, tokens: list[CodeToken]):
         for start, stop, token in tokens:
@@ -707,6 +738,8 @@ class DecompParser:
                 self.code_function(text, tokens, group_end)
             elif self.state == ReaderState.IN_VTABLE:
                 self.code_vtable(text, tokens, group_end)
+            elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
+                self.code_variable(text, tokens, group_end)
             else:
                 # TODO: ignoring other types for test
                 self._recover()

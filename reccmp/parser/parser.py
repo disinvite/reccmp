@@ -177,7 +177,7 @@ class DecompParser:
         self.filename: PurePath = PurePath("")
 
         self.newlines: list[int] = []
-        self.enclosures: list[tuple[int, int]] | None = None
+        self.enclosures: list[tuple[int, int]] = []
 
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
@@ -200,7 +200,7 @@ class DecompParser:
 
         self.curly.reset()
         self.newlines = []
-        self.enclosures = None
+        self.enclosures.clear()
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -626,9 +626,6 @@ class DecompParser:
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
 
     def code_function(self, text: str, tokens: list[CodeToken], start: int):
-        if self.enclosures is None:
-            self.enclosures, _ = scope_detect_churn(tokens)
-
         for i in range(start, len(tokens)):
             t_start, t_stop, token = tokens[i]
             if token == TokenType.SEMICOLON:
@@ -693,6 +690,7 @@ class DecompParser:
     def read(self, text: str):
         tokens = list(tokenize_code_file(text))
         self.newlines = get_newlines_from_text(text)
+        self.enclosures, _ = scope_detect_churn(tokens)
 
         group_ranges = list(get_token_groups(text, tokens))
         # Collect consecutive comments that are markers.

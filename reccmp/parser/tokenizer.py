@@ -61,7 +61,6 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
     for match in r_newSplitter.finditer(text):
         pos, stop = match.span()
         first = text[pos]
-        token_type = TokenType.CODE
 
         if first == "{":
             token_type = TokenType.CURLY_OPEN
@@ -89,11 +88,14 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
             else:
                 token_type = TokenType.PPC_OTHER
 
-        elif first == "/":
+        else:
             second = text[pos + 1]
-            token_type = (
-                TokenType.LINE_COMMENT if second == "/" else TokenType.BLOCK_COMMENT
-            )
+            if first == "L":
+                token_type = TokenType.STRING if second == '"' else TokenType.CHAR
+            else:
+                token_type = (
+                    TokenType.LINE_COMMENT if second == "/" else TokenType.BLOCK_COMMENT
+                )
 
         if start < pos:
             yield (start, pos, TokenType.CODE)
@@ -179,13 +181,13 @@ def scope_tokens_only(tokens: list[CodeToken]) -> list[IndexToken]:
         (i, token)
         for i, (_, __, token) in enumerate(tokens)
         if token
-        in {
-            TokenType.CURLY_OPEN,
-            TokenType.CURLY_CLOSE,
-            TokenType.PPC_IF,
-            TokenType.PPC_ELSE,
-            TokenType.PPC_END,
-        }
+        # in {
+        #    TokenType.CURLY_OPEN,
+        #    TokenType.CURLY_CLOSE,
+        #    TokenType.PPC_IF,
+        #    TokenType.PPC_ELSE,
+        #    TokenType.PPC_END,
+        # }
     ]
 
 
@@ -195,47 +197,23 @@ def reduce_scopes(
     ranges = []
     done: set[int] = set()
     while True:
-        stack: list[IndexToken] = []
+        stack: list[int] = []
         did_something = False
         for i, token in tokens:
             if i in done:
                 continue
 
-            # print(stack, token)
-            if token in (TokenType.CURLY_CLOSE, TokenType.PPC_END):
-                crop: list[IndexToken] = []
-                for last_i, last_token in stack[::-1]:
-                    if token == TokenType.CURLY_CLOSE:
-                        if last_token == TokenType.CURLY_OPEN:
-                            crop = [(last_i, last_token)]
-                        break
-
-                    if token == TokenType.PPC_END:
-                        if last_token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
-                            crop = []
-                            break
-
-                        crop.append((last_i, last_token))
-                        if last_token == TokenType.PPC_IF:
-                            break
-                else:
-                    crop = []
-
-                if crop:
-                    for _ in range(len(crop)):
-                        stack.pop()
-
-                    last_i, _ = crop[-1]
+            if token == TokenType.CURLY_CLOSE:
+                if stack:
+                    last_i = stack.pop()
+                    ranges.append((last_i, i))
+                    done.add(i)
+                    done.add(last_i)
                     did_something = True
-                    # hack to include else
-                    done.update(range(last_i, i + 1))
-                    if token == TokenType.CURLY_CLOSE:
-                        ranges.append((last_i, i + 1))
-                else:
-                    stack.append((i, token))
-
-            else:
-                stack.append((i, token))
+            elif token == TokenType.CURLY_OPEN:
+                stack.append(i)
+            elif token in {TokenType.PPC_IF, TokenType.PPC_ELSE, TokenType.PPC_END}:
+                stack.clear()
 
         if not did_something:
             break

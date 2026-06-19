@@ -161,15 +161,14 @@ class DecompParser:
             }:
                 self.marker_types.add(category)
             else:
+                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
                 return
-                # AlertCode.INCOMPATIBLE_MARKER
 
         # Allow duplicate modules with different vtable base classes.
         key = (marker.module, marker.extra)
         bucket = self.buckets[category]
         if key in bucket:
-            pass
-            # AlertCode.DUPLICATE_MODULE
+            self._syntax_error(AlertCode.DUPLICATE_MODULE)
 
         self.buckets[category][key] = marker
 

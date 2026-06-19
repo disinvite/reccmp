@@ -457,22 +457,18 @@ class DecompParser:
                 if not bucket:
                     continue
 
+                markers = bucket.values()
+                bucket.clear()
+                self.marker_types.discard(category)
+
                 if category == MarkerCategory.FUNCTION:
-                    self.code_function(text, tokens, group_end, bucket.values())
-                    bucket.clear()
-                    self.marker_types.discard(category)
+                    self.code_function(text, tokens, group_end, markers)
                 elif category == MarkerCategory.VTABLE:
-                    self.code_vtable(text, tokens, group_end, bucket.values())
-                    bucket.clear()
-                    self.marker_types.discard(category)
+                    self.code_vtable(text, tokens, group_end, markers)
                 elif category == MarkerCategory.VARIABLE:
-                    self.code_variable(text, tokens, group_end, bucket.values())
-                    bucket.clear()
-                    self.marker_types.discard(category)
+                    self.code_variable(text, tokens, group_end, markers)
                 elif category == MarkerCategory.STRING:
-                    self.code_string(text, tokens, group_end, bucket.values())
-                    bucket.clear()
-                    self.marker_types.discard(category)
+                    self.code_string(text, tokens, group_end, markers)
                 else:
                     # TODO: ignoring other types for test
                     pass

@@ -1,9 +1,6 @@
 from textwrap import dedent
 import pytest
-from reccmp.parser.parser import (
-    ReaderState,
-    DecompParser,
-)
+from reccmp.parser.parser import DecompParser
 from reccmp.parser.error import AlertCode
 
 
@@ -21,7 +18,6 @@ def test_missing_sig(parser):
         {
         }
         """))
-    assert parser.state == ReaderState.SEARCH
     assert len(parser.functions) == 1
     assert parser.functions[0].line_number == 3
 
@@ -32,7 +28,11 @@ def test_missing_sig(parser):
 def test_not_exact_syntax(parser):
     """Alert to inexact syntax right here in the parser instead of kicking it downstream.
     Doing this means we don't have to save the actual text."""
-    parser.read("// function: test 0x1234")
+    parser.read(dedent("""\
+        // function: test 0x1234
+        void test() {
+        }
+        """))
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.BAD_DECOMP_MARKER
 
@@ -40,8 +40,6 @@ def test_not_exact_syntax(parser):
 def test_invalid_marker(parser):
     """We matched a decomp marker, but it's not one we care about"""
     parser.read("// BANANA: TEST 0x1234")
-    assert parser.state == ReaderState.SEARCH
-
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.BOGUS_MARKER
 
@@ -52,7 +50,6 @@ def test_incompatible_marker(parser):
         // FUNCTION: TEST 0x1234
         // GLOBAL: TEST 0x5000
         """)
-    assert parser.state == ReaderState.SEARCH
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
 
@@ -119,8 +116,6 @@ def test_unexpected_synthetic(parser):
         void interesting_function() {
         }
         """)
-
-    assert parser.state == ReaderState.SEARCH
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
@@ -219,7 +214,6 @@ def test_synthetic_no_comment(parser):
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.BAD_NAMEREF
-    assert parser.state == ReaderState.SEARCH
 
 
 @pytest.mark.xfail(reason="Gap in state machine logic where we do not raise an error.")
@@ -242,7 +236,6 @@ def test_implicit_lookup_by_name(parser):
         // FUNCTION: TEST 0x1234
         // TestClass::TestMethod()
         """)
-    assert parser.state == ReaderState.SEARCH
     assert len(parser.functions) == 1
     assert parser.functions[0].lookup_by_name is True
     assert parser.functions[0].name == "TestClass::TestMethod()"

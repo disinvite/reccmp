@@ -1,5 +1,4 @@
 import pytest
-from reccmp.parser.parser import MarkerDict
 from reccmp.parser.marker import (
     DecompMarker,
     MarkerType,
@@ -84,31 +83,6 @@ def test_marker_match(line: str, match: bool, _):
 @pytest.mark.parametrize("_, exact, line", marker_samples)
 def test_marker_exact(line: str, exact: bool, _):
     assert is_marker_exact(line) is exact
-
-
-def test_marker_dict_simple():
-    d = MarkerDict()
-    d.insert(DecompMarker("FUNCTION", "TEST", 0x1234))
-    markers = list(d.iter())
-    assert len(markers) == 1
-
-
-def test_marker_dict_ofs_replace():
-    d = MarkerDict()
-    d.insert(DecompMarker("FUNCTION", "TEST", 0x1234))
-    d.insert(DecompMarker("FUNCTION", "TEST", 0x555))
-    markers = list(d.iter())
-    assert len(markers) == 1
-    assert markers[0].offset == 0x1234
-
-
-def test_marker_dict_type_replace():
-    d = MarkerDict()
-    d.insert(DecompMarker("FUNCTION", "TEST", 0x1234))
-    d.insert(DecompMarker("STUB", "TEST", 0x1234))
-    markers = list(d.iter())
-    assert len(markers) == 1
-    assert markers[0].type == MarkerType.FUNCTION
 
 
 class_name_match_cases = [

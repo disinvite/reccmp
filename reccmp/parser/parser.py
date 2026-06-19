@@ -13,9 +13,9 @@ from .marker import (
     DecompMarker,
     MarkerCategory,
     MarkerType,
-    match_marker,
+    new_match_marker,
     is_marker_exact,
-    verify_markers,
+    newMarkerRegex,
 )
 from .node import (
     ParserLineSymbol,
@@ -71,6 +71,8 @@ class DecompParser:
 
         self.last_line: str = ""
 
+        self.found_markers: dict[int, tuple[str, ...]] = {}
+
         self.buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {
             category: {} for category in MarkerCategory
         }
@@ -94,6 +96,8 @@ class DecompParser:
         self.line_number = 0
 
         self.last_line = ""
+
+        self.found_markers.clear()
 
         for bucket in self.buckets.values():
             bucket.clear()
@@ -379,9 +383,14 @@ class DecompParser:
             line_no, _ = get_line_column_pos(self.newlines, start)
             self.line_number = line_no
 
-            marker = match_marker(excerpt)
-            if marker is not None:
+            if start in self.found_markers:
+                marker = new_match_marker(self.found_markers[start])
                 self.handle_marker(marker)
+                # TODO: move to linter? not necessary to do it here.
+                if not is_marker_exact(excerpt):
+                    self._syntax_warning(
+                        AlertCode.BAD_DECOMP_MARKER
+                    )  # TODO: using old name for this
             elif self.marker_types:
                 # TODO: problem here. vtable should skip interwoven comments if we can't retrieve the name.
                 for category, bucket in self.buckets.items():
@@ -417,6 +426,12 @@ class DecompParser:
                     # TODO: errors for other categories
 
     def read(self, text: str):
+        self.found_markers = {
+            m.start(): m.groups() for m in newMarkerRegex.finditer(text)
+        }
+        if not self.found_markers:
+            return
+
         tokens = list(tokenize_code_file(text))
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = scope_detect_churn(tokens)

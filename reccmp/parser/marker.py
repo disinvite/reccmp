@@ -30,6 +30,12 @@ class MarkerType(Enum):
     LINE = 9
 
 
+newMarkerRegex = re.compile(
+    r"//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
+    flags=re.I,
+)
+
+
 markerRegex = re.compile(
     r"\s*//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
     flags=re.I,
@@ -201,6 +207,17 @@ def match_marker(line: str) -> DecompMarker | None:
         module=match.group("module"),
         offset=int(match.group("offset"), 16),
         extra=match.group("extra"),
+    )
+
+
+def new_match_marker(groups: str) -> DecompMarker:
+    marker_type, module, offset_str, extra = groups
+
+    return DecompMarker(
+        marker_type=marker_type,
+        module=module,
+        offset=int(offset_str, 16),
+        extra=extra,
     )
 
 

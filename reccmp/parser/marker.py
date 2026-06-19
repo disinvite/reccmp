@@ -36,12 +36,6 @@ newMarkerRegex = re.compile(
 )
 
 
-markerRegex = re.compile(
-    r"\s*//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
-    flags=re.I,
-)
-
-
 markerExactRegex = re.compile(
     r"\s*// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?\n?$"
 )
@@ -49,8 +43,15 @@ markerExactRegex = re.compile(
 
 class DecompMarker:
     def __init__(
-        self, marker_type: str, module: str, offset: int, extra: str | None = None
+        self,
+        pos: int,
+        marker_type: str,
+        module: str,
+        offset: int,
+        extra: str | None = None,
     ) -> None:
+        self.pos = pos
+
         try:
             self._type = MarkerType[marker_type.upper()]
         except KeyError:
@@ -197,23 +198,11 @@ def verify_markers(
     return (alerts, marker_groups)
 
 
-def match_marker(line: str) -> DecompMarker | None:
-    match = markerRegex.match(line)
-    if match is None:
-        return None
-
-    return DecompMarker(
-        marker_type=match.group("type"),
-        module=match.group("module"),
-        offset=int(match.group("offset"), 16),
-        extra=match.group("extra"),
-    )
-
-
-def new_match_marker(groups: str) -> DecompMarker:
+def new_match_marker(pos: int, groups: str) -> DecompMarker:
     marker_type, module, offset_str, extra = groups
 
     return DecompMarker(
+        pos=pos,
         marker_type=marker_type,
         module=module,
         offset=int(offset_str, 16),

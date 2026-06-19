@@ -14,7 +14,6 @@ from .marker import (
     MarkerCategory,
     MarkerType,
     new_match_marker,
-    is_marker_exact,
     newMarkerRegex,
 )
 from .node import (
@@ -30,6 +29,7 @@ from .tokenizer import (
     CodeToken,
     get_line_column_pos,
     get_newlines_from_text,
+    get_scopes_from_tokens,
     get_token_groups,
     scope_detect_churn,
     tokenize_code_file,
@@ -88,6 +88,7 @@ class DecompParser:
 
         self.newlines: list[int] = []
         self.enclosures: list[tuple[int, int]] = []
+        self.scopes: list[tuple[int, int, str]] = []
 
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
@@ -111,6 +112,7 @@ class DecompParser:
 
         self.newlines = []
         self.enclosures.clear()
+        self.scopes.clear()
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -150,7 +152,7 @@ class DecompParser:
         self.function_start = self.line_number
 
     def handle_marker(self, marker: DecompMarker):
-        category = MARKER_CATEGORY_MAP[marker._type]
+        category = MARKER_CATEGORY_MAP[marker.type]
         if not self.marker_types:
             self.marker_types.add(category)
 
@@ -383,15 +385,9 @@ class DecompParser:
             self.line_number = line_no
 
             if start in self.found_markers:
-                marker = new_match_marker(self.found_markers[start])
+                marker = new_match_marker(start, self.found_markers[start])
                 self.handle_marker(marker)
-                # TODO: move to linter? not necessary to do it here.
-                if not is_marker_exact(excerpt):
-                    self._syntax_warning(
-                        AlertCode.BAD_DECOMP_MARKER
-                    )  # TODO: using old name for this
             elif self.marker_types:
-                # TODO: problem here. vtable should skip interwoven comments if we can't retrieve the name.
                 for category, bucket in self.buckets.items():
                     if not bucket:
                         continue
@@ -401,7 +397,7 @@ class DecompParser:
                         if variable_name:
                             self.finish_variable(bucket.values(), variable_name)
                         else:
-                            pass  # TODO: No suitable name
+                            self._syntax_error(AlertCode.NO_SUITABLE_NAME)
 
                         bucket.clear()
                         self.marker_types.discard(category)
@@ -434,6 +430,7 @@ class DecompParser:
         tokens = list(tokenize_code_file(text))
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = scope_detect_churn(tokens)
+        self.scopes = get_scopes_from_tokens(text, tokens, self.enclosures)
 
         group_ranges = list(get_token_groups(text, tokens))
         # Collect consecutive comments that are markers.
@@ -457,8 +454,6 @@ class DecompParser:
                     continue
 
                 markers = bucket.values()
-                bucket.clear()
-                self.marker_types.discard(category)
 
                 if category == MarkerCategory.FUNCTION:
                     self.code_function(text, tokens, group_end, markers)
@@ -471,6 +466,9 @@ class DecompParser:
                 else:
                     # TODO: ignoring other types for test
                     pass
+
+                bucket.clear()
+                self.marker_types.discard(category)
 
             self.marker_types.clear()
 

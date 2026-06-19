@@ -24,7 +24,7 @@ regularCommentRegex = re.compile(r"(//.*)")
 doubleQuoteRegex = re.compile(r'(L)?("(?:[^"\\]|\\.)*")')
 
 # Detect a line that would cause us to enter a new scope
-scopeDetectRegex = re.compile(r"(?:class|struct|namespace) (?P<name>\w+).*(?:{)?")
+scopeDetectRegex = re.compile(r"(?:class|struct|namespace) (?P<name>\w+)[^{};<>]+")
 
 
 def get_synthetic_name(line: str) -> str | None:

@@ -48,7 +48,7 @@ L?\'(?:[^'\n\\]|\\.)*['\n]|
 )
 
 
-r_realClassStart = re.compile(r"(?:class|struct|namespace)\s+(\w+)\s*$")
+r_realClassStart = re.compile(r"(?:class|struct|namespace) (?P<name>\w+)[^{};=<>]+")
 
 
 CodeToken = tuple[int, int, TokenType]
@@ -155,18 +155,16 @@ def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, 
 
 def get_scopes_from_tokens(
     text: str, tokens: list[CodeToken], enclosures: list[tuple[int, int]]
-) -> list[tuple[tuple[int, int], str]]:
+) -> list[tuple[int, int, str]]:
+    # zzz = { start: token for start, _, token in tokens if token == TokenType.CURLY_OPEN }
+    xxx = dict(enclosures)
+
     names = []
 
-    for scope_start, scope_stop in enclosures:
-        if scope_start > 0:
-            prev_start, prev_stop, prev_token = tokens[scope_start - 1]
-            if prev_token == TokenType.CODE:
-                excerpt = text[prev_start:prev_stop]
-                match = r_realClassStart.search(excerpt)
-                if match is not None:
-                    scope_name = match.group(1)
-                    names.append(((scope_start, scope_stop), scope_name))
+    for match in r_realClassStart.finditer(text):
+        stop = match.end()
+        if stop in xxx:
+            names.append((stop, xxx[stop], match.group(1)))
 
     return names
 

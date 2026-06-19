@@ -12,6 +12,7 @@ from .util import (
 from .marker import (
     DecompMarker,
     MarkerCategory,
+    MarkerType,
     match_marker,
     is_marker_exact,
     verify_markers,
@@ -44,6 +45,19 @@ class ReccmpParserResult:
     path: PurePath
 
 
+MARKER_CATEGORY_MAP = {
+    MarkerType.FUNCTION: MarkerCategory.FUNCTION,
+    MarkerType.STUB: MarkerCategory.FUNCTION,
+    MarkerType.SYNTHETIC: MarkerCategory.FUNCTION,
+    MarkerType.TEMPLATE: MarkerCategory.FUNCTION,
+    MarkerType.LIBRARY: MarkerCategory.FUNCTION,
+    MarkerType.VTABLE: MarkerCategory.VTABLE,
+    MarkerType.GLOBAL: MarkerCategory.VARIABLE,
+    MarkerType.STRING: MarkerCategory.STRING,
+    MarkerType.LINE: MarkerCategory.ADDRESS,
+}
+
+
 class DecompParser:
     # pylint: disable=too-many-instance-attributes
     # Could combine output lists into a single list to get under the limit,
@@ -56,6 +70,11 @@ class DecompParser:
         self.line_number: int = 0
 
         self.last_line: str = ""
+
+        self.buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {
+            category: {} for category in MarkerCategory
+        }
+        self.marker_types: set[MarkerCategory] = set()
 
         # For non-synthetic functions, save the line number where the function begins
         # (i.e. where we see the curly brace) along with the function signature.
@@ -75,6 +94,11 @@ class DecompParser:
         self.line_number = 0
 
         self.last_line = ""
+
+        for bucket in self.buckets.values():
+            bucket.clear()
+
+        self.marker_types.clear()
 
         self.function_start = 0
         self.function_sig = ""
@@ -120,6 +144,30 @@ class DecompParser:
 
     def _function_starts_here(self):
         self.function_start = self.line_number
+
+    def handle_marker(self, marker: DecompMarker):
+        category = MARKER_CATEGORY_MAP[marker._type]
+        if not self.marker_types:
+            self.marker_types.add(category)
+
+        elif category not in self.marker_types:
+            if (self.marker_types | {category}) == {
+                MarkerCategory.VARIABLE,
+                MarkerCategory.STRING,
+            }:
+                self.marker_types.add(category)
+            else:
+                return
+                # AlertCode.INCOMPATIBLE_MARKER
+
+        # Allow duplicate modules with different vtable base classes.
+        key = (marker.module, marker.extra)
+        bucket = self.buckets[category]
+        if key in bucket:
+            pass
+            # AlertCode.DUPLICATE_MODULE
+
+        self.buckets[category][key] = marker
 
     def finish_function(
         self, markers: list[DecompMarker], lookup_by_name: bool = False
@@ -325,11 +373,7 @@ class DecompParser:
         else:
             self._syntax_error(AlertCode.NO_SUITABLE_NAME)
 
-    def read_comment_block(
-        self, text: str, tokens: list[CodeToken]
-    ) -> list[tuple[MarkerCategory, list[DecompMarker]]]:
-        marker_stack = []
-
+    def read_comment_block(self, text: str, tokens: list[CodeToken]):
         for start, stop, token in tokens:
             excerpt = text[start:stop]
             line_no, _ = get_line_column_pos(self.newlines, start)
@@ -337,40 +381,40 @@ class DecompParser:
 
             marker = match_marker(excerpt)
             if marker is not None:
-                marker_stack.append(marker)
-            else:
-                alerts, categories = verify_markers(marker_stack)
-                marker_stack.clear()
-                # TODO: what?
+                self.handle_marker(marker)
+            elif self.marker_types:
                 # TODO: problem here. vtable should skip interwoven comments if we can't retrieve the name.
+                for category, bucket in self.buckets.items():
+                    if not bucket:
+                        continue
 
-                for category, x_markers in categories:
                     if category == MarkerCategory.VARIABLE:
                         variable_name = get_synthetic_name(excerpt)
                         if variable_name:
-                            self.finish_variable(x_markers, variable_name)
+                            self.finish_variable(bucket.values(), variable_name)
                         else:
                             pass  # TODO: No suitable name
+
+                        bucket.clear()
+                        self.marker_types.discard(category)
 
                     elif category == MarkerCategory.VTABLE:
                         vtable_class = get_class_name(excerpt)
                         if vtable_class is not None:
-                            self.finish_vtable(x_markers, vtable_class)
+                            self.finish_vtable(bucket.values(), vtable_class)
+                            bucket.clear()
+                            self.marker_types.discard(category)
 
                     elif category == MarkerCategory.FUNCTION:
                         synthetic_name = get_synthetic_name(excerpt)
                         assert synthetic_name is not None
                         self.function_sig = synthetic_name
                         self._function_starts_here()
-                        self.finish_function(x_markers, lookup_by_name=True)
+                        self.finish_function(bucket.values(), lookup_by_name=True)
+                        bucket.clear()
+                        self.marker_types.discard(category)
 
                     # TODO: errors for other categories
-
-        if marker_stack:
-            alerts, categories = verify_markers(marker_stack)
-            return categories
-
-        return []
 
     def read(self, text: str):
         tokens = list(tokenize_code_file(text))
@@ -383,10 +427,10 @@ class DecompParser:
 
         for group_set in group_ranges:
             token_group = [tokens[i] for i in group_set]
-            categories = self.read_comment_block(text, token_group)
+            self.read_comment_block(text, token_group)
 
             # Error or completed
-            if not categories:
+            if not self.marker_types:
                 continue
 
             # index
@@ -394,18 +438,31 @@ class DecompParser:
 
             # We have unfinished markers.
 
-            for category, markers in categories:
+            for category, bucket in self.buckets.items():
+                if not bucket:
+                    continue
+
                 if category == MarkerCategory.FUNCTION:
-                    self.code_function(text, tokens, group_end, markers)
+                    self.code_function(text, tokens, group_end, bucket.values())
+                    bucket.clear()
+                    self.marker_types.discard(category)
                 elif category == MarkerCategory.VTABLE:
-                    self.code_vtable(text, tokens, group_end, markers)
+                    self.code_vtable(text, tokens, group_end, bucket.values())
+                    bucket.clear()
+                    self.marker_types.discard(category)
                 elif category == MarkerCategory.VARIABLE:
-                    self.code_variable(text, tokens, group_end, markers)
+                    self.code_variable(text, tokens, group_end, bucket.values())
+                    bucket.clear()
+                    self.marker_types.discard(category)
                 elif category == MarkerCategory.STRING:
-                    self.code_string(text, tokens, group_end, markers)
+                    self.code_string(text, tokens, group_end, bucket.values())
+                    bucket.clear()
+                    self.marker_types.discard(category)
                 else:
                     # TODO: ignoring other types for test
                     pass
+
+            self.marker_types.clear()
 
         # n.b. CODE token blocks may have whitespace only
         # FUNCTION: comment (name) OR identifier between here and next scope, whichever is first.

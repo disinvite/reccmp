@@ -160,7 +160,7 @@ def verify_markers(
 ) -> tuple[list[ParserAlert], list[tuple[MarkerCategory, list[DecompMarker]]]]:
     buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {}
     alerts: list[ParserAlert] = []
-    types = set()
+    types: set[MarkerCategory] = set()
 
     for marker in markers:
         category = MARKER_CATEGORY_MAP[marker._type]

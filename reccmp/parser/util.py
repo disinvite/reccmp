@@ -115,6 +115,8 @@ global_regex = re.compile(
         \(\w|                     # - Open paren: call constructor
         \)\(|                     # - Close paren, open paren: function pointer variable
         \[.*|                     # - Open bracket: array with or without size
+        \s*=|
+        \s*;|
         \s*$                      # - End of string
     )
 """,

@@ -1,5 +1,6 @@
 import re
 from enum import Enum
+from .error import AlertCode, ParserAlert
 
 
 class MarkerCategory(Enum):
@@ -131,6 +132,63 @@ class DecompMarker:
 
     def allowed_in_func(self) -> bool:
         return self._type in (MarkerType.GLOBAL, MarkerType.STRING, MarkerType.LINE)
+
+
+def markers_are_compatible(type_a: MarkerCategory, type_b: MarkerCategory) -> bool:
+    if type_a == type_b:
+        return True
+
+    var_string = {MarkerCategory.VARIABLE, MarkerCategory.STRING}
+    return type_a in var_string and type_b in var_string
+
+
+MARKER_CATEGORY_MAP = {
+    MarkerType.FUNCTION: MarkerCategory.FUNCTION,
+    MarkerType.STUB: MarkerCategory.FUNCTION,
+    MarkerType.SYNTHETIC: MarkerCategory.FUNCTION,
+    MarkerType.TEMPLATE: MarkerCategory.FUNCTION,
+    MarkerType.LIBRARY: MarkerCategory.FUNCTION,
+    MarkerType.VTABLE: MarkerCategory.VTABLE,
+    MarkerType.GLOBAL: MarkerCategory.VARIABLE,
+    MarkerType.STRING: MarkerCategory.STRING,
+    MarkerType.LINE: MarkerCategory.ADDRESS,
+}
+
+
+def verify_markers(
+    markers: list[DecompMarker],
+) -> tuple[list[ParserAlert], list[tuple[MarkerCategory, list[DecompMarker]]]]:
+    buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {}
+    alerts: list[ParserAlert] = []
+    types = set()
+
+    for marker in markers:
+        category = MARKER_CATEGORY_MAP[marker._type]
+        if not types:
+            types.add(category)
+
+        if category not in types:
+            if (types | {category}) == {MarkerCategory.VARIABLE, MarkerCategory.STRING}:
+                types.add(category)
+            else:
+                # AlertCode.INCOMPATIBLE_MARKER
+                continue
+
+        if category in buckets:
+            bucket = buckets[category]
+            if marker.module in bucket:
+                pass
+                # AlertCode.DUPLICATE_MODULE
+        else:
+            buckets[category] = {}
+
+        buckets[category][marker.module] = marker
+
+    marker_groups = [
+        (category, list(modules.values())) for category, modules in buckets.items()
+    ]
+
+    return (alerts, marker_groups)
 
 
 def match_marker(line: str) -> DecompMarker | None:

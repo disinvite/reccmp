@@ -19,6 +19,7 @@ from .marker import (
     MarkerCategory,
     match_marker,
     is_marker_exact,
+    verify_markers,
 )
 from .node import (
     ParserLineSymbol,
@@ -391,6 +392,89 @@ class DecompParser:
         else:
             self.state = ReaderState.SEARCH
 
+    def finish_function(
+        self, markers: list[DecompMarker], lookup_by_name: bool = False
+    ):
+        end_line = self.line_number
+
+        for marker in markers:
+            name_is_symbol = (
+                marker.extra is not None and marker.extra.lower() == "symbol"
+            )
+            if name_is_symbol and not lookup_by_name:
+                self._syntax_warning(AlertCode.SYMBOL_OPTION_IGNORED)
+                name_is_symbol = False
+
+            is_folded = marker.extra is not None and marker.extra.lower() == "folded"
+
+            self._symbols.append(
+                ParserFunction(
+                    type=marker.type,
+                    line_number=self.function_start,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=self.function_sig,
+                    filename=self.filename,
+                    lookup_by_name=lookup_by_name,
+                    name_is_symbol=name_is_symbol,
+                    end_line=end_line,
+                    is_folded=is_folded,
+                )
+            )
+
+    def finish_string(self, markers: list[DecompMarker], text: str, is_widechar: bool):
+        for marker in markers:
+            self._symbols.append(
+                ParserString(
+                    type=marker.type,
+                    line_number=self.line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=text,
+                    filename=self.filename,
+                    is_widechar=is_widechar,
+                )
+            )
+
+    def finish_variable(
+        self,
+        markers: list[DecompMarker],
+        variable_name: str,
+    ):
+        for marker in markers:
+            self._symbols.append(
+                ParserVariable(
+                    type=marker.type,
+                    line_number=self.line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=variable_name,
+                    # name=self.curly.get_prefix(variable_name),
+                    filename=self.filename,
+                    # is_static=is_static,
+                    # parent_function=parent_function,
+                )
+            )
+
+    def finish_vtable(
+        self,
+        markers: list[DecompMarker],
+        class_name: str,
+    ):
+        for marker in markers:
+            self._symbols.append(
+                ParserVtable(
+                    type=marker.type,
+                    line_number=self.line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=class_name,
+                    # name=self.curly.get_prefix(class_name),
+                    filename=self.filename,
+                    base_class=marker.extra,
+                )
+            )
+
     def _line_marker(self, marker: DecompMarker):
         self._symbols.append(
             ParserLineSymbol(
@@ -606,7 +690,13 @@ class DecompParser:
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)
 
-    def code_vtable(self, text: str, tokens: list[CodeToken], start: int):
+    def code_vtable(
+        self,
+        text: str,
+        tokens: list[CodeToken],
+        start: int,
+        markers: list[DecompMarker],
+    ):
         name = None
 
         finish = find_next_token_type(
@@ -625,11 +715,17 @@ class DecompParser:
                 break
 
         if name:
-            self._vtable_done(name)
+            self.finish_vtable(markers, name)
         else:
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
 
-    def code_function(self, text: str, tokens: list[CodeToken], start: int):
+    def code_function(
+        self,
+        text: str,
+        tokens: list[CodeToken],
+        start: int,
+        markers: list[DecompMarker],
+    ):
         finish = find_next_token_type(
             tokens, start, {TokenType.CURLY_OPEN, TokenType.SEMICOLON}
         )
@@ -657,9 +753,15 @@ class DecompParser:
             raise ex
 
         self.line_number, _ = get_line_column_pos(self.newlines, func_end)
-        self._function_done()
+        self.finish_function(markers)
 
-    def code_variable(self, text: str, tokens: list[CodeToken], start: int):
+    def code_variable(
+        self,
+        text: str,
+        tokens: list[CodeToken],
+        start: int,
+        markers: list[DecompMarker],
+    ):
         variable_name = None
         string_text = None
 
@@ -670,6 +772,17 @@ class DecompParser:
                 break
 
         # TODO: static vars.
+        if variable_name:
+            self.finish_variable(markers, variable_name)
+
+    def code_string(
+        self,
+        text: str,
+        tokens: list[CodeToken],
+        start: int,
+        markers: list[DecompMarker],
+    ):
+        string_obj = None
 
         # TODO: read from #define
         finish = find_next_token_type(
@@ -679,39 +792,59 @@ class DecompParser:
             t_start, t_stop, token = tokens[finish]
             if token == TokenType.STRING:
                 excerpt = text[t_start:t_stop]
-                string_text = get_string_contents(excerpt)
+                string_obj = get_string_contents(excerpt)
 
-        if variable_name or string_text:
-            self._variable_done(variable_name, string_text)
+        if string_obj:
+            self.finish_string(markers, string_obj.text, string_obj.is_widechar)
         else:
             self._syntax_error(AlertCode.NO_SUITABLE_NAME)
 
-    def read_comment_block(self, text: str, tokens: list[CodeToken]):
+    def read_comment_block(
+        self, text: str, tokens: list[CodeToken]
+    ) -> list[tuple[MarkerCategory, list[DecompMarker]]]:
+        marker_stack = []
+
         for start, stop, token in tokens:
             excerpt = text[start:stop]
             line_no, _ = get_line_column_pos(self.newlines, start)
             self.line_number = line_no
 
-            if token == TokenType.LINE_COMMENT:
-                marker = match_marker(excerpt)
-                if marker is not None:
-                    self._handle_marker(marker)
-                else:
-                    if self.state in (ReaderState.IN_GLOBAL,):
-                        variable_name = get_synthetic_name(excerpt)
-                        self._variable_done(variable_name, None)
+            marker = match_marker(excerpt)
+            if marker is not None:
+                marker_stack.append(marker)
+            else:
+                alerts, categories = verify_markers(marker_stack)
+                marker_stack.clear()
+                # TODO: what?
+                # TODO: problem here. vtable should skip interwoven comments if we can't retrieve the name.
 
-                    elif self.state in (ReaderState.IN_VTABLE,):
+                for category, x_markers in categories:
+                    if category == MarkerCategory.VARIABLE:
+                        variable_name = get_synthetic_name(excerpt)
+                        if variable_name:
+                            self.finish_variable(x_markers, variable_name)
+                        else:
+                            pass  # TODO: No suitable name
+
+                    elif category == MarkerCategory.VTABLE:
                         vtable_class = get_class_name(excerpt)
                         if vtable_class is not None:
-                            self._vtable_done(class_name=vtable_class)
+                            self.finish_vtable(x_markers, vtable_class)
 
-                    elif self.state != ReaderState.SEARCH:
+                    elif category == MarkerCategory.FUNCTION:
                         synthetic_name = get_synthetic_name(excerpt)
                         assert synthetic_name is not None
                         self.function_sig = synthetic_name
                         self._function_starts_here()
-                        self._function_done(lookup_by_name=True)
+                        self.finish_function(x_markers, lookup_by_name=True)
+
+                    # TODO: errors for other categories
+
+        if marker_stack:
+            alerts, categories = verify_markers(marker_stack)
+            return categories
+
+        return []
 
     def read(self, text: str):
         tokens = list(tokenize_code_file(text))
@@ -724,25 +857,29 @@ class DecompParser:
 
         for group_set in group_ranges:
             token_group = [tokens[i] for i in group_set]
-            self.read_comment_block(text, token_group)
+            categories = self.read_comment_block(text, token_group)
 
             # Error or completed
-            if self.state == ReaderState.SEARCH:
+            if not categories:
                 continue
 
             # index
             group_end = group_set[-1]
 
             # We have unfinished markers.
-            if self.state == ReaderState.WANT_SIG:
-                self.code_function(text, tokens, group_end)
-            elif self.state == ReaderState.IN_VTABLE:
-                self.code_vtable(text, tokens, group_end)
-            elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
-                self.code_variable(text, tokens, group_end)
-            else:
-                # TODO: ignoring other types for test
-                self._recover()
+
+            for category, markers in categories:
+                if category == MarkerCategory.FUNCTION:
+                    self.code_function(text, tokens, group_end, markers)
+                elif category == MarkerCategory.VTABLE:
+                    self.code_vtable(text, tokens, group_end, markers)
+                elif category == MarkerCategory.VARIABLE:
+                    self.code_variable(text, tokens, group_end, markers)
+                elif category == MarkerCategory.STRING:
+                    self.code_string(text, tokens, group_end, markers)
+                else:
+                    # TODO: ignoring other types for test
+                    self._recover()
 
         # n.b. CODE token blocks may have whitespace only
         # FUNCTION: comment (name) OR identifier between here and next scope, whichever is first.

@@ -79,10 +79,6 @@ class DecompParser:
         ] = {category: {} for category in MarkerCategory}
         self.marker_types: set[MarkerCategory] = set()
 
-        # For non-synthetic functions, save the line number where the function begins
-        # (i.e. where we see the curly brace) along with the function signature.
-        # We will need both when we reach the end of the function.
-        self.function_start: int = 0
         self.function_sig: str = ""
 
         self.filename: PurePath = PurePath("")
@@ -91,6 +87,7 @@ class DecompParser:
         self.enclosures: list[tuple[int, int]] = []
         self.scopes: list[tuple[int, int, str]] = []
         self.scopes_for_markers: dict[int, list[str]] = {}
+        self.seen_functions: dict[str, list[tuple[int, range]]] = {}
 
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
@@ -107,7 +104,6 @@ class DecompParser:
 
         self.marker_types.clear()
 
-        self.function_start = 0
         self.function_sig = ""
 
         self.filename = filename
@@ -116,6 +112,7 @@ class DecompParser:
         self.enclosures.clear()
         self.scopes.clear()
         self.scopes_for_markers.clear()
+        self.seen_functions.clear()
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -151,9 +148,6 @@ class DecompParser:
     def _syntax_error(self, code):
         self._syntax_warning(code)
 
-    def _function_starts_here(self):
-        self.function_start = self.line_number
-
     def handle_marker(self, marker: DecompMarker):
         category = MARKER_CATEGORY_MAP[marker.type]
         if not self.marker_types:
@@ -180,9 +174,15 @@ class DecompParser:
         self.buckets[category][key] = marker
 
     def finish_function(
-        self, markers: list[DecompMarker], lookup_by_name: bool = False
+        self,
+        markers: list[DecompMarker],
+        start: int,
+        end: int,
+        *,
+        lookup_by_name: bool = False,
     ):
-        end_line = self.line_number
+        start_line, _ = get_line_column_pos(self.newlines, start)
+        end_line, _ = get_line_column_pos(self.newlines, end)
 
         for marker in markers:
             name_is_symbol = (
@@ -194,10 +194,15 @@ class DecompParser:
 
             is_folded = marker.extra is not None and marker.extra.lower() == "folded"
 
+            if not lookup_by_name:
+                self.seen_functions.setdefault(marker.module, []).insert(
+                    0, (marker.offset, range(start, end + 1))
+                )
+
             self._symbols.append(
                 ParserFunction(
                     type=marker.type,
-                    line_number=self.function_start,
+                    line_number=start_line,
                     module=marker.module,
                     offset=marker.offset,
                     name=self.function_sig,
@@ -231,6 +236,18 @@ class DecompParser:
         for marker in markers:
             names = self.scopes_for_markers[marker.pos]
             qualified_name = "::".join([*names, variable_name])
+
+            is_static = False
+            parent_function = None
+
+            functions = self.seen_functions.get(marker.module, [])
+            for func_addr, func_span in functions:
+                if marker.pos in func_span:
+                    is_static = True
+                    parent_function = func_addr
+
+                break
+
             self._symbols.append(
                 ParserVariable(
                     type=marker.type,
@@ -239,8 +256,8 @@ class DecompParser:
                     offset=marker.offset,
                     name=qualified_name,
                     filename=self.filename,
-                    # is_static=is_static,
-                    # parent_function=parent_function,
+                    is_static=is_static,
+                    parent_function=parent_function,
                 )
             )
 
@@ -264,17 +281,33 @@ class DecompParser:
                 )
             )
 
-    def _line_marker(self, marker: DecompMarker):
-        self._symbols.append(
-            ParserLineSymbol(
-                type=marker.type,
-                line_number=self.line_number,
-                module=marker.module,
-                offset=marker.offset,
-                name=f"{self.filename.name}:{self.line_number}",
-                filename=self.filename,
+    def finish_line(self, markers: list[DecompMarker]):
+        for marker in markers:
+            self._symbols.append(
+                ParserLineSymbol(
+                    type=marker.type,
+                    line_number=self.line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=f"{self.filename.name}:{self.line_number}",
+                    filename=self.filename,
+                )
             )
-        )
+
+    def code_line(
+        self,
+        tokens: list[CodeToken],
+        start: int,
+        markers: list[DecompMarker],
+    ):
+        finish = find_next_token_type(tokens, start, {TokenType.CODE})
+        if finish is None:
+            self._syntax_error(AlertCode.UNEXPECTED_END_OF_FILE)
+            return
+
+        pos, _, __ = tokens[finish]
+        self.line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.finish_line(markers)
 
     def code_vtable(
         self,
@@ -326,20 +359,16 @@ class DecompParser:
             self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
             return
 
-        self.line_number, _ = get_line_column_pos(self.newlines, func_start)
-        self._function_starts_here()
-
         # Now find the scope that matches this function.
         try:
-            func_end, __ = next(
+            __, func_end = next(
                 enclosure for enclosure in self.enclosures if enclosure[0] == func_start
             )
         except StopIteration as ex:
             breakpoint()  # TODO (obviously)
             raise ex
 
-        self.line_number, _ = get_line_column_pos(self.newlines, func_end)
-        self.finish_function(markers)
+        self.finish_function(markers, func_start, func_end)
 
     def code_variable(
         self,
@@ -422,8 +451,7 @@ class DecompParser:
                         synthetic_name = get_synthetic_name(excerpt)
                         assert synthetic_name is not None
                         self.function_sig = synthetic_name
-                        self._function_starts_here()
-                        self.finish_function(markers, lookup_by_name=True)
+                        self.finish_function(markers, start, stop, lookup_by_name=True)
                         bucket.clear()
                         self.marker_types.discard(category)
 
@@ -477,9 +505,8 @@ class DecompParser:
                     self.code_variable(text, tokens, group_end, markers)
                 elif category == MarkerCategory.STRING:
                     self.code_string(text, tokens, group_end, markers)
-                else:
-                    # TODO: ignoring other types for test
-                    pass
+                elif category == MarkerCategory.ADDRESS:
+                    self.code_line(tokens, group_end, markers)
 
                 bucket.clear()
                 self.marker_types.discard(category)

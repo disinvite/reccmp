@@ -123,13 +123,15 @@ def find_next_token_type(
     return None
 
 
-def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, ...]]:
+def get_token_groups(
+    text: str, tokens: list[CodeToken], starts: set[int]
+) -> Iterator[tuple[int, ...]]:
     """Groups of whitespace or line comments.
     Returned ranges are ids of tokens."""
-    ids = []
+    ids: list[int] = []
 
     for i, (start, stop, token) in enumerate(tokens):
-        if token == TokenType.LINE_COMMENT:
+        if start in starts or (ids and token == TokenType.LINE_COMMENT):
             ids.append(i)
 
         elif ids:
@@ -171,9 +173,9 @@ def get_scope_name(scopes: list[tuple[range, str]], pos: int) -> str:
 
 def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
     return [
-        (start, stop, token)
-        for (start, stop, token) in tokens
-        if token
+        x
+        for x in tokens
+        if x[2]
         in {
             TokenType.CURLY_OPEN,
             TokenType.CURLY_CLOSE,

@@ -55,6 +55,7 @@ MARKER_CATEGORY_MAP = {
     MarkerType.GLOBAL: MarkerCategory.VARIABLE,
     MarkerType.STRING: MarkerCategory.STRING,
     MarkerType.LINE: MarkerCategory.ADDRESS,
+    MarkerType.UNKNOWN: MarkerCategory.ADDRESS,
 }
 
 
@@ -73,9 +74,9 @@ class DecompParser:
 
         self.found_markers: dict[int, tuple[str, ...]] = {}
 
-        self.buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {
-            category: {} for category in MarkerCategory
-        }
+        self.buckets: dict[
+            MarkerCategory, dict[tuple[str, str | None], DecompMarker]
+        ] = {category: {} for category in MarkerCategory}
         self.marker_types: set[MarkerCategory] = set()
 
         # For non-synthetic functions, save the line number where the function begins
@@ -89,6 +90,7 @@ class DecompParser:
         self.newlines: list[int] = []
         self.enclosures: list[tuple[int, int]] = []
         self.scopes: list[tuple[int, int, str]] = []
+        self.scopes_for_markers: dict[int, list[str]] = {}
 
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
@@ -113,6 +115,7 @@ class DecompParser:
         self.newlines = []
         self.enclosures.clear()
         self.scopes.clear()
+        self.scopes_for_markers.clear()
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -170,7 +173,9 @@ class DecompParser:
         key = (marker.module, marker.extra)
         bucket = self.buckets[category]
         if key in bucket:
+            # Do not overwrite
             self._syntax_error(AlertCode.DUPLICATE_MODULE)
+            return
 
         self.buckets[category][key] = marker
 
@@ -224,14 +229,15 @@ class DecompParser:
         variable_name: str,
     ):
         for marker in markers:
+            names = self.scopes_for_markers[marker.pos]
+            qualified_name = "::".join([*names, variable_name])
             self._symbols.append(
                 ParserVariable(
                     type=marker.type,
                     line_number=self.line_number,
                     module=marker.module,
                     offset=marker.offset,
-                    name=variable_name,
-                    # name=self.curly.get_prefix(variable_name),
+                    name=qualified_name,
                     filename=self.filename,
                     # is_static=is_static,
                     # parent_function=parent_function,
@@ -244,14 +250,15 @@ class DecompParser:
         class_name: str,
     ):
         for marker in markers:
+            names = self.scopes_for_markers[marker.pos]
+            qualified_name = "::".join([*names, class_name])
             self._symbols.append(
                 ParserVtable(
                     type=marker.type,
                     line_number=self.line_number,
                     module=marker.module,
                     offset=marker.offset,
-                    name=class_name,
-                    # name=self.curly.get_prefix(class_name),
+                    name=qualified_name,
                     filename=self.filename,
                     base_class=marker.extra,
                 )
@@ -392,10 +399,12 @@ class DecompParser:
                     if not bucket:
                         continue
 
+                    markers = list(bucket.values())
+
                     if category == MarkerCategory.VARIABLE:
                         variable_name = get_synthetic_name(excerpt)
                         if variable_name:
-                            self.finish_variable(bucket.values(), variable_name)
+                            self.finish_variable(markers, variable_name)
                         else:
                             self._syntax_error(AlertCode.NO_SUITABLE_NAME)
 
@@ -405,7 +414,7 @@ class DecompParser:
                     elif category == MarkerCategory.VTABLE:
                         vtable_class = get_class_name(excerpt)
                         if vtable_class is not None:
-                            self.finish_vtable(bucket.values(), vtable_class)
+                            self.finish_vtable(markers, vtable_class)
                             bucket.clear()
                             self.marker_types.discard(category)
 
@@ -414,7 +423,7 @@ class DecompParser:
                         assert synthetic_name is not None
                         self.function_sig = synthetic_name
                         self._function_starts_here()
-                        self.finish_function(bucket.values(), lookup_by_name=True)
+                        self.finish_function(markers, lookup_by_name=True)
                         bucket.clear()
                         self.marker_types.discard(category)
 
@@ -430,7 +439,12 @@ class DecompParser:
         tokens = list(tokenize_code_file(text))
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = scope_detect_churn(tokens)
+
+        # TODO: naming and refactor
         self.scopes = get_scopes_from_tokens(text, tokens, self.enclosures)
+        xxx = [(range(start, stop), name) for start, stop, name in self.scopes]
+        for pos in self.found_markers.keys():
+            self.scopes_for_markers[pos] = [name for span, name in xxx if pos in span]
 
         group_ranges = list(get_token_groups(text, tokens))
         # Collect consecutive comments that are markers.
@@ -453,7 +467,7 @@ class DecompParser:
                 if not bucket:
                     continue
 
-                markers = bucket.values()
+                markers = list(bucket.values())
 
                 if category == MarkerCategory.FUNCTION:
                     self.code_function(text, tokens, group_end, markers)

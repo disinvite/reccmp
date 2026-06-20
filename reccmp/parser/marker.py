@@ -1,6 +1,6 @@
 import re
+from typing import NamedTuple
 from enum import Enum
-from .error import AlertCode, ParserAlert
 
 
 class MarkerCategory(Enum):
@@ -41,170 +41,29 @@ markerExactRegex = re.compile(
 )
 
 
-class DecompMarker:
-    def __init__(
-        self,
-        pos: int,
-        marker_type: str,
-        module: str,
-        offset: int,
-        extra: str | None = None,
-    ) -> None:
-        self.pos = pos
-
-        try:
-            self._type = MarkerType[marker_type.upper()]
-        except KeyError:
-            self._type = MarkerType.UNKNOWN
-
-        # Convert to upper here. A lot of other analysis depends on this name
-        # being consistent and predictable. If the name is _not_ capitalized
-        # we will emit a syntax error.
-        self._module: str = module.upper()
-        self._offset: int = offset
-        self._extra: str | None = extra
-
-    @property
-    def type(self) -> MarkerType:
-        return self._type
-
-    @property
-    def module(self) -> str:
-        return self._module
-
-    @property
-    def offset(self) -> int:
-        return self._offset
-
-    @property
-    def extra(self) -> str | None:
-        return self._extra
-
-    @property
-    def category(self) -> MarkerCategory:
-        if self.is_vtable():
-            return MarkerCategory.VTABLE
-
-        if self.is_variable():
-            return MarkerCategory.VARIABLE
-
-        if self.is_string():
-            return MarkerCategory.STRING
-
-        # TODO: worth another look if we add more types, but this covers it
-        if self.is_regular_function() or self.is_explicit_byname():
-            return MarkerCategory.FUNCTION
-
-        return MarkerCategory.ADDRESS
-
-    @property
-    def key(self) -> tuple[MarkerCategory, str, str | None]:
-        """For use with the MarkerDict. To detect/avoid marker collision."""
-        return (self.category, self.module, self.extra)
-
-    def is_regular_function(self) -> bool:
-        """Regular function, meaning: not an explicit byname lookup. FUNCTION
-        markers can be _implicit_ byname.
-        FUNCTION and STUB markers are (currently) the only heterogeneous marker types that
-        can be lumped together, although the reasons for doing so are a little vague."""
-        return self._type in (MarkerType.FUNCTION, MarkerType.STUB)
-
-    def is_explicit_byname(self) -> bool:
-        return self._type in (
-            MarkerType.SYNTHETIC,
-            MarkerType.TEMPLATE,
-            MarkerType.LIBRARY,
-        )
-
-    def is_variable(self) -> bool:
-        return self._type == MarkerType.GLOBAL
-
-    def is_synthetic(self) -> bool:
-        return self._type == MarkerType.SYNTHETIC
-
-    def is_template(self) -> bool:
-        return self._type == MarkerType.TEMPLATE
-
-    def is_vtable(self) -> bool:
-        return self._type == MarkerType.VTABLE
-
-    def is_library(self) -> bool:
-        return self._type == MarkerType.LIBRARY
-
-    def is_string(self) -> bool:
-        return self._type == MarkerType.STRING
-
-    def is_line(self) -> bool:
-        return self._type == MarkerType.LINE
-
-    def allowed_in_func(self) -> bool:
-        return self._type in (MarkerType.GLOBAL, MarkerType.STRING, MarkerType.LINE)
+class DecompMarker(NamedTuple):
+    pos: int
+    type: MarkerType
+    module: str
+    offset: int
+    extra: str | None = None
 
 
-def markers_are_compatible(type_a: MarkerCategory, type_b: MarkerCategory) -> bool:
-    if type_a == type_b:
-        return True
-
-    var_string = {MarkerCategory.VARIABLE, MarkerCategory.STRING}
-    return type_a in var_string and type_b in var_string
-
-
-MARKER_CATEGORY_MAP = {
-    MarkerType.FUNCTION: MarkerCategory.FUNCTION,
-    MarkerType.STUB: MarkerCategory.FUNCTION,
-    MarkerType.SYNTHETIC: MarkerCategory.FUNCTION,
-    MarkerType.TEMPLATE: MarkerCategory.FUNCTION,
-    MarkerType.LIBRARY: MarkerCategory.FUNCTION,
-    MarkerType.VTABLE: MarkerCategory.VTABLE,
-    MarkerType.GLOBAL: MarkerCategory.VARIABLE,
-    MarkerType.STRING: MarkerCategory.STRING,
-    MarkerType.LINE: MarkerCategory.ADDRESS,
-}
-
-
-def verify_markers(
-    markers: list[DecompMarker],
-) -> tuple[list[ParserAlert], list[tuple[MarkerCategory, list[DecompMarker]]]]:
-    buckets: dict[MarkerCategory, dict[str, DecompMarker]] = {}
-    alerts: list[ParserAlert] = []
-    types: set[MarkerCategory] = set()
-
-    for marker in markers:
-        category = MARKER_CATEGORY_MAP[marker._type]
-        if not types:
-            types.add(category)
-
-        if category not in types:
-            if (types | {category}) == {MarkerCategory.VARIABLE, MarkerCategory.STRING}:
-                types.add(category)
-            else:
-                # AlertCode.INCOMPATIBLE_MARKER
-                continue
-
-        if category in buckets:
-            bucket = buckets[category]
-            if marker.module in bucket:
-                pass
-                # AlertCode.DUPLICATE_MODULE
-        else:
-            buckets[category] = {}
-
-        buckets[category][marker.module] = marker
-
-    marker_groups = [
-        (category, list(modules.values())) for category, modules in buckets.items()
-    ]
-
-    return (alerts, marker_groups)
-
-
-def new_match_marker(pos: int, groups: str) -> DecompMarker:
+def new_match_marker(pos: int, groups: tuple[str, ...]) -> DecompMarker:
     marker_type, module, offset_str, extra = groups
+
+    try:
+        enum_type = MarkerType[marker_type.upper()]
+    except KeyError:
+        enum_type = MarkerType.UNKNOWN
 
     return DecompMarker(
         pos=pos,
-        marker_type=marker_type,
-        module=module,
+        type=enum_type,
+        # Convert to upper here. A lot of other analysis depends on this name
+        # being consistent and predictable. If the name is _not_ capitalized
+        # we will emit a syntax error.
+        module=module.upper(),
         offset=int(offset_str, 16),
         extra=extra,
     )

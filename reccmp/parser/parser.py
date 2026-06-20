@@ -135,18 +135,16 @@ class DecompParser:
             if module is None or s.module == module:
                 yield s
 
-    def _syntax_warning(self, code):
+    def _alert(self, code: AlertCode, pos: int = -1, text: str = ""):
+        line_no, _ = get_line_column_pos(self.newlines, pos)
         self.alerts.append(
             ParserAlert(
                 path=self.filename,
-                line_number=self.line_number,
+                line_number=line_no,
                 code=code,
-                line=self.last_line.strip(),
+                line=text,
             )
         )
-
-    def _syntax_error(self, code):
-        self._syntax_warning(code)
 
     def handle_marker(self, marker: DecompMarker):
         category = MARKER_CATEGORY_MAP[marker.type]
@@ -160,7 +158,7 @@ class DecompParser:
             }:
                 self.marker_types.add(category)
             else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
+                self._alert(AlertCode.INCOMPATIBLE_MARKER, marker.pos)
                 return
 
         # Allow duplicate modules with different vtable base classes.
@@ -168,7 +166,7 @@ class DecompParser:
         bucket = self.buckets[category]
         if key in bucket:
             # Do not overwrite
-            self._syntax_error(AlertCode.DUPLICATE_MODULE)
+            self._alert(AlertCode.DUPLICATE_MODULE, marker.pos)
             return
 
         self.buckets[category][key] = marker
@@ -189,7 +187,7 @@ class DecompParser:
                 marker.extra is not None and marker.extra.lower() == "symbol"
             )
             if name_is_symbol and not lookup_by_name:
-                self._syntax_warning(AlertCode.SYMBOL_OPTION_IGNORED)
+                self._alert(AlertCode.SYMBOL_OPTION_IGNORED, marker.pos)
                 name_is_symbol = False
 
             is_folded = marker.extra is not None and marker.extra.lower() == "folded"
@@ -281,15 +279,16 @@ class DecompParser:
                 )
             )
 
-    def finish_line(self, markers: list[DecompMarker]):
+    def finish_line(self, markers: list[DecompMarker], pos: int):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
         for marker in markers:
             self._symbols.append(
                 ParserLineSymbol(
                     type=marker.type,
-                    line_number=self.line_number,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
-                    name=f"{self.filename.name}:{self.line_number}",
+                    name=f"{self.filename.name}:{line_number}",
                     filename=self.filename,
                 )
             )
@@ -302,12 +301,11 @@ class DecompParser:
     ):
         finish = find_next_token_type(tokens, start, {TokenType.CODE})
         if finish is None:
-            self._syntax_error(AlertCode.UNEXPECTED_END_OF_FILE)
+            self._alert(AlertCode.UNEXPECTED_END_OF_FILE, start)
             return
 
         pos, _, __ = tokens[finish]
-        self.line_number, _ = get_line_column_pos(self.newlines, pos)
-        self.finish_line(markers)
+        self.finish_line(markers, pos)
 
     def code_vtable(
         self,
@@ -323,7 +321,7 @@ class DecompParser:
         )
         if finish is None:
             # Ran to end without finding it
-            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
             return
 
         for i in range(finish, start, -1):
@@ -336,7 +334,7 @@ class DecompParser:
         if name:
             self.finish_vtable(markers, name)
         else:
-            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
 
     def code_function(
         self,
@@ -350,13 +348,13 @@ class DecompParser:
         )
         if finish is None:
             # Ran to end without finding it
-            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
             return
 
         func_start, _, token = tokens[finish]
         if token == TokenType.SEMICOLON:
             # TODO: New error. This is not the function declaration.
-            self._syntax_error(AlertCode.MISSED_END_OF_FUNCTION)
+            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
             return
 
         # Now find the scope that matches this function.
@@ -412,18 +410,16 @@ class DecompParser:
         if string_obj:
             self.finish_string(markers, string_obj.text, string_obj.is_widechar)
         else:
-            self._syntax_error(AlertCode.NO_SUITABLE_NAME)
+            self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
     def read_comment_block(self, text: str, tokens: list[CodeToken]):
         for start, stop, token in tokens:
-            excerpt = text[start:stop]
-            line_no, _ = get_line_column_pos(self.newlines, start)
-            self.line_number = line_no
-
             if start in self.found_markers:
                 marker = new_match_marker(start, self.found_markers[start])
                 self.handle_marker(marker)
             elif self.marker_types:
+                excerpt = text[start:stop]
+
                 for category, bucket in self.buckets.items():
                     if not bucket:
                         continue
@@ -435,7 +431,7 @@ class DecompParser:
                         if variable_name:
                             self.finish_variable(markers, variable_name)
                         else:
-                            self._syntax_error(AlertCode.NO_SUITABLE_NAME)
+                            self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
                         bucket.clear()
                         self.marker_types.discard(category)
@@ -524,7 +520,7 @@ class DecompParser:
 
     def finish(self):
         # if self.state != ReaderState.SEARCH:
-        #    self._syntax_warning(AlertCode.UNEXPECTED_END_OF_FILE)
+        #    self._alert(AlertCode.UNEXPECTED_END_OF_FILE)
         #
         # self.state = ReaderState.DONE
         pass

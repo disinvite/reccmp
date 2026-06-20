@@ -4,20 +4,6 @@ import string
 import enum
 from typing import Iterator
 
-# TODO: L-string L-char.
-r_charsOfImport = re.compile(
-    r"""
-\\?\n|
-\#\s*[a-z]+(?=\s)|
-\\?[\\\"']|
-[{}=;]|
-//|
-/\*|
-\*/
-""",
-    flags=re.X,
-)
-
 
 class TokenType(enum.IntEnum):
     CURLY_OPEN = enum.auto()

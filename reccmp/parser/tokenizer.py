@@ -24,11 +24,12 @@ class TokenType(enum.IntEnum):
 r_newSplitter = re.compile(
     r"""
 //[^\n]*|
-/\*.*\*/|
+/\*.*?\*/|
 L?\"(?:[^\"\n\\]|\\.)*[\"\n]|
 L?\'(?:[^'\n\\]|\\.)*['\n]|
 \#\s*(\w+)(?:\\\n|[^\n])*|
-[{}=;]
+[{}=;]|
+\s*\n\s*
 """,
     flags=re.X | re.DOTALL,
 )
@@ -47,6 +48,10 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
     for match in r_newSplitter.finditer(text):
         pos, stop = match.span()
         first = text[pos]
+
+        if first in {"\n", "\t", " "}:
+            start = stop
+            continue
 
         if first == "{":
             token_type = TokenType.CURLY_OPEN
@@ -126,12 +131,8 @@ def get_token_groups(text: str, tokens: list[CodeToken]) -> Iterator[tuple[int, 
     for i, (start, stop, token) in enumerate(tokens):
         if token == TokenType.LINE_COMMENT:
             ids.append(i)
-            continue
 
-        if token == TokenType.CODE and not text[start:stop].strip():
-            continue
-
-        if ids:
+        elif ids:
             yield tuple(ids)
             ids.clear()
 

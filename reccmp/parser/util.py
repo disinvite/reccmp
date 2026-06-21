@@ -144,11 +144,17 @@ def get_string_contents(line: str) -> ParserCodeString | None:
     python's ast.literal_eval. I'm sure there are many pitfalls to doing
     it this way, but hopefully the regex will ensure reasonably sane input."""
 
+    # Remove line continuation marks. These are not newlines.
+    line = line.replace("\\\n", "")
+
     try:
-        if (match := doubleQuoteRegex.search(line)) is not None:
-            is_widechar = match.group(1) is not None
-            text = literal_eval(match.group(2))
-            return ParserCodeString(text=text, is_widechar=is_widechar)
+        is_widechar = line[0] == "L"
+        if is_widechar:
+            text = literal_eval(line[1:])
+        else:
+            text = literal_eval(line)
+
+        return ParserCodeString(text=text, is_widechar=is_widechar)
     # pylint: disable=broad-exception-caught
     # No way to predict what kind of exception could occur.
     except Exception:

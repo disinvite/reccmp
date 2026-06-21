@@ -32,7 +32,6 @@ from .tokenizer import (
     get_scopes_from_tokens,
     scope_detect_churn,
     tokenize_code_file,
-    find_next_token_type,
     TokenType,
 )
 
@@ -67,10 +66,6 @@ class DecompParser:
         self._symbols: list[ParserSymbol] = []
         self.alerts: list[ParserAlert] = []
 
-        self.line_number: int = 0
-
-        self.last_line: str = ""
-
         self.found_markers: dict[int, tuple[str, ...]] = {}
 
         self.buckets: dict[
@@ -91,10 +86,6 @@ class DecompParser:
     def reset_and_set_filename(self, filename: PurePath):
         self._symbols = []
         self.alerts = []
-
-        self.line_number = 0
-
-        self.last_line = ""
 
         self.found_markers.clear()
 
@@ -199,7 +190,7 @@ class DecompParser:
             self._symbols.append(
                 ParserFunction(
                     type=marker.type,
-                    line_number=start_line - 1,
+                    line_number=start_line,
                     module=marker.module,
                     offset=marker.offset,
                     name=self.function_sig,
@@ -211,12 +202,15 @@ class DecompParser:
                 )
             )
 
-    def finish_string(self, markers: list[DecompMarker], text: str, is_widechar: bool):
+    def finish_string(
+        self, markers: list[DecompMarker], text: str, is_widechar: bool, pos: int
+    ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
         for marker in markers:
             self._symbols.append(
                 ParserString(
                     type=marker.type,
-                    line_number=self.line_number,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
                     name=text,
@@ -229,7 +223,9 @@ class DecompParser:
         self,
         markers: list[DecompMarker],
         variable_name: str,
+        pos: int,
     ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
         for marker in markers:
             names = self.scopes_for_markers[marker.pos]
             qualified_name = "::".join([*names, variable_name])
@@ -248,7 +244,7 @@ class DecompParser:
             self._symbols.append(
                 ParserVariable(
                     type=marker.type,
-                    line_number=self.line_number,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
                     name=qualified_name,
@@ -262,14 +258,16 @@ class DecompParser:
         self,
         markers: list[DecompMarker],
         class_name: str,
+        pos: int,
     ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
         for marker in markers:
             names = self.scopes_for_markers[marker.pos]
             qualified_name = "::".join([*names, class_name])
             self._symbols.append(
                 ParserVtable(
                     type=marker.type,
-                    line_number=self.line_number,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
                     name=qualified_name,
@@ -313,6 +311,7 @@ class DecompParser:
         markers: list[DecompMarker],
     ):
         vtable_class = None
+        vtable_pos = 0
 
         for start, stop, token in candidates:
             if token == TokenType.LINE_COMMENT:
@@ -320,7 +319,7 @@ class DecompParser:
                 vtable_class = get_class_name(excerpt)
                 if vtable_class is not None:
                     # Allow continuation here for `// SIZE comments`
-                    self.finish_vtable(markers, vtable_class)
+                    self.finish_vtable(markers, vtable_class, start)
                     return
 
             elif token == TokenType.CURLY_OPEN:
@@ -329,6 +328,7 @@ class DecompParser:
             elif token == TokenType.CODE:
                 excerpt = text[start:stop]
                 vtable_class = get_class_name(excerpt.strip())  # TODO
+                vtable_pos = start
                 break
 
             elif token == TokenType.SEMICOLON:
@@ -336,7 +336,7 @@ class DecompParser:
                 return
 
         if vtable_class:
-            self.finish_vtable(markers, vtable_class)
+            self.finish_vtable(markers, vtable_class, vtable_pos)
         else:
             start = candidates[0][0]
             self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
@@ -348,11 +348,13 @@ class DecompParser:
         markers: list[DecompMarker],
     ):
         found_sig = False
+        sig_pos = 0
 
         for start, stop, token in candidates:
             if token == TokenType.CODE:
                 # TODO: Detect function signature. Discard if we detect `if (x)`
                 found_sig = True
+                sig_pos = start
 
             if token == TokenType.LINE_COMMENT and not found_sig:
                 # Allow comments between signature and curly bracket.
@@ -370,6 +372,10 @@ class DecompParser:
                 return
 
             if token == TokenType.CURLY_OPEN:
+                if not found_sig:
+                    # TODO: alert
+                    return
+
                 try:
                     __, func_end = next(
                         enclosure
@@ -380,7 +386,7 @@ class DecompParser:
                     breakpoint()  # TODO (obviously)
                     raise ex
 
-                self.finish_function(markers, start, func_end)
+                self.finish_function(markers, sig_pos, func_end)
                 return
 
         # Ran to end without finding it
@@ -400,7 +406,7 @@ class DecompParser:
                 excerpt = text[start:stop]
                 variable_name = get_variable_name(excerpt)
                 if variable_name:
-                    self.finish_variable(markers, variable_name)
+                    self.finish_variable(markers, variable_name, start)
                 else:
                     self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
@@ -410,7 +416,7 @@ class DecompParser:
                 excerpt = text[start:stop]
                 variable_name = get_synthetic_name(excerpt)
                 if variable_name:
-                    self.finish_variable(markers, variable_name)
+                    self.finish_variable(markers, variable_name, start)
                 else:
                     self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
@@ -429,7 +435,9 @@ class DecompParser:
                 string_obj = get_string_contents(excerpt)
 
                 if string_obj:
-                    self.finish_string(markers, string_obj.text, string_obj.is_widechar)
+                    self.finish_string(
+                        markers, string_obj.text, string_obj.is_widechar, start
+                    )
 
                 else:
                     self._alert(AlertCode.NO_SUITABLE_NAME, start)

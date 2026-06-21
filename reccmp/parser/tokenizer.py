@@ -18,6 +18,7 @@ class TokenType(enum.IntEnum):
     STRING = enum.auto()
     CHAR = enum.auto()
     CODE = enum.auto()
+    WHITESPACE = enum.auto()
 
 
 r_newSplitter = re.compile(
@@ -51,10 +52,8 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
         first = text[pos]
 
         if first in {"\n", "\t", " "}:
-            start = stop
-            continue
-
-        if first == "{":
+            token_type = TokenType.WHITESPACE
+        elif first == "{":
             token_type = TokenType.CURLY_OPEN
         elif first == "}":
             token_type = TokenType.CURLY_CLOSE
@@ -92,7 +91,9 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
         if start < pos:
             tokens.append((start, pos, TokenType.CODE))
 
-        tokens.append((pos, stop, token_type))
+        if token_type != TokenType.WHITESPACE:
+            tokens.append((pos, stop, token_type))
+
         start = stop
 
     if start < len(text):

@@ -347,9 +347,16 @@ class DecompParser:
         candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        # TODO: Detect function signature. Discard if we detect `if (x)`
+        found_sig = False
+
         for start, stop, token in candidates:
-            if token == TokenType.LINE_COMMENT:
+            if token == TokenType.CODE:
+                # TODO: Detect function signature. Discard if we detect `if (x)`
+                found_sig = True
+
+            if token == TokenType.LINE_COMMENT and not found_sig:
+                # Allow comments between signature and curly bracket.
+                # e.g. `vtable+0x08`
                 excerpt = text[start:stop]
                 synthetic_name = get_synthetic_name(excerpt)
                 assert synthetic_name is not None
@@ -418,7 +425,7 @@ class DecompParser:
         for start, stop, token in candidates:
             # TODO: read from #define
             if token == TokenType.STRING:
-                excerpt = text[start : stop]
+                excerpt = text[start:stop]
                 string_obj = get_string_contents(excerpt)
 
                 if string_obj:

@@ -2,7 +2,6 @@ import bisect
 import re
 import string
 import enum
-from typing import Iterator
 
 
 class TokenType(enum.IntEnum):
@@ -41,7 +40,9 @@ r_realClassStart = re.compile(r"(?:class|struct|namespace) (?P<name>\w+)[^{};=<>
 CodeToken = tuple[int, int, TokenType]
 
 
-def tokenize_code_file(text: str) -> Iterator[CodeToken]:
+def tokenize_code_file(text: str) -> list[CodeToken]:
+    tokens = []
+
     # Start of code token between delimiters.
     start = 0
 
@@ -89,13 +90,15 @@ def tokenize_code_file(text: str) -> Iterator[CodeToken]:
                 )
 
         if start < pos:
-            yield (start, pos, TokenType.CODE)
+            tokens.append((start, pos, TokenType.CODE))
 
-        yield (pos, stop, token_type)
+        tokens.append((pos, stop, token_type))
         start = stop
 
     if start < len(text):
-        yield (start, len(text), TokenType.CODE)
+        tokens.append((start, len(text), TokenType.CODE))
+
+    return tokens
 
 
 def get_newlines_from_text(text: str) -> list[int]:
@@ -125,9 +128,10 @@ def find_next_token_type(
 
 def get_token_groups(
     text: str, tokens: list[CodeToken], starts: set[int]
-) -> Iterator[tuple[int, ...]]:
+) -> list[tuple[int, ...]]:
     """Groups of whitespace or line comments.
     Returned ranges are ids of tokens."""
+    groups = []
     ids: list[int] = []
 
     for i, (start, stop, token) in enumerate(tokens):
@@ -135,11 +139,13 @@ def get_token_groups(
             ids.append(i)
 
         elif ids:
-            yield tuple(ids)
+            groups.append(tuple(ids))
             ids.clear()
 
     if ids:
-        yield tuple(ids)
+        groups.append(tuple(ids))
+
+    return groups
 
 
 def get_scopes_from_tokens(

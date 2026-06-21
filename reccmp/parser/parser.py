@@ -460,7 +460,7 @@ class DecompParser:
         if not self.found_markers:
             return
 
-        tokens = list(tokenize_code_file(text))
+        tokens = tokenize_code_file(text)
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = scope_detect_churn(tokens)
 
@@ -470,7 +470,7 @@ class DecompParser:
         for pos in self.found_markers.keys():
             self.scopes_for_markers[pos] = [name for span, name in xxx if pos in span]
 
-        group_ranges = list(get_token_groups(text, tokens, set(self.found_markers.keys())))
+        group_ranges = get_token_groups(text, tokens, set(self.found_markers.keys()))
         # Collect consecutive comments that are markers.
         # For each one: satisfy what is missing.
 

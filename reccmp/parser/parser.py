@@ -200,7 +200,7 @@ class DecompParser:
             self._symbols.append(
                 ParserFunction(
                     type=marker.type,
-                    line_number=start_line,
+                    line_number=start_line - 1,
                     module=marker.module,
                     offset=marker.offset,
                     name=self.function_sig,
@@ -285,7 +285,7 @@ class DecompParser:
             self._symbols.append(
                 ParserLineSymbol(
                     type=marker.type,
-                    line_number=line_number,
+                    line_number=line_number - 1,
                     module=marker.module,
                     offset=marker.offset,
                     name=f"{self.filename.name}:{line_number}",

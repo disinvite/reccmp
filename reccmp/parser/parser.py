@@ -30,7 +30,6 @@ from .tokenizer import (
     get_line_column_pos,
     get_newlines_from_text,
     get_scopes_from_tokens,
-    get_token_groups,
     scope_detect_churn,
     tokenize_code_file,
     find_next_token_type,
@@ -296,162 +295,165 @@ class DecompParser:
     def code_line(
         self,
         tokens: list[CodeToken],
-        start: int,
+        candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        finish = find_next_token_type(tokens, start, {TokenType.CODE})
-        if finish is None:
-            self._alert(AlertCode.UNEXPECTED_END_OF_FILE, start)
-            return
+        for start, stop, token in candidates:
+            if token == TokenType.CODE:
+                self.finish_line(markers, start)
+                return
 
-        pos, _, __ = tokens[finish]
-        self.finish_line(markers, pos)
+        start = candidates[0][0]
+        self._alert(AlertCode.UNEXPECTED_END_OF_FILE, start)
 
     def code_vtable(
         self,
         text: str,
-        tokens: list[CodeToken],
-        start: int,
+        candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        name = None
+        vtable_class = None
 
-        finish = find_next_token_type(
-            tokens, start, {TokenType.CURLY_OPEN, TokenType.SEMICOLON}
-        )
-        if finish is None:
-            # Ran to end without finding it
-            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
-            return
-
-        for i in range(finish, start, -1):
-            start, stop, token = tokens[i]
-            if token == TokenType.CODE:
+        for start, stop, token in candidates:
+            if token == TokenType.LINE_COMMENT:
                 excerpt = text[start:stop]
-                name = get_class_name(excerpt.strip())  # TODO
+                vtable_class = get_class_name(excerpt)
+                if vtable_class is not None:
+                    # Allow continuation here for `// SIZE comments`
+                    self.finish_vtable(markers, vtable_class)
+                    return
+
+            elif token == TokenType.CURLY_OPEN:
                 break
 
-        if name:
-            self.finish_vtable(markers, name)
+            elif token == TokenType.CODE:
+                excerpt = text[start:stop]
+                vtable_class = get_class_name(excerpt.strip())  # TODO
+                break
+
+            elif token == TokenType.SEMICOLON:
+                self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+                return
+
+        if vtable_class:
+            self.finish_vtable(markers, vtable_class)
         else:
+            start = candidates[0][0]
             self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
 
     def code_function(
         self,
         text: str,
-        tokens: list[CodeToken],
-        start: int,
+        candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        finish = find_next_token_type(
-            tokens, start, {TokenType.CURLY_OPEN, TokenType.SEMICOLON}
-        )
-        if finish is None:
-            # Ran to end without finding it
-            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
-            return
+        # TODO: Detect function signature. Discard if we detect `if (x)`
+        for start, stop, token in candidates:
+            if token == TokenType.LINE_COMMENT:
+                excerpt = text[start:stop]
+                synthetic_name = get_synthetic_name(excerpt)
+                assert synthetic_name is not None
+                self.function_sig = synthetic_name
+                self.finish_function(markers, start, stop, lookup_by_name=True)
+                return
 
-        func_start, _, token = tokens[finish]
-        if token == TokenType.SEMICOLON:
-            # TODO: New error. This is not the function declaration.
-            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
-            return
+            if token == TokenType.SEMICOLON:
+                # TODO: New error. This is not the function declaration.
+                self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+                return
 
-        # Now find the scope that matches this function.
-        try:
-            __, func_end = next(
-                enclosure for enclosure in self.enclosures if enclosure[0] == func_start
-            )
-        except StopIteration as ex:
-            breakpoint()  # TODO (obviously)
-            raise ex
+            if token == TokenType.CURLY_OPEN:
+                try:
+                    __, func_end = next(
+                        enclosure
+                        for enclosure in self.enclosures
+                        if enclosure[0] == start
+                    )
+                except StopIteration as ex:
+                    breakpoint()  # TODO (obviously)
+                    raise ex
 
-        self.finish_function(markers, func_start, func_end)
+                self.finish_function(markers, start, func_end)
+                return
+
+        # Ran to end without finding it
+        start = candidates[0][0]
+        self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
 
     def code_variable(
         self,
         text: str,
-        tokens: list[CodeToken],
-        start: int,
+        candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
         variable_name = None
-        string_text = None
 
-        for t_start, t_stop, token in tokens[start:]:
+        for start, stop, token in candidates:
             if token == TokenType.CODE:
-                excerpt = text[t_start:t_stop]
+                excerpt = text[start:stop]
                 variable_name = get_variable_name(excerpt)
-                break
+                if variable_name:
+                    self.finish_variable(markers, variable_name)
+                else:
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
-        # TODO: static vars.
-        if variable_name:
-            self.finish_variable(markers, variable_name)
+                return
+
+            elif token == TokenType.LINE_COMMENT:
+                excerpt = text[start:stop]
+                variable_name = get_synthetic_name(excerpt)
+                if variable_name:
+                    self.finish_variable(markers, variable_name)
+                else:
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
+
+                return
 
     def code_string(
         self,
         text: str,
-        tokens: list[CodeToken],
-        start: int,
+        candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        string_obj = None
-
-        # TODO: read from #define
-        finish = find_next_token_type(
-            tokens, start, {TokenType.STRING, TokenType.SEMICOLON}
-        )
-        if finish:
-            t_start, t_stop, token = tokens[finish]
+        for start, stop, token in candidates:
+            # TODO: read from #define
             if token == TokenType.STRING:
-                excerpt = text[t_start:t_stop]
+                excerpt = text[start : stop]
                 string_obj = get_string_contents(excerpt)
 
-        if string_obj:
-            self.finish_string(markers, string_obj.text, string_obj.is_widechar)
-        else:
-            self._alert(AlertCode.NO_SUITABLE_NAME, start)
+                if string_obj:
+                    self.finish_string(markers, string_obj.text, string_obj.is_widechar)
 
-    def read_comment_block(self, text: str, tokens: list[CodeToken]):
-        for start, stop, token in tokens:
-            if start in self.found_markers:
-                marker = new_match_marker(start, self.found_markers[start])
-                self.handle_marker(marker)
-            elif self.marker_types:
-                excerpt = text[start:stop]
+                else:
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
-                for category, bucket in self.buckets.items():
-                    if not bucket:
-                        continue
+            elif token == TokenType.SEMICOLON:
+                break
 
-                    markers = list(bucket.values())
+    def get_marker_sets(
+        self, tokens: list[CodeToken]
+    ) -> list[tuple[list[CodeToken], list[CodeToken]]]:
+        markers: list[CodeToken] = []
+        candidates: list[CodeToken] = []
+        output = []
 
-                    if category == MarkerCategory.VARIABLE:
-                        variable_name = get_synthetic_name(excerpt)
-                        if variable_name:
-                            self.finish_variable(markers, variable_name)
-                        else:
-                            self._alert(AlertCode.NO_SUITABLE_NAME, start)
+        for x in tokens:
+            if x[0] in self.found_markers:
+                # If we have begun reading candidates, this is the end of this group.
+                if candidates:
+                    output.append((list(markers), list(candidates)))
+                    markers.clear()
+                    candidates.clear()
 
-                        bucket.clear()
-                        self.marker_types.discard(category)
+                markers.append(x)
+            elif markers:
+                # Only add if we have read any markers.
+                candidates.append(x)
 
-                    elif category == MarkerCategory.VTABLE:
-                        vtable_class = get_class_name(excerpt)
-                        if vtable_class is not None:
-                            self.finish_vtable(markers, vtable_class)
-                            bucket.clear()
-                            self.marker_types.discard(category)
+        if markers:
+            output.append((list(markers), list(candidates)))
 
-                    elif category == MarkerCategory.FUNCTION:
-                        synthetic_name = get_synthetic_name(excerpt)
-                        assert synthetic_name is not None
-                        self.function_sig = synthetic_name
-                        self.finish_function(markers, start, stop, lookup_by_name=True)
-                        bucket.clear()
-                        self.marker_types.discard(category)
-
-                    # TODO: errors for other categories
+        return output
 
     def read(self, text: str):
         self.found_markers = {
@@ -470,22 +472,14 @@ class DecompParser:
         for pos in self.found_markers.keys():
             self.scopes_for_markers[pos] = [name for span, name in xxx if pos in span]
 
-        group_ranges = get_token_groups(text, tokens, set(self.found_markers.keys()))
-        # Collect consecutive comments that are markers.
-        # For each one: satisfy what is missing.
-
-        for group_set in group_ranges:
-            token_group = [tokens[i] for i in group_set]
-            self.read_comment_block(text, token_group)
-
-            # Error or completed
-            if not self.marker_types:
+        for marker_tokens, candidates in self.get_marker_sets(tokens):
+            if not candidates:
+                # unexpected eof?
                 continue
 
-            # index
-            group_end = group_set[-1]
-
-            # We have unfinished markers.
+            for x in marker_tokens:
+                marker = new_match_marker(x[0], self.found_markers[x[0]])
+                self.handle_marker(marker)
 
             for category, bucket in self.buckets.items():
                 if not bucket:
@@ -494,29 +488,22 @@ class DecompParser:
                 markers = list(bucket.values())
 
                 if category == MarkerCategory.FUNCTION:
-                    self.code_function(text, tokens, group_end, markers)
+                    self.code_function(text, candidates, markers)
+
                 elif category == MarkerCategory.VTABLE:
-                    self.code_vtable(text, tokens, group_end, markers)
+                    self.code_vtable(text, candidates, markers)
+
                 elif category == MarkerCategory.VARIABLE:
-                    self.code_variable(text, tokens, group_end, markers)
+                    self.code_variable(text, candidates, markers)
+
                 elif category == MarkerCategory.STRING:
-                    self.code_string(text, tokens, group_end, markers)
+                    self.code_string(text, candidates, markers)
+
                 elif category == MarkerCategory.ADDRESS:
-                    self.code_line(tokens, group_end, markers)
+                    self.code_line(tokens, candidates, markers)
 
                 bucket.clear()
                 self.marker_types.discard(category)
-
-            self.marker_types.clear()
-
-        # n.b. CODE token blocks may have whitespace only
-        # FUNCTION: comment (name) OR identifier between here and next scope, whichever is first.
-        # .. store function and addrs for each target. to be used with STATICS.
-        # GLOBAL: comment (name) OR identifier
-        # .. if inside function, look it up
-        # STRING: next string token.
-        # VTABLE: identifier before next scope.
-        # LINE: Just record it.
 
     def finish(self):
         # if self.state != ReaderState.SEARCH:

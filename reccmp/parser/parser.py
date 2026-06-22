@@ -276,33 +276,19 @@ class DecompParser:
                 )
             )
 
-    def finish_line(self, markers: list[DecompMarker], pos: int):
-        line_number, _ = get_line_column_pos(self.newlines, pos)
+    def finish_line(self, markers: list[DecompMarker]):
         for marker in markers:
+            line_number, _ = get_line_column_pos(self.newlines, marker.pos)
             self._symbols.append(
                 ParserLineSymbol(
                     type=marker.type,
-                    line_number=line_number - 1,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
                     name=f"{self.filename.name}:{line_number}",
                     filename=self.filename,
                 )
             )
-
-    def code_line(
-        self,
-        tokens: list[CodeToken],
-        candidates: list[CodeToken],
-        markers: list[DecompMarker],
-    ):
-        for start, stop, token in candidates:
-            if token == TokenType.CODE:
-                self.finish_line(markers, start)
-                return
-
-        start = candidates[0][0]
-        self._alert(AlertCode.UNEXPECTED_END_OF_FILE, start)
 
     def code_vtable(
         self,
@@ -515,7 +501,7 @@ class DecompParser:
                     self.code_string(text, candidates, markers)
 
                 elif category == MarkerCategory.ADDRESS:
-                    self.code_line(tokens, candidates, markers)
+                    self.finish_line(markers)
 
                 bucket.clear()
                 self.marker_types.discard(category)

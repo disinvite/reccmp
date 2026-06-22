@@ -28,11 +28,12 @@ r_newSplitter = re.compile(
 L?\"(?:[^\"\n\\]|\\.)*[\"\n]|
 L?\'(?:[^'\n\\]|\\.)*['\n]|
 \#\s*(\w+)(?:\\\n|[^\n])*|
-[{}=;]|
-\s*\n\s*
+[{}=;]
 """,
     flags=re.X | re.DOTALL,
 )
+
+r_strip = re.compile(r"\S.+\S", flags=re.DOTALL)
 
 
 r_realClassStart = re.compile(r"(?:class|struct|namespace) (?P<name>\w+)[^{};=<>]+")
@@ -50,13 +51,6 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
     for match in r_newSplitter.finditer(text):
         pos, stop = match.span()
         first = text[pos]
-
-        if first in {"\n", "\t", " "}:
-            if start < pos:
-                tokens.append((start, pos, TokenType.CODE))
-
-            start = stop
-            continue
 
         if first == "{":
             token_type = TokenType.CURLY_OPEN
@@ -94,7 +88,11 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
                 )
 
         if start < pos:
-            tokens.append((start, pos, TokenType.CODE))
+            # Skip if this is entirely whitespace
+            strip_match = r_strip.search(text, start, pos)
+            if strip_match:
+                s_start, s_stop = strip_match.span()
+                tokens.append((s_start, s_stop, TokenType.CODE))
 
         tokens.append((pos, stop, token_type))
         start = stop

@@ -52,8 +52,13 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
         first = text[pos]
 
         if first in {"\n", "\t", " "}:
-            token_type = TokenType.WHITESPACE
-        elif first == "{":
+            if start < pos:
+                tokens.append((start, pos, TokenType.CODE))
+
+            start = stop
+            continue
+
+        if first == "{":
             token_type = TokenType.CURLY_OPEN
         elif first == "}":
             token_type = TokenType.CURLY_CLOSE
@@ -91,9 +96,7 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
         if start < pos:
             tokens.append((start, pos, TokenType.CODE))
 
-        if token_type != TokenType.WHITESPACE:
-            tokens.append((pos, stop, token_type))
-
+        tokens.append((pos, stop, token_type))
         start = stop
 
     if start < len(text):

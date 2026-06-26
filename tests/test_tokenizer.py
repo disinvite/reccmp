@@ -1,75 +1,74 @@
 from itertools import pairwise
 from textwrap import dedent
 from typing import Iterable
-from reccmp.parser.tokenizer import tokenize_code_file
+from reccmp.parser.tokenizer import CodeToken, TokenType, tokenize_code_file
 
 
-def tokens_only(tokens: Iterable[CodeToken]) -> list[str]:
-    return [token for _, token in tokens]
+def tokens_only(tokens: Iterable[CodeToken]) -> list[TokenType]:
+    return [token for _, __, token in tokens]
 
 
 def test_strings():
     """Make sure we correctly parse escaped characters."""
-    assert list(tokenize_code_file('"test"')) == [(range(0, 6), "STRING")]
-    assert list(tokenize_code_file('"\\""')) == [(range(0, 4), "STRING")]
-    assert list(tokenize_code_file('"\\""')) == [(range(0, 4), "STRING")]
-    assert list(tokenize_code_file('"\\\\"')) == [(range(0, 4), "STRING")]
-    assert list(tokenize_code_file('"\'"')) == [(range(0, 3), "STRING")]
+    assert list(tokenize_code_file('"test"')) == [(0, 6, TokenType.STRING)]
+    assert list(tokenize_code_file('"\\""')) == [(0, 4, TokenType.STRING)]
+    assert list(tokenize_code_file('"\\""')) == [(0, 4, TokenType.STRING)]
+    assert list(tokenize_code_file('"\\\\"')) == [(0, 4, TokenType.STRING)]
+    assert list(tokenize_code_file('"\'"')) == [(0, 3, TokenType.STRING)]
 
 
 def test_chars():
     """Make sure we correctly parse escaped characters.
     Note: we don't care if the char is more than 1 character."""
-    assert list(tokenize_code_file("'x'")) == [(range(0, 3), "CHAR")]
-    assert list(tokenize_code_file("'\\''")) == [(range(0, 4), "CHAR")]
-    assert list(tokenize_code_file("'\\''")) == [(range(0, 4), "CHAR")]
-    assert list(tokenize_code_file("'\\'")) == [(range(0, 3), "CHAR")]
-    assert list(tokenize_code_file("'\"'")) == [(range(0, 3), "CHAR")]
+    assert list(tokenize_code_file("'x'")) == [(0, 3, TokenType.CHAR)]
+    assert list(tokenize_code_file("'\\''")) == [(0, 4, TokenType.CHAR)]
+    assert list(tokenize_code_file("'\\''")) == [(0, 4, TokenType.CHAR)]
+    assert list(tokenize_code_file("'\\\\'")) == [(0, 4, TokenType.CHAR)]
+    assert list(tokenize_code_file("'\"'")) == [(0, 3, TokenType.CHAR)]
 
 
 def test_eof():
-    """Should return the last token even if there is no blank line.
-    For paired delimiters like strings and block comments, just finish the token."""
-    assert list(tokenize_code_file('"test')) == [(range(0, 5), "STRING")]
-    assert list(tokenize_code_file("'x")) == [(range(0, 2), "CHAR")]
-    assert list(tokenize_code_file("// test")) == [(range(0, 7), "LINE COMMENT")]
-    assert list(tokenize_code_file("/* test")) == [(range(0, 7), "BLOCK COMMENT")]
+    """Unfinished tokens are emitted as CODE."""
+    assert list(tokenize_code_file('"test')) == [(0, 5, TokenType.CODE)]
+    assert list(tokenize_code_file("'x")) == [(0, 2, TokenType.CODE)]
+    assert list(tokenize_code_file("/* test")) == [(0, 7, TokenType.CODE)]
+
+    # This one can be finished
+    assert list(tokenize_code_file("// test")) == [(0, 7, TokenType.LINE_COMMENT)]
 
 
 def test_string_continuation():
-    # Newline not part of broken string
+    # Newline is part of broken string.
+    # A second string token is not started.
     assert list(tokenize_code_file('"te\nst"')) == [
-        (range(0, 3), "STRING"),
-        (range(3, 6), "CODE"),
-        (range(6, 7), "STRING"),
+        (0, 4, TokenType.STRING),
+        (4, 7, TokenType.CODE),
     ]
-    assert list(tokenize_code_file('"te\\\nst"')) == [(range(0, 8), "STRING")]
+    assert list(tokenize_code_file("'\nx'")) == [
+        (0, 2, TokenType.CHAR),
+        (2, 4, TokenType.CODE),
+    ]
+    assert list(tokenize_code_file('"te\\\nst"')) == [(0, 8, TokenType.STRING)]
 
 
 def test_digit_separator():
     """Should not try to start a new CHAR token if the single quote is between two valid digits."""
-    assert tokens_only(tokenize_code_file("int x = 1'000'000")) == ["CODE", "=", "CODE"]
-
-
-def test_hide_some_tokens_for_ppc():
-    """The main concern is to hide curly brackets inside a #define line."""
-    assert list(tokenize_code_file("#define TEST {")) == [
-        (range(0, 7), "#define"),
-        (range(7, 14), "CODE"),
+    assert tokens_only(tokenize_code_file("int x = 1'000'000")) == [
+        TokenType.CODE,
+        TokenType.EQUAL,
+        TokenType.CODE,
     ]
 
 
-def test_define_string_visible():
-    """String tokens inside of a #define statement must be emitted."""
-    assert list(tokenize_code_file('#define TEST "Hello"')) == [
-        (range(0, 7), "#define"),
-        (range(7, 13), "CODE"),
-        (range(13, 20), "STRING"),
+def test_hide_all_tokens_for_ppc():
+    """The main concern is to hide curly brackets inside a #define line."""
+    assert list(tokenize_code_file("#define TEST {")) == [
+        (0, 14, TokenType.PPC_OTHER),
     ]
 
 
 def test_ppc_newline():
-    """Tokens should have no gap"""
+    """Tokens should have no gap, except for whitespace."""
     code = dedent("""\
         #ifndef ACT2ACTOR_H
         #define ACT2ACTOR_H
@@ -77,12 +76,14 @@ def test_ppc_newline():
         #include "gogoanimactor.h"
         """)
     tokens = list(tokenize_code_file(code))
-    for (x_range, x_token), (y_range, y_token) in pairwise(tokens):
-        assert x_range.stop == y_range.start, x_token
-        assert x_token != "CODE" or y_token != "CODE", x_range
+    for x, y in pairwise(tokens):
+        x_stop = x[1]
+        y_start = y[0]
+        assert x_stop == y_start or (code[x_stop:y_start].strip() == "")
 
 
 def test_struct_newline():
+    """Tokens should have no gap, except for whitespace."""
     code = dedent("""\
         // SIZE 0x1a8
         class Act2Actor : public LegoAnimActor {
@@ -95,6 +96,7 @@ def test_struct_newline():
             };
         """)
     tokens = list(tokenize_code_file(code))
-    for (x_range, x_token), (y_range, y_token) in pairwise(tokens):
-        assert x_range.stop == y_range.start, x_token
-        assert x_token != "CODE" or y_token != "CODE", x_range
+    for x, y in pairwise(tokens):
+        x_stop = x[1]
+        y_start = y[0]
+        assert x_stop == y_start or (code[x_stop:y_start].strip() == "")

@@ -13,6 +13,7 @@ from .marker import (
     DecompMarker,
     MarkerCategory,
     MarkerType,
+    is_marker_exact,
     new_match_marker,
     newMarkerRegex,
 )
@@ -219,6 +220,14 @@ class DecompParser:
                 )
             )
 
+    def find_function_for_static(self, module: str, pos: int) -> int | None:
+        functions = self.seen_functions.get(module, [])
+        for func_addr, func_span in functions:
+            if pos in func_span:
+                return func_addr
+
+        return None
+
     def finish_variable(
         self,
         markers: list[DecompMarker],
@@ -226,20 +235,27 @@ class DecompParser:
         pos: int,
     ):
         line_number, _ = get_line_column_pos(self.newlines, pos)
+
+        parent_functions = {}
+        for marker in markers:
+            func_addr = self.find_function_for_static(marker.module, marker.pos)
+            if func_addr:
+                parent_functions[marker.module] = func_addr
+
+        # If any are defined
+        is_static = bool(parent_functions)
+
         for marker in markers:
             names = self.scopes_for_markers[marker.pos]
             qualified_name = "::".join([*names, variable_name])
 
-            is_static = False
             parent_function = None
-
-            functions = self.seen_functions.get(marker.module, [])
-            for func_addr, func_span in functions:
-                if marker.pos in func_span:
-                    is_static = True
-                    parent_function = func_addr
-
-                break
+            if is_static:
+                if marker.module in parent_functions:
+                    parent_function = parent_functions[marker.module]
+                else:
+                    self._alert(AlertCode.ORPHANED_STATIC_VARIABLE, marker.pos)
+                    continue
 
             self._symbols.append(
                 ParserVariable(
@@ -353,8 +369,7 @@ class DecompParser:
                 return
 
             if token == TokenType.SEMICOLON:
-                # TODO: New error. This is not the function declaration.
-                self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+                self._alert(AlertCode.NO_IMPLEMENTATION, start)
                 return
 
             if token == TokenType.CURLY_OPEN:
@@ -475,12 +490,18 @@ class DecompParser:
 
         for marker_tokens, candidates in self.get_marker_sets(tokens):
             if not candidates:
-                # unexpected eof?
-                continue
+                self._alert(AlertCode.UNEXPECTED_END_OF_FILE, len(text))
+                continue  # ?
 
             for x in marker_tokens:
                 marker = new_match_marker(x[0], self.found_markers[x[0]])
+                if marker.type == MarkerType.UNKNOWN:
+                    self._alert(AlertCode.BOGUS_MARKER, x[0], text[x[0] : x[1]])
+                    continue
+
                 self.handle_marker(marker)
+                if not is_marker_exact(text, x[0]):
+                    self._alert(AlertCode.BAD_DECOMP_MARKER, x[0], text[x[0] : x[1]])
 
             for category, bucket in self.buckets.items():
                 if not bucket:

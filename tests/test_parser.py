@@ -39,7 +39,10 @@ def test_not_exact_syntax(parser):
 
 def test_invalid_marker(parser):
     """We matched a decomp marker, but it's not one we care about"""
-    parser.read("// BANANA: TEST 0x1234")
+    parser.read("""\
+        // BANANA: TEST 0x1234
+        // Fruit::FliesLikeA
+        """)
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.BOGUS_MARKER
 
@@ -49,6 +52,7 @@ def test_incompatible_marker(parser):
     parser.read("""\
         // FUNCTION: TEST 0x1234
         // GLOBAL: TEST 0x5000
+        void test() {}
         """)
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER

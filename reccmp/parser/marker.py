@@ -37,7 +37,7 @@ newMarkerRegex = re.compile(
 
 
 markerExactRegex = re.compile(
-    r"\s*// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?\n?$"
+    r"// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?"
 )
 
 
@@ -69,5 +69,5 @@ def new_match_marker(pos: int, groups: tuple[str, ...]) -> DecompMarker:
     )
 
 
-def is_marker_exact(line: str) -> bool:
-    return markerExactRegex.match(line) is not None
+def is_marker_exact(text: str, pos: int = 0) -> bool:
+    return markerExactRegex.match(text, pos) is not None

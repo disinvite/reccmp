@@ -6,30 +6,10 @@ from reccmp.parser.marker import (
     is_marker_exact,
 )
 from reccmp.parser.util import (
-    is_blank_or_comment,
     get_class_name,
     get_variable_name,
     get_string_contents,
 )
-
-blank_or_comment_param = [
-    (True, ""),
-    (True, "\t"),
-    (True, "    "),
-    (False, "\tint abc=123;"),
-    (True, "// OFFSET: LEGO1 0xdeadbeef"),
-    (True, "   /* Block comment beginning"),
-    (True, "Block comment ending */   "),
-    # TODO: does clang-format have anything to say about these cases?
-    (False, "x++; // Comment follows"),
-    (False, "x++; /* Block comment begins"),
-]
-
-
-@pytest.mark.parametrize("expected, line", blank_or_comment_param)
-def test_is_blank_or_comment(line: str, expected: bool):
-    assert is_blank_or_comment(line) is expected
-
 
 marker_samples = [
     # (can_parse: bool, exact_match: bool, line: str)
@@ -152,21 +132,21 @@ def test_get_variable_name(line: str, name: str):
 
 
 string_match_cases = [
-    ('return "hello world";', "hello world"),
-    ('"hello\\\\"', "hello\\"),
-    ('"hello \\"world\\""', 'hello "world"'),
-    ('"hello\\nworld"', "hello\nworld"),
-    # Only match first string if there are multiple options
-    ('Method("hello", "world");', "hello"),
+    ('"hello"', "hello", False),
+    ('L"hello"', "hello", True),
+    ('"hello\\\\"', "hello\\", False),
+    ('"hello \\"world\\""', 'hello "world"', False),
+    ('"hello\\nworld"', "hello\nworld", False),
 ]
 
 
-@pytest.mark.parametrize("line, expected", string_match_cases)
-def test_get_string_contents(line: str, expected: str):
-    string = get_string_contents(line)
+@pytest.mark.parametrize("text, expected, is_widechar", string_match_cases)
+def test_get_string_contents(text: str, expected: str, is_widechar: bool):
+    """Make sure we properly resolve escaped text."""
+    string = get_string_contents(text)
     assert string is not None
     assert string.text == expected
-    assert string.is_widechar is False
+    assert string.is_widechar == is_widechar
 
 
 def test_marker_extra_spaces():

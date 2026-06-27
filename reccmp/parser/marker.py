@@ -49,6 +49,14 @@ class DecompMarker(NamedTuple):
     extra: str | None = None
 
 
+def match_marker(text: str) -> DecompMarker | None:
+    match = newMarkerRegex.search(text)
+    if match:
+        return new_match_marker(match.start(), match.groups())
+
+    return None
+
+
 def new_match_marker(pos: int, groups: tuple[str, ...]) -> DecompMarker:
     marker_type, module, offset_str, extra = groups
 

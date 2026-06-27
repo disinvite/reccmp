@@ -79,7 +79,7 @@ class DecompParser:
         self.filename: PurePath = PurePath("")
 
         self.newlines: list[int] = []
-        self.enclosures: list[tuple[int, int]] = []
+        self.enclosures: dict[int, int] = {}
         self.scopes: list[tuple[int, int, str]] = []
         self.scopes_for_markers: dict[int, list[str]] = {}
         self.seen_functions: dict[str, list[tuple[int, range]]] = {}
@@ -162,31 +162,18 @@ class DecompParser:
 
         self.buckets[category][key] = marker
 
-    def finish_function(
+    def finish_name_function(
         self,
         markers: list[DecompMarker],
-        start: int,
-        end: int,
-        *,
-        lookup_by_name: bool = False,
+        pos: int,
     ):
-        start_line, _ = get_line_column_pos(self.newlines, start)
-        end_line, _ = get_line_column_pos(self.newlines, end)
+        # Same line: derived from line comment
+        start_line, _ = get_line_column_pos(self.newlines, pos)
 
         for marker in markers:
-            name_is_symbol = (
-                marker.extra is not None and marker.extra.lower() == "symbol"
-            )
-            if name_is_symbol and not lookup_by_name:
-                self._alert(AlertCode.SYMBOL_OPTION_IGNORED, marker.pos)
-                name_is_symbol = False
-
-            is_folded = marker.extra is not None and marker.extra.lower() == "folded"
-
-            if not lookup_by_name:
-                self.seen_functions.setdefault(marker.module, []).insert(
-                    0, (marker.offset, range(start, end + 1))
-                )
+            extra_str = (marker.extra or "").lower()
+            name_is_symbol = extra_str == "symbol"
+            is_folded = extra_str == "folded"
 
             self._symbols.append(
                 ParserFunction(
@@ -196,8 +183,44 @@ class DecompParser:
                     offset=marker.offset,
                     name=self.function_sig,
                     filename=self.filename,
-                    lookup_by_name=lookup_by_name,
+                    lookup_by_name=True,
                     name_is_symbol=name_is_symbol,
+                    end_line=start_line,
+                    is_folded=is_folded,
+                )
+            )
+
+    def finish_line_function(
+        self,
+        markers: list[DecompMarker],
+        start: int,
+        end: int,
+    ):
+        start_line, _ = get_line_column_pos(self.newlines, start)
+        end_line, _ = get_line_column_pos(self.newlines, end)
+
+        for marker in markers:
+            extra_str = (marker.extra or "").lower()
+
+            if extra_str == "symbol":
+                self._alert(AlertCode.SYMBOL_OPTION_IGNORED, marker.pos)
+
+            is_folded = extra_str == "folded"
+
+            self.seen_functions.setdefault(marker.module, []).insert(
+                0, (marker.offset, range(start, end + 1))
+            )
+
+            self._symbols.append(
+                ParserFunction(
+                    type=marker.type,
+                    line_number=start_line,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=self.function_sig,
+                    filename=self.filename,
+                    lookup_by_name=False,
+                    name_is_symbol=False,
                     end_line=end_line,
                     is_folded=is_folded,
                 )
@@ -365,7 +388,7 @@ class DecompParser:
                 synthetic_name = get_synthetic_name(excerpt)
                 assert synthetic_name is not None
                 self.function_sig = synthetic_name
-                self.finish_function(markers, start, stop, lookup_by_name=True)
+                self.finish_name_function(markers, start)
                 return
 
             if token == TokenType.SEMICOLON:
@@ -377,17 +400,12 @@ class DecompParser:
                     # TODO: alert
                     return
 
-                try:
-                    __, func_end = next(
-                        enclosure
-                        for enclosure in self.enclosures
-                        if enclosure[0] == start
-                    )
-                except StopIteration as ex:
-                    breakpoint()  # TODO (obviously)
-                    raise ex
+                if start not in self.enclosures:
+                    self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+                    return
 
-                self.finish_function(markers, sig_pos, func_end)
+                func_end = self.enclosures[start]
+                self.finish_line_function(markers, sig_pos, func_end)
                 return
 
         # Ran to end without finding it
@@ -413,7 +431,7 @@ class DecompParser:
 
                 return
 
-            elif token == TokenType.LINE_COMMENT:
+            if token == TokenType.LINE_COMMENT:
                 excerpt = text[start:stop]
                 variable_name = get_synthetic_name(excerpt)
                 if variable_name:
@@ -481,6 +499,7 @@ class DecompParser:
         tokens = tokenize_code_file(text)
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = scope_detect_churn(tokens)
+        # TODO: error if any unpaired curly brackets remain.
 
         # TODO: naming and refactor
         self.scopes = get_scopes_from_tokens(text, tokens, self.enclosures)

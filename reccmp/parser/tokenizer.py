@@ -150,17 +150,14 @@ def get_token_groups(
 
 
 def get_scopes_from_tokens(
-    text: str, tokens: list[CodeToken], enclosures: list[tuple[int, int]]
+    text: str, tokens: list[CodeToken], enclosures: dict[int, int]
 ) -> list[tuple[int, int, str]]:
-    # zzz = { start: token for start, _, token in tokens if token == TokenType.CURLY_OPEN }
-    xxx = dict(enclosures)
-
     names = []
 
     for match in r_realClassStart.finditer(text):
         stop = match.end()
-        if stop in xxx:
-            names.append((stop, xxx[stop], match.group(1)))
+        if stop in enclosures:
+            names.append((stop, enclosures[stop], match.group(1)))
 
     return names
 
@@ -283,7 +280,7 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
 
 def scope_detect_churn(
     tokens: list[CodeToken],
-) -> tuple[list[tuple[int, int]], list[CodeToken]]:
+) -> tuple[dict[int, int], list[CodeToken]]:
     remain = scope_tokens_only(tokens)
 
     out_ranges = []
@@ -322,4 +319,4 @@ def scope_detect_churn(
         if not reduced_this_step:
             break
 
-    return (sorted(out_ranges, key=lambda r: r[0]), remain)
+    return (dict(out_ranges), remain)

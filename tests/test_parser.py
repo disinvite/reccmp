@@ -833,3 +833,14 @@ def test_template_class_t(parser):
         };
     """)
     assert False
+
+
+def test_missed_start(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        void function() {
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION

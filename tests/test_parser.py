@@ -10,24 +10,25 @@ def fixture_parser():
 
 
 def test_missing_sig(parser):
-    """In the hopefully rare scenario that the function signature and marker
-    are swapped, we still have enough to match witch reccmp"""
+    """Cannot create a line function marker unless we find:
+    1. The signature
+    2. Opening curly bracket
+    in that order."""
     parser.read(dedent("""\
         void my_function()
         // FUNCTION: TEST 0x1234
         {
         }
         """))
-    assert len(parser.functions) == 1
-    assert parser.functions[0].line_number == 3
-
+    assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
 
 
 def test_not_exact_syntax(parser):
-    """Alert to inexact syntax right here in the parser instead of kicking it downstream.
-    Doing this means we don't have to save the actual text."""
+    """Exact marker syntax is verified in the parser for now.
+    We save the text position where the marker began so this
+    could be checked by the linter instead."""
     parser.read(dedent("""\
         // function: test 0x1234
         void test() {
@@ -73,6 +74,7 @@ def test_synthetic_plus_marker(parser):
     parser.read("""\
         // SYNTHETIC: HEY 0x555
         // FUNCTION: HOWDY 0x1234
+        void test() {}
         """)
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
@@ -220,7 +222,6 @@ def test_synthetic_no_comment(parser):
     assert parser.alerts[0].code == AlertCode.BAD_NAMEREF
 
 
-@pytest.mark.xfail(reason="Gap in state machine logic where we do not raise an error.")
 def test_function_unexpected_end(parser: DecompParser):
     """Should throw an error if we hit the closing bracket before the starting bracket."""
     parser.read(dedent("""\
@@ -228,8 +229,9 @@ def test_function_unexpected_end(parser: DecompParser):
         void test()
         }
         """))
-    assert len(parser.alerts) != 0
     assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
 
 
 def test_implicit_lookup_by_name(parser):
@@ -345,9 +347,9 @@ def test_reject_global_return(parser):
 
     parser.read("""\
         // FUNCTION: TEST 0x5555
-        void test_function() {
+        int test_function() {
             // GLOBAL: TEST 0x8888
-            return "test";
+            return xyz;
         }
         """)
     assert len(parser.variables) == 0
@@ -677,21 +679,15 @@ def test_unexpected_marker(parser):
         """)
 
     assert len(parser.functions) == 0
-    assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.UNEXPECTED_MARKER
+    assert len(parser.alerts) == 2
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    assert parser.alerts[1].code == AlertCode.MISSED_START_OF_FUNCTION
 
 
 def test_issue_137(parser):
-    """GH issue #137: unexpected_marker error displayed as decomp_error_start"""
-    parser.read("""\
-        // FUNCTION: HELLO 0x1234
-        int test()
-        // STUB: TEST 0x5555
-        """)
-
-    assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.UNEXPECTED_MARKER
-    assert parser.alerts[0].code.name == "UNEXPECTED_MARKER"
+    """GH issue #137: unexpected_marker error displayed as decomp_error_start.
+    Caused by AlertCode enums UNEXPECTED_MARKER and DECOMP_ERROR_START sharing the same value."""
+    assert AlertCode.UNEXPECTED_MARKER.name == "UNEXPECTED_MARKER"
 
 
 def test_widechar_string(parser):

@@ -116,6 +116,16 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     return (i, offset - pos)
 
 
+def report_blank_lines(
+    newlines: list[int], text: str, start: int, end: int
+) -> list[int]:
+    i = bisect.bisect_left(newlines, start)
+    j = bisect.bisect_left(newlines, end)
+    return [
+        x - 1 for x in range(i, j) if not text[newlines[x] : newlines[x + 1]].strip()
+    ]
+
+
 def find_next_token_type(
     tokens: list[CodeToken], start: int, types: set[TokenType]
 ) -> int | None:

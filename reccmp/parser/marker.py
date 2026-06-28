@@ -37,7 +37,7 @@ newMarkerRegex = re.compile(
 
 
 markerExactRegex = re.compile(
-    r"// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?"
+    r"// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?(?:\n|$)"
 )
 
 

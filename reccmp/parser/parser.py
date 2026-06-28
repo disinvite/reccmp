@@ -31,6 +31,7 @@ from .tokenizer import (
     get_line_column_pos,
     get_newlines_from_text,
     get_scopes_from_tokens,
+    report_blank_lines,
     scope_detect_churn,
     tokenize_code_file,
     TokenType,
@@ -63,6 +64,7 @@ class DecompParser:
     # Could combine output lists into a single list to get under the limit,
     # but not right now
     def __init__(self) -> None:
+        self.text: str = ""
         # The lists to be populated as we parse
         self._symbols: list[ParserSymbol] = []
         self.alerts: list[ParserAlert] = []
@@ -85,6 +87,7 @@ class DecompParser:
         self.seen_functions: dict[str, list[tuple[int, range]]] = {}
 
     def reset_and_set_filename(self, filename: PurePath):
+        self.text = ""
         self._symbols = []
         self.alerts = []
 
@@ -162,6 +165,12 @@ class DecompParser:
 
         self.buckets[category][key] = marker
 
+    def check_for_gaps(self, markers: list[DecompMarker], finish_pos: int):
+        for blank_line in report_blank_lines(
+            self.newlines, self.text, markers[0].pos, finish_pos
+        ):
+            self._alert(AlertCode.UNEXPECTED_BLANK_LINE, blank_line)
+
     def finish_name_function(
         self,
         markers: list[DecompMarker],
@@ -169,6 +178,7 @@ class DecompParser:
     ):
         # Same line: derived from line comment
         start_line, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
 
         for marker in markers:
             extra_str = (marker.extra or "").lower()
@@ -198,6 +208,7 @@ class DecompParser:
     ):
         start_line, _ = get_line_column_pos(self.newlines, start)
         end_line, _ = get_line_column_pos(self.newlines, end)
+        self.check_for_gaps(markers, start)
 
         for marker in markers:
             extra_str = (marker.extra or "").lower()
@@ -230,6 +241,8 @@ class DecompParser:
         self, markers: list[DecompMarker], text: str, is_widechar: bool, pos: int
     ):
         line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
+
         for marker in markers:
             self._symbols.append(
                 ParserString(
@@ -258,6 +271,7 @@ class DecompParser:
         pos: int,
     ):
         line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
 
         parent_functions = {}
         for marker in markers:
@@ -300,6 +314,8 @@ class DecompParser:
         pos: int,
     ):
         line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
+
         for marker in markers:
             names = self.scopes_for_markers[marker.pos]
             qualified_name = "::".join([*names, class_name])
@@ -397,7 +413,7 @@ class DecompParser:
 
             if token == TokenType.CURLY_OPEN:
                 if not found_sig:
-                    # TODO: alert
+                    self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
                     return
 
                 if start not in self.enclosures:
@@ -408,9 +424,14 @@ class DecompParser:
                 self.finish_line_function(markers, sig_pos, func_end)
                 return
 
+            if token == TokenType.CURLY_CLOSE:
+                # Make sure we abort as to not match with a subsequent curly bracket.
+                self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+                return
+
         # Ran to end without finding it
         start = candidates[0][0]
-        self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+        self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
 
     def code_variable(
         self,
@@ -424,6 +445,7 @@ class DecompParser:
             if token == TokenType.CODE:
                 excerpt = text[start:stop]
                 variable_name = get_variable_name(excerpt)
+                # TODO: Check for `return ___;`, raise AlertCode.GLOBAL_NOT_VARIABLE.
                 if variable_name:
                     self.finish_variable(markers, variable_name, start)
                 else:
@@ -490,6 +512,8 @@ class DecompParser:
         return output
 
     def read(self, text: str):
+        # TODO: better than passing it everywhere?
+        self.text = text
         self.found_markers = {
             m.start(): m.groups() for m in newMarkerRegex.finditer(text)
         }

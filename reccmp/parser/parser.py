@@ -219,7 +219,11 @@ class DecompParser:
         self.check_for_gaps(markers, start)
 
         for marker in markers:
-            if marker.type in {MarkerType.SYNTHETIC, MarkerType.TEMPLATE, MarkerType.LIBRARY}:
+            if marker.type in {
+                MarkerType.SYNTHETIC,
+                MarkerType.TEMPLATE,
+                MarkerType.LIBRARY,
+            }:
                 self._alert(AlertCode.BAD_NAMEREF, marker.pos)
                 continue
 
@@ -456,8 +460,11 @@ class DecompParser:
         for start, stop, token in candidates:
             if token == TokenType.CODE:
                 excerpt = text[start:stop]
+                if excerpt.startswith("return"):
+                    self._alert(AlertCode.GLOBAL_NOT_VARIABLE, start)
+                    return
+
                 variable_name = get_variable_name(excerpt)
-                # TODO: Check for `return ___;`, raise AlertCode.GLOBAL_NOT_VARIABLE.
                 if variable_name:
                     self.finish_variable(markers, variable_name, start)
                 else:

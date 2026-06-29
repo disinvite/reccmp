@@ -91,7 +91,7 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
             # Skip if this is entirely whitespace
             strip_match = r_firstChar.search(text, start, pos)
             if strip_match:
-                tokens.append((strip_match.start(), stop, TokenType.CODE))
+                tokens.append((strip_match.start(), pos, TokenType.CODE))
 
         tokens.append((pos, stop, token_type))
         start = stop

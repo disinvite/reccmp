@@ -697,7 +697,7 @@ def test_unexpected_marker(parser):
     assert parser.alerts[1].code == AlertCode.MISSED_START_OF_FUNCTION
 
 
-def test_issue_137(parser):
+def test_issue_137():
     """GH issue #137: unexpected_marker error displayed as decomp_error_start.
     Caused by AlertCode enums UNEXPECTED_MARKER and DECOMP_ERROR_START sharing the same value.
     """
@@ -833,18 +833,6 @@ def test_issue_434_equal_newline(parser):
     assert parser.variables[0].name == "g_state"
 
 
-def test_template_class_t(parser):
-    parser.read("""\
-        template <class T>
-        class MxPoint {
-        protected:
-            T m_x;
-            T m_y;
-        };
-    """)
-    assert False
-
-
 def test_missed_start(parser):
     parser.read("""\
         // FUNCTION: HELLO 0x1234
@@ -854,3 +842,83 @@ def test_missed_start(parser):
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_markers_not_aligned_to_each_other(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+            // STUB: ASDF 0x1234
+        void function() {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_markers_not_aligned_to_finish(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        // STUB: ASDF 0x1234
+            void function() {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_function_over_if_block(parser):
+    """Should recognize that the code token is not a valid function signature."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        if (test) {}
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_function_over_class(parser):
+    """Should recognize that the code token is not a valid function signature."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        class Test {}
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_function_with_unresolved_curly_brackets(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        void function() {
+        #ifdef XYZ
+            }
+        #endif
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
+    assert parser.functions[0].end_line == 6
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type

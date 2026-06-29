@@ -68,17 +68,43 @@ def test_variable(parser):
     assert len(parser.variables) == 1
 
 
-def test_synthetic_plus_marker(parser):
-    """Marker tracking preempts synthetic name detection.
-    Should fail with error and not log the synthetic"""
+def test_nameref_finished_by_code(parser):
+    """Nameref-only marker types (e.g. SYNTHETIC) cannot be completed by a code line.
+    The FUNCTION marker should succeed."""
     parser.read("""\
         // SYNTHETIC: HEY 0x555
         // FUNCTION: HOWDY 0x1234
         void test() {}
         """)
-    assert len(parser.functions) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].module == "HOWDY"
+
     assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
+    assert parser.alerts[0].code == AlertCode.BAD_NAMEREF
+
+
+def test_nameref_varying_marker_types(parser):
+    """For a nameref function, report when subsequent marker types are different from the first one."""
+    parser.read("""\
+        // SYNTHETIC: HEY 0x555
+        // FUNCTION: HOWDY 0x1234
+        // Test::`scalar deleting destructor'
+        """)
+    assert len(parser.functions) == 2
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.VARYING_MARKER_TYPES
+
+
+def test_nameref_varying_marker_types_except_stub(parser):
+    """Subset of the above test, except that STUB is always ignored.
+    Users might use STUB to alter the final accuracy report."""
+    parser.read("""\
+        // SYNTHETIC: HEY 0x555
+        // STUB: HOWDY 0x1234
+        // Test::`scalar deleting destructor'
+        """)
+    assert len(parser.functions) == 2
+    assert len(parser.alerts) == 0
 
 
 def test_different_markers_different_module(parser):
@@ -112,19 +138,6 @@ def test_different_markers_same_module(parser):
     # Should alert to this
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.DUPLICATE_MODULE
-
-
-def test_unexpected_synthetic(parser):
-    """FUNCTION then SYNTHETIC should fail to report either one"""
-    parser.read("""\
-        // FUNCTION: HOWDY 0x1234
-        // SYNTHETIC: HOWDY 0x5555
-        void interesting_function() {
-        }
-        """)
-    assert len(parser.functions) == 0
-    assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
 
 
 @pytest.mark.skip(reason="not implemented yet")
@@ -215,7 +228,7 @@ def test_synthetic_no_comment(parser):
     """Synthetic marker followed by a code line (i.e. non-comment)"""
     parser.read("""\
         // SYNTHETIC: TEST 0x1234
-        int x = 123;
+        void test() {}
         """)
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
@@ -686,7 +699,8 @@ def test_unexpected_marker(parser):
 
 def test_issue_137(parser):
     """GH issue #137: unexpected_marker error displayed as decomp_error_start.
-    Caused by AlertCode enums UNEXPECTED_MARKER and DECOMP_ERROR_START sharing the same value."""
+    Caused by AlertCode enums UNEXPECTED_MARKER and DECOMP_ERROR_START sharing the same value.
+    """
     assert AlertCode.UNEXPECTED_MARKER.name == "UNEXPECTED_MARKER"
 
 

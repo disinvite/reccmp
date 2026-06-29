@@ -54,6 +54,10 @@ class AlertCode(Enum):
     # This makes no sense, so we ignore the option.
     SYMBOL_OPTION_IGNORED = 113
 
+    # WARN: A nameref annotation used different marker types.
+    # e.g. SYNTHETIC + FUNCTION
+    VARYING_MARKER_TYPES = 114
+
     # This code or higher is an error, not a warning
     DECOMP_ERROR_START = 200
 

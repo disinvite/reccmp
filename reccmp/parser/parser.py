@@ -180,7 +180,15 @@ class DecompParser:
         start_line, _ = get_line_column_pos(self.newlines, pos)
         self.check_for_gaps(markers, pos)
 
+        first_type = None
+
         for marker in markers:
+            if marker.type != MarkerType.STUB:
+                if not first_type:
+                    first_type = marker.type
+                elif first_type != marker.type:
+                    self._alert(AlertCode.VARYING_MARKER_TYPES, marker.pos)
+
             extra_str = (marker.extra or "").lower()
             name_is_symbol = extra_str == "symbol"
             is_folded = extra_str == "folded"
@@ -211,6 +219,10 @@ class DecompParser:
         self.check_for_gaps(markers, start)
 
         for marker in markers:
+            if marker.type in {MarkerType.SYNTHETIC, MarkerType.TEMPLATE, MarkerType.LIBRARY}:
+                self._alert(AlertCode.BAD_NAMEREF, marker.pos)
+                continue
+
             extra_str = (marker.extra or "").lower()
 
             if extra_str == "symbol":

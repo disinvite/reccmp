@@ -171,7 +171,7 @@ class DecompParser:
         ):
             self._alert(AlertCode.UNEXPECTED_BLANK_LINE, blank_line)
 
-    def finish_name_function(
+    def _finish_name_function(
         self,
         markers: list[DecompMarker],
         pos: int,
@@ -208,7 +208,7 @@ class DecompParser:
                 )
             )
 
-    def finish_line_function(
+    def _finish_line_function(
         self,
         markers: list[DecompMarker],
         start: int,
@@ -253,7 +253,7 @@ class DecompParser:
                 )
             )
 
-    def finish_string(
+    def _finish_string(
         self, markers: list[DecompMarker], text: str, is_widechar: bool, pos: int
     ):
         line_number, _ = get_line_column_pos(self.newlines, pos)
@@ -280,7 +280,7 @@ class DecompParser:
 
         return None
 
-    def finish_variable(
+    def _finish_variable(
         self,
         markers: list[DecompMarker],
         variable_name: str,
@@ -323,7 +323,7 @@ class DecompParser:
                 )
             )
 
-    def finish_vtable(
+    def _finish_vtable(
         self,
         markers: list[DecompMarker],
         class_name: str,
@@ -347,7 +347,7 @@ class DecompParser:
                 )
             )
 
-    def finish_line(self, markers: list[DecompMarker]):
+    def _finish_line(self, markers: list[DecompMarker]):
         for marker in markers:
             line_number, _ = get_line_column_pos(self.newlines, marker.pos)
             self._symbols.append(
@@ -376,7 +376,7 @@ class DecompParser:
                 vtable_class = get_class_name(excerpt)
                 if vtable_class is not None:
                     # Allow continuation here for `// SIZE comments`
-                    self.finish_vtable(markers, vtable_class, start)
+                    self._finish_vtable(markers, vtable_class, start)
                     return
 
             elif token == TokenType.CURLY_OPEN:
@@ -393,7 +393,7 @@ class DecompParser:
                 return
 
         if vtable_class:
-            self.finish_vtable(markers, vtable_class, vtable_pos)
+            self._finish_vtable(markers, vtable_class, vtable_pos)
         else:
             start = candidates[0][0]
             self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
@@ -420,7 +420,7 @@ class DecompParser:
                 synthetic_name = get_synthetic_name(excerpt)
                 assert synthetic_name is not None
                 self.function_sig = synthetic_name
-                self.finish_name_function(markers, start)
+                self._finish_name_function(markers, start)
                 return
 
             if token == TokenType.SEMICOLON:
@@ -437,7 +437,7 @@ class DecompParser:
                     return
 
                 func_end = self.enclosures[start]
-                self.finish_line_function(markers, sig_pos, func_end)
+                self._finish_line_function(markers, sig_pos, func_end)
                 return
 
             if token == TokenType.CURLY_CLOSE:
@@ -466,7 +466,7 @@ class DecompParser:
 
                 variable_name = get_variable_name(excerpt)
                 if variable_name:
-                    self.finish_variable(markers, variable_name, start)
+                    self._finish_variable(markers, variable_name, start)
                 else:
                     self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
@@ -476,7 +476,7 @@ class DecompParser:
                 excerpt = text[start:stop]
                 variable_name = get_synthetic_name(excerpt)
                 if variable_name:
-                    self.finish_variable(markers, variable_name, start)
+                    self._finish_variable(markers, variable_name, start)
                 else:
                     self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
@@ -495,7 +495,7 @@ class DecompParser:
                 string_obj = get_string_contents(excerpt)
 
                 if string_obj:
-                    self.finish_string(
+                    self._finish_string(
                         markers, string_obj.text, string_obj.is_widechar, start
                     )
 
@@ -545,7 +545,7 @@ class DecompParser:
         # TODO: error if any unpaired curly brackets remain.
 
         # TODO: naming and refactor
-        self.scopes = get_scopes_from_tokens(text, tokens, self.enclosures)
+        self.scopes = get_scopes_from_tokens(text, self.enclosures)
         xxx = [(range(start, stop), name) for start, stop, name in self.scopes]
         for pos in self.found_markers.keys():
             self.scopes_for_markers[pos] = [name for span, name in xxx if pos in span]
@@ -584,7 +584,7 @@ class DecompParser:
                     self.code_string(text, candidates, markers)
 
                 elif category == MarkerCategory.ADDRESS:
-                    self.finish_line(markers)
+                    self._finish_line(markers)
 
                 bucket.clear()
                 self.marker_types.discard(category)

@@ -2,6 +2,7 @@ import bisect
 import re
 import string
 import enum
+from itertools import pairwise
 
 
 class TokenType(enum.IntEnum):
@@ -121,8 +122,11 @@ def report_blank_lines(
 ) -> list[int]:
     i = bisect.bisect_left(newlines, start)
     j = bisect.bisect_left(newlines, end)
+
     return [
-        x - 1 for x in range(i, j) if not text[newlines[x] : newlines[x + 1]].strip()
+        x
+        for x, y in pairwise(range(i, j))
+        if not text[newlines[x] : newlines[y]].strip()
     ]
 
 
@@ -137,30 +141,8 @@ def find_next_token_type(
     return None
 
 
-def get_token_groups(
-    text: str, tokens: list[CodeToken], starts: set[int]
-) -> list[tuple[int, ...]]:
-    """Groups of whitespace or line comments.
-    Returned ranges are ids of tokens."""
-    groups = []
-    ids: list[int] = []
-
-    for i, (start, stop, token) in enumerate(tokens):
-        if start in starts or (ids and token == TokenType.LINE_COMMENT):
-            ids.append(i)
-
-        elif ids:
-            groups.append(tuple(ids))
-            ids.clear()
-
-    if ids:
-        groups.append(tuple(ids))
-
-    return groups
-
-
 def get_scopes_from_tokens(
-    text: str, tokens: list[CodeToken], enclosures: dict[int, int]
+    text: str, enclosures: dict[int, int]
 ) -> list[tuple[int, int, str]]:
     names = []
 

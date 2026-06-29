@@ -1,7 +1,5 @@
 import pytest
 from reccmp.parser.marker import (
-    DecompMarker,
-    MarkerType,
     match_marker,
     is_marker_exact,
 )

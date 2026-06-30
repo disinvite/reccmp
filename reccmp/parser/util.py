@@ -3,9 +3,9 @@ import re
 from ast import literal_eval
 from typing import NamedTuple
 
-# The goal here is to just read whatever is on the next line, so some
-# flexibility in the formatting seems OK
-templateCommentRegex = re.compile(r"\s*//\s+(.*)")
+# Read the text from the LINE_COMMENT token, remove leading
+# and trailing whitespace, and ignore extra frontslashes.
+templateCommentRegex = re.compile(r"/{2,}\s*(.*\S)")
 
 
 def get_synthetic_name(line: str) -> str | None:

@@ -922,3 +922,54 @@ def test_code_function_with_unresolved_curly_brackets(parser):
     assert (
         parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
     )  # TODO: new error type
+
+
+def test_issue_174(parser):
+    """Should not crash with failed assert for three-slash comment."""
+    parser.read("""\
+        // FUNCTION: LEGO1 0x100720d0
+        /// Some function description
+        void someFunction() {}
+    """)
+
+    assert len(parser.functions) == 1
+
+
+def test_issue_55(parser):
+    """Should handle these variations on nameref markers."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1000
+        //NoSpace::Function
+
+        // FUNCTION: HELLO 0x2000
+        //           BigSpace::Function
+
+        // FUNCTION: HELLO 0x3000
+        ///// Test::Function
+    """)
+
+    assert len(parser.functions) == 3
+
+
+def test_issue_56(parser):
+    """Should fail if VTABLE marker is not immediately followed by class or struct."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        int test() { return 5; }
+        class Test;
+    """)
+
+    assert len(parser.vtables) == 0
+    assert len(parser.alerts) != 0  # TODO: which error?
+
+
+def test_issue_184(parser):
+    """Should remove trailing whitespace from nameref marker."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1000
+        // Spaces::AfterTheName    
+    """)
+
+    assert len(parser.functions) == 1
+    name = parser.functions[0].name
+    assert len(name) == len(name.strip())

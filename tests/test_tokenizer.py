@@ -40,7 +40,7 @@ def test_eof():
 def test_string_continuation():
     # Newline is part of broken string.
     # A second string token is not started.
-    assert list(tokenize_code_file('"te\nst"')) == [
+    assert list(tokenize_code_file('"xx\nyy"')) == [
         (0, 4, TokenType.STRING),
         (4, 7, TokenType.CODE),
     ]
@@ -48,7 +48,7 @@ def test_string_continuation():
         (0, 2, TokenType.CHAR),
         (2, 4, TokenType.CODE),
     ]
-    assert list(tokenize_code_file('"te\\\nst"')) == [(0, 8, TokenType.STRING)]
+    assert list(tokenize_code_file('"xx\\\nyy"')) == [(0, 8, TokenType.STRING)]
 
 
 def test_digit_separator():

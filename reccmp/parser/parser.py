@@ -139,7 +139,7 @@ class DecompParser:
                 path=self.filename,
                 line_number=line_no,
                 code=code,
-                detail=text,
+                detail=text.strip(),
             )
         )
 

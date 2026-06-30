@@ -57,6 +57,10 @@ class AlertCode(Enum):
     # WARN: The alias does not point to a valid marker type and has no effect.
     ALIAS_GOES_NOWHERE = 114
 
+    # WARN: A nameref annotation used different marker types.
+    # e.g. SYNTHETIC + FUNCTION
+    VARYING_MARKER_TYPES = 115
+
     # This code or higher is an error, not a warning
     DECOMP_ERROR_START = 200
 

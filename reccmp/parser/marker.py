@@ -1,4 +1,5 @@
 import re
+from typing import NamedTuple
 from enum import Enum
 
 TargetAliases = dict[str, str]
@@ -32,108 +33,23 @@ class MarkerType(Enum):
     LINE = 9
 
 
-markerRegex = re.compile(
-    r"\s*//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
+newMarkerRegex = re.compile(
+    r"//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
     flags=re.I,
 )
 
 
 markerExactRegex = re.compile(
-    r"\s*// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?\n?$"
+    r"// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?(?:\n|$)"
 )
 
 
-class DecompMarker:
-    def __init__(
-        self, marker_type: str, module: str, offset: int, extra: str | None = None
-    ) -> None:
-        try:
-            self._type = MarkerType[marker_type.upper()]
-        except KeyError:
-            self._type = MarkerType.UNKNOWN
-
-        # Convert to upper here. A lot of other analysis depends on this name
-        # being consistent and predictable. If the name is _not_ capitalized
-        # we will emit a syntax error.
-        self._module: str = module.upper()
-        self._offset: int = offset
-        self._extra: str | None = extra
-
-    @property
-    def type(self) -> MarkerType:
-        return self._type
-
-    @property
-    def module(self) -> str:
-        return self._module
-
-    @property
-    def offset(self) -> int:
-        return self._offset
-
-    @property
-    def extra(self) -> str | None:
-        return self._extra
-
-    @property
-    def category(self) -> MarkerCategory:
-        if self.is_vtable():
-            return MarkerCategory.VTABLE
-
-        if self.is_variable():
-            return MarkerCategory.VARIABLE
-
-        if self.is_string():
-            return MarkerCategory.STRING
-
-        # TODO: worth another look if we add more types, but this covers it
-        if self.is_regular_function() or self.is_explicit_byname():
-            return MarkerCategory.FUNCTION
-
-        return MarkerCategory.ADDRESS
-
-    @property
-    def key(self) -> tuple[MarkerCategory, str, str | None]:
-        """For use with the MarkerDict. To detect/avoid marker collision."""
-        return (self.category, self.module, self.extra)
-
-    def is_regular_function(self) -> bool:
-        """Regular function, meaning: not an explicit byname lookup. FUNCTION
-        markers can be _implicit_ byname.
-        FUNCTION and STUB markers are (currently) the only heterogeneous marker types that
-        can be lumped together, although the reasons for doing so are a little vague."""
-        return self._type in (MarkerType.FUNCTION, MarkerType.STUB)
-
-    def is_explicit_byname(self) -> bool:
-        return self._type in (
-            MarkerType.SYNTHETIC,
-            MarkerType.TEMPLATE,
-            MarkerType.LIBRARY,
-        )
-
-    def is_variable(self) -> bool:
-        return self._type == MarkerType.GLOBAL
-
-    def is_synthetic(self) -> bool:
-        return self._type == MarkerType.SYNTHETIC
-
-    def is_template(self) -> bool:
-        return self._type == MarkerType.TEMPLATE
-
-    def is_vtable(self) -> bool:
-        return self._type == MarkerType.VTABLE
-
-    def is_library(self) -> bool:
-        return self._type == MarkerType.LIBRARY
-
-    def is_string(self) -> bool:
-        return self._type == MarkerType.STRING
-
-    def is_line(self) -> bool:
-        return self._type == MarkerType.LINE
-
-    def allowed_in_func(self) -> bool:
-        return self._type in (MarkerType.GLOBAL, MarkerType.STRING, MarkerType.LINE)
+class DecompMarker(NamedTuple):
+    pos: int
+    type: MarkerType
+    module: str
+    offset: int
+    extra: str | None = None
 
 
 def normalize_target_aliases(aliases: TargetAliases) -> TargetAliases:
@@ -180,27 +96,40 @@ def resolve_alias(marker_type: str, target_name: str, aliases: ProjectAliases) -
 
 
 def match_marker(
-    line: str, aliases: ProjectAliases | None = None
+    text: str, aliases: ProjectAliases | None = None
 ) -> DecompMarker | None:
-    if aliases is None:
+    match = newMarkerRegex.search(text)
+    if match:
+        return new_match_marker(match.start(), match.groups(), aliases)
+
+    return None
+
+
+def new_match_marker(
+    pos: int, groups: tuple[str, ...], aliases: ProjectAliases | None = None
+) -> DecompMarker:
+    if not aliases:
         aliases = {}
 
-    match = markerRegex.match(line)
-    if match is None:
-        return None
-
-    marker_type = match.group("type")
-    target_name = match.group("module")
-
+    marker_type, target_name, offset_str, extra = groups
     marker_type = resolve_alias(marker_type, target_name, aliases)
 
+    try:
+        enum_type = MarkerType[marker_type.upper()]
+    except KeyError:
+        enum_type = MarkerType.UNKNOWN
+
     return DecompMarker(
-        marker_type=marker_type,
-        module=target_name,
-        offset=int(match.group("offset"), 16),
-        extra=match.group("extra"),
+        pos=pos,
+        type=enum_type,
+        # Convert to upper here. A lot of other analysis depends on this name
+        # being consistent and predictable. If the name is _not_ capitalized
+        # we will emit a syntax error.
+        module=target_name.upper(),
+        offset=int(offset_str, 16),
+        extra=extra,
     )
 
 
-def is_marker_exact(line: str) -> bool:
-    return markerExactRegex.match(line) is not None
+def is_marker_exact(text: str, pos: int = 0) -> bool:
+    return markerExactRegex.match(text, pos) is not None

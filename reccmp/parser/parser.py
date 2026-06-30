@@ -77,8 +77,6 @@ class DecompParser:
         ] = {category: {} for category in MarkerCategory}
         self.marker_types: set[MarkerCategory] = set()
 
-        self.function_sig: str = ""
-
         self.filename: PurePath = PurePath("")
 
         self.aliases = aliases or {}
@@ -100,8 +98,6 @@ class DecompParser:
             bucket.clear()
 
         self.marker_types.clear()
-
-        self.function_sig = ""
 
         self.filename = filename
 
@@ -177,6 +173,7 @@ class DecompParser:
     def _finish_name_function(
         self,
         markers: list[DecompMarker],
+        function_name: str,
         pos: int,
     ):
         # Same line: derived from line comment
@@ -202,7 +199,7 @@ class DecompParser:
                     line_number=start_line,
                     module=marker.module,
                     offset=marker.offset,
-                    name=self.function_sig,
+                    name=function_name,
                     filename=self.filename,
                     lookup_by_name=True,
                     name_is_symbol=name_is_symbol,
@@ -247,7 +244,7 @@ class DecompParser:
                     line_number=start_line,
                     module=marker.module,
                     offset=marker.offset,
-                    name=self.function_sig,
+                    name="",  # TODO: This was never accurate
                     filename=self.filename,
                     lookup_by_name=False,
                     name_is_symbol=False,
@@ -422,8 +419,7 @@ class DecompParser:
                 excerpt = text[start:stop]
                 synthetic_name = get_synthetic_name(excerpt)
                 assert synthetic_name is not None
-                self.function_sig = synthetic_name
-                self._finish_name_function(markers, start)
+                self._finish_name_function(markers, synthetic_name, start)
                 return
 
             if token == TokenType.SEMICOLON:

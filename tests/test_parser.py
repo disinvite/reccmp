@@ -272,6 +272,7 @@ def test_function_with_spaces(parser):
     assert len(parser.functions) == 1
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 def test_function_with_spaces_implicit(parser):
@@ -284,6 +285,7 @@ def test_function_with_spaces_implicit(parser):
     assert len(parser.functions) == 1
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 @pytest.mark.xfail(reason="will assume implicit lookup-by-name function")

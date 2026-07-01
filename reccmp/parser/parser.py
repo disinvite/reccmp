@@ -410,8 +410,10 @@ class DecompParser:
         for start, stop, token in candidates:
             if token == TokenType.CODE:
                 # TODO: Detect function signature. Discard if we detect `if (x)`
-                found_sig = True
-                sig_pos = start
+                if not found_sig:
+                    # TODO: default param with EQUAL could split CODE token.
+                    found_sig = True
+                    sig_pos = start
 
             if token == TokenType.LINE_COMMENT and not found_sig:
                 # Allow comments between signature and curly bracket.

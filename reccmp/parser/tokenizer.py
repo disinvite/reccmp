@@ -124,7 +124,7 @@ def report_blank_lines(
     j = bisect.bisect_left(newlines, end)
 
     return [
-        newlines[x]
+        newlines[x] + 1  # First column of the blank line
         for x, y in pairwise(range(i, j))
         if not text[newlines[x] : newlines[y]].strip()
     ]

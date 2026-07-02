@@ -224,23 +224,36 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
     legs: list[list[int]] = [[]]
 
     for start, _, token in remain:
+        # Build a list of all tokens that will be affected in this PPC block.
         mask.add(start)
 
+        # TODO: need to be careful with nonsense blocks like `#if { #else } #end`
         if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
             legs[-1].append(start)
 
         elif token == TokenType.PPC_IF:
+            # New block begins here. If one was already started,
+            # it can no longer be condensed on this pass.
             interrupted = False
             mask = {start}
             legs = [[]]
 
         elif token == TokenType.PPC_ELSE:
+            # New branch begins here
             legs.append([])
 
         elif token == TokenType.PPC_END:
-            # Do it before popping so we tag with the current group.
-            if not interrupted and all(len(leg) == len(legs[0]) for leg in legs):
+            # `not interrupted`: branches are all at the same PPC level
+            # `len(legs) > 1`: there is more than one option
+            # `all(len(leg)...`: same bracket level for each branch (TODO)
+            if (
+                not interrupted
+                and len(legs) > 1
+                and all(len(leg) == len(legs[0]) for leg in legs)
+            ):
+                # Retain only the curly brackets from the first branch.
                 keepers = set(legs[0])
+                # All others in this block will be deleted.
                 global_mask |= mask - keepers
 
             interrupted = True

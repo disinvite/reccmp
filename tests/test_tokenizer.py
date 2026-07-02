@@ -59,6 +59,13 @@ def test_string_continuation():
     assert list(tokenize_code_file('"xx\\\nyy"')) == [(0, 8, TokenType.STRING)]
 
 
+def test_ppc_tokens_consume_other_types():
+    """Should not emit curly brackets if they are part of a PPC statement."""
+    assert list(tokenize_code_file("#define XYZ = (while(0) { };)")) == [
+        (0, 29, TokenType.PPC_OTHER)
+    ]
+
+
 def test_digit_separator():
     """Should not try to start a new CHAR token if the single quote is between two valid digits."""
     assert tokens_only(tokenize_code_file("int x = 1'000'000")) == [
@@ -187,12 +194,45 @@ def test_scope_detect_extern_c():
     assert scopes == {23: 45}
 
 
-@pytest.mark.xfail(reason="TODO: Undecided on behavior")
 def test_scope_detect_invalid_folding_1():
+    """Cannot return any scopes."""
     code = dedent("""\
         {
         #ifdef TEST
         {
+        #endif
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert not scopes
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_detect_ignore_if_0():
+    """Same as above, but we should ignore the invalid PPC branch."""
+    code = dedent("""\
+        {
+        #ifdef 0
+        {
+        #endif
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert scopes
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_detect_invalid_folding_2():
+    """Cannot return any scopes.
+    Naively enabling all scopes will create pairs."""
+    code = dedent("""\
+        {
+        #ifdef TEST
+        {
+        #else
+        }
         #endif
         }
     """)

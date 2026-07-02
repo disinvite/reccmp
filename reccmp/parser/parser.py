@@ -459,8 +459,9 @@ class DecompParser:
         variable_name = None
 
         for start, stop, token in candidates:
+            excerpt = text[start:stop]
+
             if token == TokenType.CODE:
-                excerpt = text[start:stop]
                 if excerpt.startswith("return"):
                     self._alert(AlertCode.GLOBAL_NOT_VARIABLE, start)
                     return
@@ -469,19 +470,21 @@ class DecompParser:
                 if variable_name:
                     self._finish_variable(markers, variable_name, start)
                 else:
-                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
 
                 return
 
             if token == TokenType.LINE_COMMENT:
-                excerpt = text[start:stop]
                 variable_name = get_synthetic_name(excerpt)
                 if variable_name:
                     self._finish_variable(markers, variable_name, start)
                 else:
-                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
 
                 return
+
+            self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
+            return
 
     def code_string(
         self,

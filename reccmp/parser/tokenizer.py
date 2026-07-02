@@ -179,31 +179,25 @@ def reduce_scopes(
     """
     ranges = []
     done: set[int] = set()
-    while True:
-        stack: list[int] = []
-        did_something = False
-        for start, _, token in tokens:
-            if start in done:
-                continue
-
-            if token == TokenType.CURLY_CLOSE:
-                if stack:
-                    last_start = stack.pop()
-                    ranges.append((last_start, start))
-                    done.add(start)
-                    done.add(last_start)
-                    did_something = True
-            elif token == TokenType.CURLY_OPEN:
-                stack.append(start)
-            elif enable_ppc and token in {
-                TokenType.PPC_IF,
-                TokenType.PPC_ELSE,
-                TokenType.PPC_END,
-            }:
+    stack: list[int] = []
+    for start, _, token in tokens:
+        if token == TokenType.CURLY_CLOSE:
+            if stack:
+                last_start = stack.pop()
+                ranges.append((last_start, start))
+                done.add(start)
+                done.add(last_start)
+        elif token == TokenType.CURLY_OPEN:
+            stack.append(start)
+        elif token in {
+            TokenType.PPC_IF,
+            TokenType.PPC_ELSE,
+            TokenType.PPC_END,
+        }:
+            if enable_ppc:
                 stack.clear()
-
-        if not did_something:
-            break
+            else:
+                done.add(start)
 
     return (
         ranges,

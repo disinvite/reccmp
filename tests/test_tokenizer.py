@@ -155,8 +155,8 @@ def test_scope_detect_inner_curly_open_outer_curly_close():
     assert scopes == {0: 40, 21: 38}
 
 
-@pytest.mark.xfail(reason="TODO")
 def test_scope_detect_unbalanced_ppc_branches():
+    """TODO: Do we want this?"""
     code = dedent("""\
         {
         #ifdef COMPAT_MODE

@@ -178,31 +178,28 @@ def reduce_scopes(
     even if this makes no sense. We do not examine or evaluate the PPC expressions at all.
     """
     ranges = []
-    done: set[int] = set()
-    stack: list[int] = []
-    for start, _, token in tokens:
-        if token == TokenType.CURLY_CLOSE:
+    stack: list[CodeToken] = []
+    output: list[CodeToken] = []
+    for x in tokens:
+        if x[2] == TokenType.CURLY_CLOSE:
             if stack:
-                last_start = stack.pop()
-                ranges.append((last_start, start))
-                done.add(start)
-                done.add(last_start)
-        elif token == TokenType.CURLY_OPEN:
-            stack.append(start)
-        elif token in {
+                y = stack.pop()
+                ranges.append((y[0], x[0]))
+            else:
+                output.append(x)
+        elif x[2] == TokenType.CURLY_OPEN:
+            stack.append(x)
+        elif enable_ppc and x[2] in {
             TokenType.PPC_IF,
             TokenType.PPC_ELSE,
             TokenType.PPC_END,
         }:
-            if enable_ppc:
-                stack.clear()
-            else:
-                done.add(start)
+            output.extend(stack)
+            output.append(x)
+            stack.clear()
 
-    return (
-        ranges,
-        [(start, stop, token) for start, stop, token in tokens if start not in done],
-    )
+    output.extend(stack)
+    return (ranges, output)
 
 
 def reduced_tagger(remain: list[CodeToken]) -> set[int]:
@@ -253,6 +250,14 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
     return global_mask
 
 
+def all_curly_paired(tokens: list[CodeToken]) -> bool:
+    for x in tokens:
+        if x[2] in {TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE}:
+            return False
+
+    return True
+
+
 def scope_detect_churn(
     tokens: list[CodeToken],
 ) -> tuple[dict[int, int], list[CodeToken]]:
@@ -270,7 +275,7 @@ def scope_detect_churn(
             reduced_this_step = True
 
         # End early if there are no PPC tokens left.
-        if not new_remain:
+        if all_curly_paired(new_remain):
             break
 
         # Can we simply enable all PPC regions and match remaining brackets?

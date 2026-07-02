@@ -364,7 +364,11 @@ def load_map_file(file: TextFile, db: EntityDb, lines_db: LinesDb, recomp_bin: I
                 last_start = addr
 
             if line == 0:
-                sizes[last_start] = addr - last_start
+                # Consider `RETF 4` at 0001:0000. Instruction bytes are: ca 04 00.
+                # The "0" line is at 0001:0002, missing one byte.
+                # Apparently, we expect to add a padding byte between functions.
+                # TODO: Is this just alignment?
+                sizes[last_start] = addr - last_start + 1
                 last_start = None
             else:
                 output_lines.append((line, addr))

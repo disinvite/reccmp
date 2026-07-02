@@ -1,7 +1,15 @@
 from itertools import pairwise
 from textwrap import dedent
 from typing import Iterable
-from reccmp.parser.tokenizer import CodeToken, TokenType, tokenize_code_file
+import pytest
+from reccmp.parser.tokenizer import (
+    CodeToken,
+    TokenType,
+    tokenize_code_file,
+    get_newlines_from_text,
+    get_line_column_pos,
+    scope_detect_churn,
+)
 
 
 def tokens_only(tokens: Iterable[CodeToken]) -> list[TokenType]:
@@ -100,3 +108,94 @@ def test_struct_newline():
         x_stop = x[1]
         y_start = y[0]
         assert x_stop == y_start or (code[x_stop:y_start].strip() == "")
+
+
+def test_line_col_conversion():
+    """Should accurately convert the absolute position into 1-based line and column numbers."""
+    code = dedent("""\
+        // Example file
+
+        // Test
+    """)
+    newlines = get_newlines_from_text(code)
+
+    assert get_line_column_pos(newlines, 0) == (1, 1)
+    assert get_line_column_pos(newlines, 1) == (1, 2)
+    assert get_line_column_pos(newlines, 15) == (1, 16)
+    assert get_line_column_pos(newlines, 16) == (2, 1)
+    assert get_line_column_pos(newlines, 17) == (3, 1)
+
+
+def test_scope_detect_folding_with_invalid_ppc():
+    code = "#endif"
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert not scopes
+    # Should not crash
+
+
+def test_scope_detect_inner_curly_open_outer_curly_close():
+    """Simplified version a for loop that begins two different ways depending on compiler requirements.
+    If we encounter a PPC block where both branches have an opening curly bracket that matches with
+    a closing bracket outside the block, enable the first branch and pair up the scope.
+    """
+    code = dedent("""\
+        {
+        #ifdef COMPAT_MODE
+        {
+        #else
+        {
+        #endif
+        }
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    # Should use bracket from first branch of if/else
+    assert scopes == {0: 40, 21: 38}
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_detect_unbalanced_ppc_branches():
+    code = dedent("""\
+        {
+        #ifdef COMPAT_MODE
+        {
+        #else
+        #endif
+        }
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert scopes
+
+
+def test_scope_detect_extern_c():
+    """Should support unbalanced brackets in this configuration."""
+    code = dedent("""\
+        #ifdef TEST
+        extern "C" {
+        #endif
+        
+        #ifdef TEST
+        }
+        #endif
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert scopes == {23: 45}
+
+
+@pytest.mark.xfail(reason="TODO: Undecided on behavior")
+def test_scope_detect_invalid_folding_1():
+    code = dedent("""\
+        {
+        #ifdef TEST
+        {
+        #endif
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert not scopes

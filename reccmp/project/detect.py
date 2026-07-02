@@ -168,6 +168,7 @@ class RecCmpPartialTarget:
     original_path: Path | None = None
     recompiled_path: Path | None = None
     recompiled_pdb: Path | None = None
+    recompiled_map: Path | None = None
 
     # Data to set directly in the database (addresses refer to orig binary)
     data_sources: list[Path] | None = None
@@ -209,6 +210,7 @@ class RecCmpTarget:
     original_path: Path
     recompiled_path: Path
     recompiled_pdb: Path
+    recompiled_map: Path | None = None
 
     # Data to set directly in the database (addresses refer to orig binary)
     data_sources: list[Path] = field(default_factory=list)
@@ -285,6 +287,7 @@ class RecCmpProject:
             original_path=target.original_path,
             recompiled_path=target.recompiled_path,
             recompiled_pdb=target.recompiled_pdb,
+            recompiled_map=target.recompiled_map,
             encoding=target.encoding,
             source_paths=target.source_paths,
             ghidra_config=ghidra,
@@ -437,6 +440,10 @@ class RecCmpProject:
                 project.targets[target_id].recompiled_pdb = (
                     build_directory / build_target.pdb
                 )
+                if build_target.map:
+                    project.targets[target_id].recompiled_map = (
+                        build_directory / build_target.map
+                    )
 
         return project
 
@@ -599,10 +606,13 @@ def detect_project(
         def detect_recompiled(filename: str):
             for binary in search_path_append_file(search_path, filename):
                 pdb = binary.with_suffix(".pdb")
+                map_ = binary.with_suffix(".map")
                 if binary.is_file():
                     if pdb.is_file():
+                        map_path = map_ if map_.is_file() else None
                         build_data.targets.setdefault(
-                            target_id, BuildFileTarget(path=binary, pdb=pdb)
+                            target_id,
+                            BuildFileTarget(path=binary, pdb=pdb, map=map_path),
                         )
                         logger.info("Found %s -> %s", target_id, binary)
                         logger.info("Found %s -> %s", target_id, pdb)

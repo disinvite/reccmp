@@ -8,7 +8,8 @@ from collections.abc import Sequence
 from reccmp.formats.exceptions import (
     InvalidStringError,
 )
-from reccmp.formats import PEImage, TextFile
+from reccmp.formats import Image, PEImage, TextFile
+from reccmp.formats.msvc_map import MsvcMap
 from reccmp.cvdump import CvdumpTypesParser, CvdumpAnalysis
 from reccmp.parser import DecompCodebase
 from reccmp.parser.marker import ProjectAliases
@@ -145,7 +146,7 @@ def load_cvdump_lines(
 def load_markers(
     code_files: Sequence[TextFile],
     lines_db: LinesDb,
-    orig_bin: PEImage,
+    orig_bin: Image,
     target_id: str,
     db: EntityDb,
     encoding: str = "latin1",
@@ -329,3 +330,48 @@ def load_csv(db: EntityDb, csv_file: TextFile):
     with db.batch() as batch:
         for addr, values in rows:
             batch.set(ImageId.ORIG, addr, **values)
+
+
+def load_map_file(file: TextFile, db: EntityDb, lines_db: LinesDb, recomp_bin: Image):
+    msvc_map = MsvcMap(file.text)
+
+    with db.batch() as batch:
+        for (section, offset), node in msvc_map.nodes.items():
+            addr = recomp_bin.get_abs_addr(section, offset)
+
+            if node.decorated_name is not None:
+                batch.set(
+                    ImageId.RECOMP,
+                    addr,
+                    symbol=node.decorated_name,
+                    name=node.decorated_name,
+                )
+
+            if node.node_type is not None:
+                batch.set(ImageId.RECOMP, addr, type=node.node_type)
+
+    for line_section in msvc_map.lines:
+        if line_section.segment.endswith("_TEXT"):
+            continue
+
+        output_lines = []
+        sizes = {}
+        last_start = None
+
+        for (section, offset), line in line_section.lines:
+            addr = recomp_bin.get_abs_addr(section, offset)
+            if last_start is None:
+                last_start = addr
+
+            if line == 0:
+                sizes[last_start] = addr - last_start
+                last_start = None
+            else:
+                output_lines.append((line, addr))
+
+        lines_db.add_lines(line_section.path, output_lines)
+        lines_db.mark_function_starts(sizes.keys())
+
+        with db.batch() as batch:
+            for addr, size in sizes.items():
+                batch.set(ImageId.RECOMP, addr, size=size)

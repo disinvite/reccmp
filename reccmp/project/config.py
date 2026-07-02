@@ -122,6 +122,7 @@ class BuildFileTarget:
 
     path: Path
     pdb: Path
+    map: Path | None = None
 
 
 class BuildFile(YmlFileModel):

@@ -5,3 +5,4 @@ pydantic==2.13.4
 ruamel.yaml
 pydemumble==0.0.1
 pyghidra==2.2.0
+iced-x86==1.21.0

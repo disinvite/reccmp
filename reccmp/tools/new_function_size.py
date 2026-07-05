@@ -17,52 +17,13 @@ from iced_x86 import (
 )
 from reccmp.compare import Compare
 from reccmp.formats import Image
+from reccmp.compare.asm.const import ICED_MNEMONIC_JUMPS, ICED_IMMEDIATE_OPKINDS
 from reccmp.types import ConcreteBuffer, EntityType, ImageId
 from reccmp.project.detect import (
     RecCmpProjectException,
     argparse_add_project_target_args,
     argparse_parse_project_target,
 )
-
-ICED_MNEMONIC_JUMPS = frozenset(
-    [
-        Mnemonic.JA,
-        Mnemonic.JAE,
-        Mnemonic.JB,
-        Mnemonic.JBE,
-        Mnemonic.JCXZ,
-        Mnemonic.JE,
-        Mnemonic.JECXZ,
-        Mnemonic.JG,
-        Mnemonic.JGE,
-        Mnemonic.JL,
-        Mnemonic.JLE,
-        Mnemonic.JMP,
-        Mnemonic.JMPE,
-        Mnemonic.JNE,
-        Mnemonic.JNO,
-        Mnemonic.JNP,
-        Mnemonic.JNS,
-        Mnemonic.JO,
-        Mnemonic.JP,
-        Mnemonic.JRCXZ,
-        Mnemonic.JS,
-    ]
-)
-ICED_IMMEDIATE_OPKINDS = frozenset(
-    [
-        OpKind.IMMEDIATE8,
-        OpKind.IMMEDIATE8_2ND,
-        OpKind.IMMEDIATE16,
-        OpKind.IMMEDIATE32,
-        OpKind.IMMEDIATE64,
-        OpKind.IMMEDIATE8TO16,
-        OpKind.IMMEDIATE8TO32,
-        OpKind.IMMEDIATE8TO64,
-        OpKind.IMMEDIATE32TO64,
-    ]
-)
-
 
 # Ignore all compare-db messages.
 logging.getLogger("reccmp.compare").addHandler(logging.NullHandler())

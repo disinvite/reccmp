@@ -14,33 +14,8 @@ from iced_x86 import (
     OpKind,
     Mnemonic,
 )
+from .const import ICED_MNEMONIC_JUMPS
 from .types import DisasmLiteInst
-
-ICED_MNEMONIC_JUMPS = frozenset(
-    [
-        Mnemonic.JA,
-        Mnemonic.JAE,
-        Mnemonic.JB,
-        Mnemonic.JBE,
-        Mnemonic.JCXZ,
-        Mnemonic.JE,
-        Mnemonic.JECXZ,
-        Mnemonic.JG,
-        Mnemonic.JGE,
-        Mnemonic.JL,
-        Mnemonic.JLE,
-        Mnemonic.JMP,
-        Mnemonic.JMPE,
-        Mnemonic.JNE,
-        Mnemonic.JNO,
-        Mnemonic.JNP,
-        Mnemonic.JNS,
-        Mnemonic.JO,
-        Mnemonic.JP,
-        Mnemonic.JRCXZ,
-        Mnemonic.JS,
-    ]
-)
 
 # _________________
 formatter = Formatter(FormatterSyntax.INTEL)

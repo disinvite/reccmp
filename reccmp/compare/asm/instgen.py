@@ -7,26 +7,11 @@ from enum import Enum, auto
 from typing import Literal, NamedTuple
 from iced_x86 import (
     Decoder,
-    Formatter,
-    FormatterSyntax,
     Instruction,
-    MemorySizeOptions,
     OpKind,
     Mnemonic,
 )
 from .const import ICED_MNEMONIC_JUMPS
-from .types import DisasmLiteInst
-
-# _________________
-formatter = Formatter(FormatterSyntax.INTEL)
-formatter.hex_prefix = "0x"
-formatter.hex_suffix = ""
-formatter.uppercase_hex = False
-formatter.show_branch_size = False
-formatter.memory_size_options = MemorySizeOptions.ALWAYS
-formatter.space_after_operand_separator = True
-formatter.space_between_memory_add_operators = True
-formatter.space_between_memory_mul_operators = False
 
 
 class SectionType(Enum):
@@ -37,7 +22,7 @@ class SectionType(Enum):
 
 class CodeSection(NamedTuple):
     type: Literal[SectionType.CODE]
-    contents: list[DisasmLiteInst]
+    contents: list[Instruction]
 
 
 TabSectionType = Literal[SectionType.DATA_TAB] | Literal[SectionType.ADDR_TAB]
@@ -72,17 +57,7 @@ class InstructGen:
         self.analysis()
 
     def _finish_code_section(self, contents: list[Instruction]):
-        instructions = [
-            DisasmLiteInst(
-                inst.ip,
-                inst.len,
-                formatter.format_mnemonic(inst),
-                formatter.format_all_operands(inst),
-            )
-            for inst in contents
-        ]
-
-        self.sections.append(CodeSection(SectionType.CODE, instructions))
+        self.sections.append(CodeSection(SectionType.CODE, contents))
 
     def _finish_tab_section(self, type_: TabSectionType, stuff: list[tuple[int, int]]):
         self.sections.append(TabSection(type_, stuff))

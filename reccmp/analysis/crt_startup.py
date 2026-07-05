@@ -3,10 +3,16 @@ import re
 import struct
 from dataclasses import dataclass
 from typing import Callable, Iterator
+from iced_x86 import (
+    Formatter,
+    FormatterSyntax,
+    Instruction,
+    MemorySizeOptions,
+    Mnemonic,
+)
 from typing_extensions import Buffer
-from reccmp.compare.asm.const import JUMP_MNEMONICS
+from reccmp.compare.asm.const import ICED_MNEMONIC_JUMPS
 from reccmp.compare.asm.instgen import (
-    DisasmLiteInst,
     InstructGen,
     SectionType,
 )
@@ -89,6 +95,17 @@ class UsedAddressCollector:
     def analyze(self, data: Buffer, start_addr: int):
         ig = InstructGen(bytes(data), start_addr, True)
 
+        # _________________
+        formatter = Formatter(FormatterSyntax.INTEL)
+        formatter.hex_prefix = "0x"
+        formatter.hex_suffix = ""
+        formatter.uppercase_hex = False
+        formatter.show_branch_size = False
+        formatter.memory_size_options = MemorySizeOptions.ALWAYS
+        formatter.space_after_operand_separator = True
+        formatter.space_between_memory_add_operators = True
+        formatter.space_between_memory_mul_operators = False
+
         instructions = (
             inst
             for section in ig.sections
@@ -97,19 +114,30 @@ class UsedAddressCollector:
         )
 
         for inst in instructions:
-            assert isinstance(inst, DisasmLiteInst)
-            if inst.mnemonic == "ret":
+            assert isinstance(inst, Instruction)
+            if inst.mnemonic in (Mnemonic.RET, Mnemonic.RETF):
                 break
 
-            if inst.mnemonic in JUMP_MNEMONICS:
+            if inst.mnemonic in ICED_MNEMONIC_JUMPS:
                 continue
 
-            if inst.mnemonic in ("mov", "fstp"):
-                dst_operand, _, src_operand = inst.op_str.partition(", ")
+            if inst.op_count == 0:
+                continue
+
+            inst_op_str = formatter.format_all_operands(inst)
+
+            # TODO
+            # if inst.op_kind(0) == OpKind.MEMORY and inst.memory_segment == Register.DS:
+            #     self._append_addrs(dst_operand, True)
+
+            # TODO
+
+            if inst.mnemonic in (Mnemonic.MOV, Mnemonic.FSTP):
+                dst_operand, _, src_operand = inst_op_str.partition(", ")
                 self._append_addrs(dst_operand, True)
                 self._append_addrs(src_operand, False)
             else:
-                self._append_addrs(inst.op_str, False)
+                self._append_addrs(inst_op_str, False)
 
 
 def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:

@@ -16,7 +16,8 @@ from iced_x86 import (
     RegisterInfo,
 )
 from reccmp.compare import Compare
-from reccmp.formats import Image
+from reccmp.compare.db import EntityDb
+from reccmp.formats.image import ImageRegion
 from reccmp.compare.asm.const import ICED_MNEMONIC_JUMPS, ICED_IMMEDIATE_OPKINDS
 from reccmp.types import ConcreteBuffer, EntityType, ImageId
 from reccmp.project.detect import (
@@ -208,19 +209,22 @@ class BoundaryMark(enum.Enum):
     SEARCH_END = enum.auto()
 
 
-def get_regions(image: Image) -> dict[int, BoundaryMark]:
+def get_regions(sect: ImageRegion) -> dict[int, BoundaryMark]:
     """Find regions that contain some number of functions that are separated by padding bytes."""
-    output = {}
+    output = {
+        sect.addr: BoundaryMark.SEARCH_START,
+        sect.addr + sect.size: BoundaryMark.SEARCH_END,
+    }
 
-    for sect in image.get_code_regions():
-        # Get the verified runs of padding bytes between functions.
-        boundaries = find_padding_byte_boundaries(sect.data, sect.addr)
+    # Get the verified runs of padding bytes between functions.
+    boundaries = find_padding_byte_boundaries(sect.data, sect.addr)
 
-        # Turn these inside out to return the ranges of non-padding bytes.
-        # These contain 1-to-N functions.
+    # Turn these inside out to return the ranges of non-padding bytes.
+    # These contain 1-to-N functions.
 
+    if boundaries:
         first_padding_start, _ = boundaries[0]
-        output[sect.addr] = BoundaryMark.SEARCH_START
+        # output[sect.addr] = BoundaryMark.SEARCH_START
         output[first_padding_start] = BoundaryMark.SEARCH_END
 
         for (_, x_pad_stop), (y_pad_start, _) in itertools.pairwise(boundaries):
@@ -229,13 +233,9 @@ def get_regions(image: Image) -> dict[int, BoundaryMark]:
 
         _, last_padding_stop = boundaries[-1]
         output[last_padding_stop] = BoundaryMark.SEARCH_START
-        output[sect.addr + sect.size] = BoundaryMark.SEARCH_END
+        # output[sect.addr + sect.size] = BoundaryMark.SEARCH_END
 
-        # TODO: needs to be done per-section.
-        # Meaning: pass the ImageSection as the argument, not the entire Image.
-        break
-
-    return {}
+    return output
 
 
 def add_known_boundaries(
@@ -275,41 +275,28 @@ def add_known_boundaries(
                 last_mark = None
 
 
-def find_seh_starts(raw: ConcreteBuffer) -> list[int]:
+def find_seh_starts(raw: ConcreteBuffer, base_addr: int = 0) -> list[int]:
     """Returns offset into buffer: presumably this is the entire segment."""
     r_mov_eax_fs_0 = re.compile(b"\x64\xa1\x00\x00\x00\x00")
-    return [match.start() for match in r_mov_eax_fs_0.finditer(raw)]
+    return [base_addr + match.start() for match in r_mov_eax_fs_0.finditer(raw)]
 
 
-def main():
-    # pylint: disable=too-many-locals
-    args = parse_args()
-    try:
-        target = argparse_parse_project_target(args=args)
-    except RecCmpProjectException as e:
-        logger.error(e.args[0])
-        return 1
+def get_function_starts(
+    db: EntityDb, image_id: ImageId, range_: range
+) -> dict[int, BoundaryMark]:
+    known_functions = {}
 
-    compare = Compare.from_target(target)
-    search_regions = get_regions(compare.orig_bin)
-
-    ##
-    known_functions: dict[int, BoundaryMark] = {}
-    exclude_list = set()
-
-    image_id = ImageId.ORIG
-    # pylint: disable=protected-access
-    for ent in compare._db.all(image_id):
+    for ent in db.all_in_range(image_id, range_):
         addr = ent.addr(image_id)
         assert addr is not None
 
-        name = ent.get("name")
-        if name and (
-            "__Unwind" in name or "__ehhandler" in name or "__ehfuncinfo" in name
-        ):
-            exclude_list.add(addr)
+        # name = ent.get("name")
+        # if name and (
+        #    "__Unwind" in name or "__ehhandler" in name or "__ehfuncinfo" in name
+        # ):
+        #    exclude_list.add(addr)
 
-        elif ent.get("type") == EntityType.FUNCTION:
+        if ent.get("type") == EntityType.FUNCTION:
             func_size = ent.size(image_id)
             if func_size:
                 # size is at least 1 byte.
@@ -318,36 +305,55 @@ def main():
             else:
                 known_functions[addr] = BoundaryMark.SEARCH_START
 
-    ##
+    return known_functions
 
-    regions = list(add_known_boundaries(search_regions, known_functions))
 
-    for region in regions:
-        raw = compare.orig_bin.read(region.start, len(region))
+def run(compare: Compare):
+    image_id = ImageId.ORIG
 
-        start = region.start
-        chunk = raw
-        while chunk:
-            found = FunctionWalker(chunk, start).run()
-            # print(f"{found.start:08x} -> {found.stop:08x}")
+    for sect in compare.orig_bin.get_code_regions():
+        search_regions = get_regions(sect)
 
-            # No text output.
-            # if found.start not in exclude_list:
-            #     print(f"{found.start:08x},function,{found.stop - found.start}")
+        # TODO: check against known recomp size. Flag discrepancies
+        # seh_starts = find_seh_starts(sect.data, sect.addr)
 
-            end_offset = found.stop - region.start
-            start = found.stop
-            chunk = raw[end_offset:]
+        # pylint: disable=protected-access
+        known_functions = get_function_starts(compare._db, image_id, sect.range)
 
-            # Remove any padding bytes
-            match = re.match(rb"\x00+|\x90+|\xcc+", chunk)
-            if match is not None:
-                start += match.end()
-                chunk = chunk[match.end() :]
+        regions = list(add_known_boundaries(search_regions, known_functions))
 
-            # print(f"{region.start:08x} -> {region.stop:08x} " + str(flags) if flags else "")
+        for region in regions:
+            raw = compare.orig_bin.read(region.start, len(region))
 
-        # break
+            start = region.start
+            chunk = raw
+            while chunk:
+                found = FunctionWalker(chunk, start).run()
+
+                # Intended for CSV output:
+                # print(f"{found.start:08x},function,{found.stop - found.start}")
+
+                end_offset = found.stop - region.start
+                start = found.stop
+                chunk = raw[end_offset:]
+
+                # Remove any padding bytes
+                match = re.match(rb"\x00+|\x90+|\xcc+", chunk)
+                if match is not None:
+                    start += match.end()
+                    chunk = chunk[match.end() :]
+
+
+def main():
+    args = parse_args()
+    try:
+        target = argparse_parse_project_target(args=args)
+    except RecCmpProjectException as e:
+        logger.error(e.args[0])
+        return 1
+
+    compare = Compare.from_target(target)
+    run(compare)
 
     return False
 

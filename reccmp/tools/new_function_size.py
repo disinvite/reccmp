@@ -46,16 +46,18 @@ class FunctionWalker:
     seen: set[int]
     ip_queue: list[int]
     calls: list[int]
-    last_addr: int
+    instructions: dict[int, Instruction]
+    tables: dict[int, tuple[int, bool]]
 
     def __init__(self, raw: bytes, base_addr: int):
         self.raw = raw
         self.base_addr = base_addr
         self.extent = range(base_addr, base_addr + len(raw))
-        self.last_addr = base_addr
         self.decoder = Decoder(32, self.raw, ip=self.base_addr)
         self.ip_queue = [base_addr]
         self.calls = []
+        self.instructions = {}
+        self.tables = {}
 
     def _jump_table(self, cache: list[Instruction]) -> None:
         """We have hit a jump table. (Jump displacement instruction).
@@ -113,12 +115,14 @@ class FunctionWalker:
             return
 
         if data_table_addr > 0 and table_size > 0:
-            self.last_addr = max(self.last_addr, data_table_addr + table_size)
+            self.tables[data_table_addr] = (table_size, False)
             data_table_raw = self.raw[data_table_addr - self.base_addr :][:table_size]
-            table_size = max(list(data_table_raw))
+            # The jump table's size: the maximum index value from the data table.
+            table_size = max(list(data_table_raw)) + 1
 
         if table_size > 0:
-            self.last_addr = max(self.last_addr, jump_table_addr + (table_size * 4))
+            # TODO: `* 4` based on pointer size for this image
+            self.tables[jump_table_addr] = (table_size * 4, True)
             jump_table_raw = self.raw[jump_table_addr - self.base_addr :][
                 : table_size * 4
             ]
@@ -128,15 +132,13 @@ class FunctionWalker:
 
     def _walk(self) -> None:
         cache = []
-        inst = None  # meh
 
         for inst in self.decoder:
             # We have already seen this instruction.
             # The rest would be redundant.
-            if inst.ip in self.seen:
+            if inst.ip in self.instructions:
                 break
 
-            self.seen.add(inst.ip)
             cache.append(inst)
 
             if inst.mnemonic in (Mnemonic.RET, Mnemonic.RETF):
@@ -164,11 +166,12 @@ class FunctionWalker:
             if inst.mnemonic == Mnemonic.JMP:
                 break
 
-        if inst:
-            self.last_addr = max(self.last_addr, inst.ip + inst.len)
+        self.instructions.update({inst.ip: inst for inst in cache})
 
     def run(self) -> range:
         self.seen = set()
+
+        last_addr = self.base_addr
 
         while self.ip_queue:
             addr = self.ip_queue.pop(0)
@@ -181,7 +184,13 @@ class FunctionWalker:
 
             self._walk()
 
-        return range(self.base_addr, self.last_addr)
+        last_addr = max(self.instructions.keys())
+        last_addr = self.instructions[last_addr].next_ip
+
+        for table_addr, (table_size, _) in self.tables.items():
+            last_addr = max(last_addr, table_addr + table_size)
+
+        return range(self.base_addr, last_addr)
 
 
 def find_padding_byte_boundaries(
@@ -322,7 +331,7 @@ def run(db: EntityDb, image_id: ImageId, binfile: Image):
                 # is_seh_function = found.start in seh_starts
                 # discovered_size = found.stop - found.start
                 # ent = db.get(image_id, found.start)
-                # if ent is None or ent.size(image_id) != discovered_size:
+                # if ent is None or ent.size(image_id) is not None and ent.size(image_id) != discovered_size:
                 #     actual_size = "no ent" if ent is None else (ent.size(image_id) or "no size")
                 #     print(f"{found.start:08x},function,{discovered_size:8}    {actual_size:10}   {'seh' if is_seh_function else '':5}")
 

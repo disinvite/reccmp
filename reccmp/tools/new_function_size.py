@@ -160,11 +160,11 @@ class FunctionWalker:
                     and inst.op0_kind == OpKind.NEAR_BRANCH32
                 ):
                     self.ip_queue.append(inst.near_branch_target)
-                    # Stops on JMP. This may be the end of the function
-                    # or the last instruction before an inline jump table.
 
-            if inst.mnemonic == Mnemonic.JMP:
-                break
+                # Stops on JMP. This may be the end of the function
+                # or the last instruction before an inline jump table.
+                if inst.mnemonic == Mnemonic.JMP:
+                    break
 
         self.instructions.update({inst.ip: inst for inst in cache})
 

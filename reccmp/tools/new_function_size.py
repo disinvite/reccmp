@@ -6,7 +6,7 @@ import itertools
 import logging
 import struct
 import re
-from typing import Iterable, Iterator
+from typing import Iterator
 from iced_x86 import (
     Decoder,
     Instruction,
@@ -35,16 +35,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="folded")
     argparse_add_project_target_args(parser)
     return parser.parse_args()
-
-
-class WalkerItem(enum.Enum):
-    START = enum.auto()
-    INSTRUCTION = enum.auto()
-    CALL = enum.auto()
-    JUMP = enum.auto()
-    JUMP_SWITCH = enum.auto()
-    SWITCH_CASE = enum.auto()
-    END = enum.auto()
 
 
 class FunctionWalker:
@@ -196,70 +186,99 @@ class FunctionWalker:
 
 def find_padding_byte_boundaries(
     raw: ConcreteBuffer, base_addr: int
-) -> Iterator[range]:
+) -> list[tuple[int, int]]:
     """Find runs of padding chars that end on a 16-byte boundary.
     Using a conservative estimate of at least 5 consecutive padding bytes.
     The idea is that we want to exclude the (probably unlikely) occurrence
     of 4 consecutive bytes being used as an immediate value."""
+    output = []
+
     for match in re.finditer(rb"\x90{5,}|\xcc{5,}", raw):
-        if match.end() % 16 == 0:
-            yield range(base_addr + match.start(), base_addr + match.end())
+        start, end = match.span()
+        if end % 16 == 0:
+            output.append((base_addr + start, base_addr + end))
+
+    return output
 
 
-def get_regions(image: Image) -> Iterator[range]:
+class BoundaryMark(enum.Enum):
+    CONFIRMED_START = enum.auto()
+    CONFIRMED_END = enum.auto()
+    SEARCH_START = enum.auto()
+    SEARCH_END = enum.auto()
+
+
+def get_regions(image: Image) -> dict[int, BoundaryMark]:
     """Find regions that contain some number of functions that are separated by padding bytes."""
+    output = {}
+
     for sect in image.get_code_regions():
         # Get the verified runs of padding bytes between functions.
-        boundaries = list(find_padding_byte_boundaries(sect.data, sect.addr))
+        boundaries = find_padding_byte_boundaries(sect.data, sect.addr)
 
         # Turn these inside out to return the ranges of non-padding bytes.
         # These contain 1-to-N functions.
-        yield range(sect.addr, boundaries[0].start)
 
-        for range_a, range_b in itertools.pairwise(boundaries):
-            yield range(range_a.stop, range_b.start)
+        first_padding_start, _ = boundaries[0]
+        output[sect.addr] = BoundaryMark.SEARCH_START
+        output[first_padding_start] = BoundaryMark.SEARCH_END
 
-        yield range(boundaries[-1].stop, sect.addr + sect.size)
+        for (_, x_pad_stop), (y_pad_start, _) in itertools.pairwise(boundaries):
+            output[x_pad_stop] = BoundaryMark.SEARCH_START
+            output[y_pad_start] = BoundaryMark.SEARCH_END
 
-        # TODO: needs to be done per-section
+        _, last_padding_stop = boundaries[-1]
+        output[last_padding_stop] = BoundaryMark.SEARCH_START
+        output[sect.addr + sect.size] = BoundaryMark.SEARCH_END
+
+        # TODO: needs to be done per-section.
+        # Meaning: pass the ImageSection as the argument, not the entire Image.
         break
 
-
-def add_known_boundaries(ranges: Iterable[range], splits: list[int]) -> Iterator[range]:
-    # Safety
-    sorted_ranges = sorted(ranges, key=lambda r: r.start)
-    sorted_splits = sorted(splits)
-
-    # combined = []
-    # combined.extend((0, r) for r in ranges)
-    # combined.extend((1, s) for s in splits)
-
-    while sorted_ranges:
-        range_ = sorted_ranges.pop(0)
-
-        # Burn any too early ones
-        while sorted_splits and sorted_splits[0] < range_.start:
-            sorted_splits.pop(0)
-
-        collect = {range_.start}
-
-        while sorted_splits and sorted_splits[0] in range_:
-            collect.add(sorted_splits.pop(0))
-
-        collect.add(range_.stop)
-
-        for p_x, p_y in itertools.pairwise(sorted(collect)):
-            yield range(p_x, p_y)
+    return {}
 
 
-def region_contains_seh(raw: bytes) -> bool:
-    """Looking for the characteristic `mov eax, fs:[0]` instruction."""
-    return b"\x64\xa1\x00\x00\x00\x00" in raw
+def add_known_boundaries(
+    padded_marks: dict[int, BoundaryMark], confirmed_marks: dict[int, BoundaryMark]
+) -> Iterator[range]:
+    # Overwrite padding marks with confirmed marks. We want only one mark per address.
+    combined = {}
+    combined.update(padded_marks)
+    combined.update(confirmed_marks)
+
+    marks = list(combined.items())
+    marks.sort()
+
+    last_addr = None
+    last_mark = None
+    for addr, mark in marks:
+        if last_mark is None or last_addr is None:
+            if mark in (BoundaryMark.SEARCH_START, BoundaryMark.CONFIRMED_START):
+                last_addr = addr
+                last_mark = mark
+        elif last_mark == BoundaryMark.CONFIRMED_START:
+            if mark == BoundaryMark.CONFIRMED_START:
+                yield range(last_addr, addr)
+                last_addr = addr
+                last_mark = mark
+            elif mark == BoundaryMark.CONFIRMED_END:
+                yield range(last_addr, addr)
+                last_addr = None
+                last_mark = None
+        else:
+            yield range(last_addr, addr)
+            if mark in (BoundaryMark.SEARCH_START, BoundaryMark.CONFIRMED_START):
+                last_addr = addr
+                last_mark = mark
+            else:
+                last_addr = None
+                last_mark = None
 
 
-def region_contains_switch(raw: bytes) -> bool:
-    """Matching a variety of destination registers."""
-    return re.search(rb"\xff\x24.(.{4})", raw) is not None
+def find_seh_starts(raw: ConcreteBuffer) -> list[int]:
+    """Returns offset into buffer: presumably this is the entire segment."""
+    r_mov_eax_fs_0 = re.compile(b"\x64\xa1\x00\x00\x00\x00")
+    return [match.start() for match in r_mov_eax_fs_0.finditer(raw)]
 
 
 def main():
@@ -272,15 +291,16 @@ def main():
         return 1
 
     compare = Compare.from_target(target)
-    padded_regions = get_regions(compare.orig_bin)
+    search_regions = get_regions(compare.orig_bin)
 
     ##
-    known_functions = []
+    known_functions: dict[int, BoundaryMark] = {}
     exclude_list = set()
 
+    image_id = ImageId.ORIG
     # pylint: disable=protected-access
-    for ent in compare._db.all(ImageId.ORIG):
-        addr = ent.addr(ImageId.ORIG)
+    for ent in compare._db.all(image_id):
+        addr = ent.addr(image_id)
         assert addr is not None
 
         name = ent.get("name")
@@ -290,22 +310,20 @@ def main():
             exclude_list.add(addr)
 
         elif ent.get("type") == EntityType.FUNCTION:
-            known_functions.append(addr)
+            func_size = ent.size(image_id)
+            if func_size:
+                # size is at least 1 byte.
+                known_functions[addr] = BoundaryMark.CONFIRMED_START
+                known_functions[addr + func_size] = BoundaryMark.CONFIRMED_END
+            else:
+                known_functions[addr] = BoundaryMark.SEARCH_START
 
     ##
 
-    regions: list[range] = list(add_known_boundaries(padded_regions, known_functions))
+    regions = list(add_known_boundaries(search_regions, known_functions))
 
     for region in regions:
         raw = compare.orig_bin.read(region.start, len(region))
-        has_seh = region_contains_seh(raw)
-        has_switch = region_contains_switch(raw)
-
-        flags = []
-        if has_seh:
-            flags.append("seh")
-        if has_switch:
-            flags.append("switch")
 
         start = region.start
         chunk = raw
@@ -313,8 +331,9 @@ def main():
             found = FunctionWalker(chunk, start).run()
             # print(f"{found.start:08x} -> {found.stop:08x}")
 
-            if found.start not in exclude_list:
-                print(f"{found.start:08x},function,{found.stop - found.start}")
+            # No text output.
+            # if found.start not in exclude_list:
+            #     print(f"{found.start:08x},function,{found.stop - found.start}")
 
             end_offset = found.stop - region.start
             start = found.stop

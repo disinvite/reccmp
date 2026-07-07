@@ -2,7 +2,6 @@
 
 import argparse
 import enum
-import itertools
 import logging
 import struct
 import re
@@ -17,7 +16,7 @@ from iced_x86 import (
 )
 from reccmp.compare import Compare
 from reccmp.compare.db import EntityDb
-from reccmp.formats.image import ImageRegion
+from reccmp.formats.image import Image, ImageRegion
 from reccmp.compare.asm.const import ICED_MNEMONIC_JUMPS, ICED_IMMEDIATE_OPKINDS
 from reccmp.types import ConcreteBuffer, EntityType, ImageId
 from reccmp.project.detect import (
@@ -43,7 +42,7 @@ class FunctionWalker:
     raw: bytes
     base_addr: int
     decoder: Decoder
-    range: range
+    extent: range
     seen: set[int]
     ip_queue: list[int]
     calls: list[int]
@@ -52,13 +51,13 @@ class FunctionWalker:
     def __init__(self, raw: bytes, base_addr: int):
         self.raw = raw
         self.base_addr = base_addr
-        self.range = range(base_addr, base_addr + len(raw))
+        self.extent = range(base_addr, base_addr + len(raw))
         self.last_addr = base_addr
         self.decoder = Decoder(32, self.raw, ip=self.base_addr)
         self.ip_queue = [base_addr]
         self.calls = []
 
-    def _jump_table(self, cache: list[Instruction]):
+    def _jump_table(self, cache: list[Instruction]) -> None:
         """We have hit a jump table. (Jump displacement instruction).
         Walk backwards through the previous instructions looking for:
         1. A data table, if present (1-byte indices into jump table)
@@ -127,7 +126,7 @@ class FunctionWalker:
             for (dword,) in struct.iter_unpack("<I", jump_table_raw):
                 self.ip_queue.append(dword)
 
-    def _walk(self):
+    def _walk(self) -> None:
         cache = []
         inst = None  # meh
 
@@ -168,13 +167,13 @@ class FunctionWalker:
         if inst:
             self.last_addr = max(self.last_addr, inst.ip + inst.len)
 
-    def run(self):
+    def run(self) -> range:
         self.seen = set()
 
         while self.ip_queue:
             addr = self.ip_queue.pop(0)
 
-            if addr not in self.range:
+            if addr not in self.extent:
                 continue
 
             self.decoder.ip = addr
@@ -221,19 +220,9 @@ def get_regions(sect: ImageRegion) -> dict[int, BoundaryMark]:
 
     # Turn these inside out to return the ranges of non-padding bytes.
     # These contain 1-to-N functions.
-
-    if boundaries:
-        first_padding_start, _ = boundaries[0]
-        # output[sect.addr] = BoundaryMark.SEARCH_START
-        output[first_padding_start] = BoundaryMark.SEARCH_END
-
-        for (_, x_pad_stop), (y_pad_start, _) in itertools.pairwise(boundaries):
-            output[x_pad_stop] = BoundaryMark.SEARCH_START
-            output[y_pad_start] = BoundaryMark.SEARCH_END
-
-        _, last_padding_stop = boundaries[-1]
-        output[last_padding_stop] = BoundaryMark.SEARCH_START
-        # output[sect.addr + sect.size] = BoundaryMark.SEARCH_END
+    for code_end, code_start in boundaries:
+        output[code_end] = BoundaryMark.SEARCH_END
+        output[code_start] = BoundaryMark.SEARCH_START
 
     return output
 
@@ -308,30 +297,34 @@ def get_function_starts(
     return known_functions
 
 
-def run(compare: Compare):
-    image_id = ImageId.ORIG
-
-    for sect in compare.orig_bin.get_code_regions():
+def run(db: EntityDb, image_id: ImageId, binfile: Image):
+    for sect in binfile.get_code_regions():
         search_regions = get_regions(sect)
 
         # TODO: check against known recomp size. Flag discrepancies
         # seh_starts = find_seh_starts(sect.data, sect.addr)
 
-        # pylint: disable=protected-access
-        known_functions = get_function_starts(compare._db, image_id, sect.range)
+        known_functions = get_function_starts(db, image_id, sect.range)
 
         regions = list(add_known_boundaries(search_regions, known_functions))
 
         for region in regions:
-            raw = compare.orig_bin.read(region.start, len(region))
+            raw = binfile.read(region.start, len(region))
 
             start = region.start
             chunk = raw
             while chunk:
                 found = FunctionWalker(chunk, start).run()
+                if found.start == found.stop:
+                    break  # TODO: shouldn't happen
 
                 # Intended for CSV output:
-                # print(f"{found.start:08x},function,{found.stop - found.start}")
+                # is_seh_function = found.start in seh_starts
+                # discovered_size = found.stop - found.start
+                # ent = db.get(image_id, found.start)
+                # if ent is None or ent.size(image_id) != discovered_size:
+                #     actual_size = "no ent" if ent is None else (ent.size(image_id) or "no size")
+                #     print(f"{found.start:08x},function,{discovered_size:8}    {actual_size:10}   {'seh' if is_seh_function else '':5}")
 
                 end_offset = found.stop - region.start
                 start = found.stop
@@ -353,7 +346,9 @@ def main():
         return 1
 
     compare = Compare.from_target(target)
-    run(compare)
+
+    # pylint: disable=protected-access
+    run(compare._db, ImageId.ORIG, compare.orig_bin)
 
     return False
 

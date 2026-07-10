@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 import argparse
 import logging
 import os
@@ -13,6 +14,7 @@ from reccmp.utils import (
     print_combined_diff,
     diff_json,
     percent_string,
+    safe_denominator,
     write_html_report,
 )
 
@@ -55,10 +57,6 @@ def print_match_verbose(match: DiffReport, show_both_addrs: bool = False):
         addrs = f"0x{match.orig_addr:x} / 0x{match.recomp_addr:x}"
     else:
         addrs = hex(match.orig_addr)
-
-    if match.is_stub:
-        print(f"{addrs}: {match.name} is a stub. No diff.")
-        return
 
     grouped_diff = match.match_type != EntityType.VTABLE
     udiff = raw_diff_to_udiff(match.result.diff, grouped=grouped_diff)
@@ -154,7 +152,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--svg", "-S", metavar="<file>", help="Generate SVG graphic of progress"
     )
-    parser.add_argument("--svg-icon", metavar="icon", help="Icon to use in SVG (PNG)")
+    parser.add_argument(
+        "--svg-icon", metavar="icon", type=Path, help="Icon to use in SVG (PNG)"
+    )
     parser.add_argument(
         "--print-rec-addr",
         action="store_true",
@@ -288,8 +288,10 @@ def main() -> int:
             args.json, serialize_reccmp_report(report, diff_included=diff_included)
         )
 
+    target_icon = args.svg_icon or target.report_config.icon
+
     if args.html is not None:
-        write_html_report(args.html, report)
+        write_html_report(args.html, report, target_icon)
 
     implemented_funcs = function_count
 
@@ -302,33 +304,36 @@ def main() -> int:
         # Use the alternate value if it exceeds the number of annotated functions
         function_count = max(function_count, int(args.total))
 
-    if function_count > 0:
-        implemented = implemented_funcs / function_count * 100
-        effective_accuracy = total_effective_accuracy / implemented_funcs * 100
-        # actual_accuracy = total_accuracy / implemented_funcs * 100
-        progress = total_effective_accuracy / function_count * 100
-        alignment_percentage = functions_aligned_count / function_count * 100
+    implemented = implemented_funcs / safe_denominator(function_count) * 100
 
+    effective_accuracy = (
+        total_effective_accuracy / safe_denominator(implemented_funcs) * 100
+    )
+    progress = total_effective_accuracy / safe_denominator(function_count) * 100
+    alignment_percentage = (
+        functions_aligned_count / safe_denominator(function_count) * 100
+    )
+
+    print(
+        f"\nImplemented:  {implemented:.2f}%  ({implemented_funcs} / {function_count})"
+    )
+    print(f"Accuracy:     {effective_accuracy:.2f}%")
+    print(f"Progress:     {progress:.2f}%")
+
+    if functions_aligned_count > 0:
         print(
-            f"\nImplemented:  {implemented:.2f}%  ({implemented_funcs} / {function_count})"
+            f"{functions_aligned_count} functions are aligned ({alignment_percentage:.2f}%)"
         )
-        print(f"Accuracy:     {effective_accuracy:.2f}%")
-        print(f"Progress:     {progress:.2f}%")
 
-        if functions_aligned_count > 0:
-            print(
-                f"{functions_aligned_count} functions are aligned ({alignment_percentage:.2f}%)"
-            )
-
-        if args.svg is not None:
-            gen_svg(
-                args.svg,
-                os.path.basename(target.original_path),
-                args.svg_icon,
-                implemented_funcs,
-                function_count,
-                total_effective_accuracy,
-            )
+    if args.svg is not None:
+        gen_svg(
+            args.svg,
+            os.path.basename(target.original_path),
+            target_icon,
+            implemented_funcs,
+            function_count,
+            total_effective_accuracy,
+        )
     return 0
 
 

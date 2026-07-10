@@ -63,6 +63,7 @@ class YmlReportConfig(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("ignore-variables", "ignore_variables"),
     )
+    icon: Path | None = Field(default=None)
 
     @classmethod
     def default(cls) -> "YmlReportConfig":
@@ -90,6 +91,10 @@ class ProjectFileTarget(BaseModel):
     encoding: str | None = Field(default=None)
     ghidra: YmlGhidraConfig = Field(default_factory=YmlGhidraConfig.default)
     report: YmlReportConfig = Field(default_factory=YmlReportConfig.default)
+    marker_aliases: dict[str, str] = Field(
+        validation_alias=AliasChoices("marker-aliases", "marker_aliases"),
+        default_factory=dict,
+    )
 
 
 class ProjectFile(YmlFileModel):

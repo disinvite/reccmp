@@ -1,24 +1,50 @@
 import argparse
 import asyncio
-from aiohttp import ClientSession, web
-from yarl import URL
+from datetime import datetime
+from aiohttp import (
+    ClientSession,
+    ClientTimeout,
+    ClientConnectorError,
+    ConnectionTimeoutError,
+    web,
+)
 from watchfiles import awatch
+from yarl import URL
 from reccmp.compare import Compare
 from reccmp.project.detect import (
     RecCmpTarget,
     argparse_add_project_target_args,
     argparse_parse_project_target,
 )
+from reccmp.project.logging import (
+    argparse_add_logging_args,
+    argparse_parse_logging,
+)
 
 
 class AppState:
     target: RecCmpTarget
+    """The selected target and all its vital information."""
     is_ready: bool
+    """False if we are regenerating the report because of a recompile."""
     reccmp: Compare
+    """The reccmp core."""
+    last_update: datetime
+    """The time of the most recent interaction with the server or update to the report."""
 
     def __init__(self, target: RecCmpTarget):
+        # TODO: Cache reccmp report, report staleness if we are recalculating this target.
         self.target = target
         self.is_ready = True
+        self.last_update = datetime.now()
+
+    def bump(self):
+        """Keep this session active if a file just changed or the user requested some data."""
+        self.last_update = datetime.now()
+
+    def should_timeout(self, timeout_s: int) -> bool:
+        dt = datetime.now() - self.last_update
+        return dt.total_seconds() > timeout_s
 
     def reset(self):
         if not self.is_ready:
@@ -42,8 +68,10 @@ async def start_reccmp(app):
 async def watch_for_recompile(state: AppState):
     try:
         async for _ in awatch(state.target.recompiled_path):
+            state.bump()
             print("Rebuilding...")
             loop = asyncio.get_running_loop()
+            # TODO: Interrupt reccmp core here when this becomes possible.
             loop.run_in_executor(None, state.reset)
     except asyncio.CancelledError:
         pass
@@ -113,18 +141,30 @@ async def handle_ready(request):
     return web.json_response({"ready": state.is_ready})
 
 
+@web.middleware
+async def bump_timeout(request, handler):
+    request.app[STATE_KEY].bump()
+    return await handler(request)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="web")
     parser.add_argument("--port", type=int, required=False, default=8080)
     parser.add_argument("--daemon", action="store_true", default=False)
+
     argparse_add_project_target_args(parser)
-    return parser.parse_args()
+    argparse_add_logging_args(parser)
+
+    args = parser.parse_args()
+    argparse_parse_logging(args)
+
+    return args
 
 
-def server_main(args: argparse.Namespace):
+async def server_main(args: argparse.Namespace):
     target = argparse_parse_project_target(args=args)
 
-    app = web.Application()
+    app = web.Application(middlewares=[bump_timeout])
     app[STATE_KEY] = AppState(target)
     app.on_startup.append(start_reccmp)
     app.on_startup.append(start_watching)
@@ -138,7 +178,44 @@ def server_main(args: argparse.Namespace):
             web.get("/addr/{addr}", handle_addr, name="get_addr"),
         ]
     )
-    web.run_app(app, host="127.0.0.1", port=args.port)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="127.0.0.1", port=args.port)
+    await site.start()
+
+    try:
+        while True:
+            await asyncio.sleep(10)
+            # Shutdown after some period of inactivity
+            # TODO: tune this value
+            if app[STATE_KEY].should_timeout(20):
+                print("Timed out.")
+                break
+
+    except asyncio.CancelledError:
+        # TODO: Interrupt reccmp core here when this becomes possible.
+        pass
+    finally:
+        print("Exiting...")
+        await runner.cleanup()
+
+    # await asyncio.Event().wait()
+    # web.run_app(app, host="127.0.0.1", port=args.port)
+
+
+async def try_the_server(args: argparse.Namespace) -> bool:
+    base_url = URL.build(scheme="http", host="127.0.0.1", port=args.port)
+
+    timeout_settings = ClientTimeout(connect=3)
+    async with ClientSession(base_url=base_url, timeout=timeout_settings) as session:
+        try:
+            async with session.get("/ready") as response:
+                return response.status == 200
+
+        except (ClientConnectorError, ConnectionTimeoutError):
+            pass
+
+    return False
 
 
 async def client_main(args: argparse.Namespace):
@@ -150,14 +227,22 @@ async def client_main(args: argparse.Namespace):
                 print(f"{ent['addr']:#08x}  {ent['name']}")
 
 
-def main():
+async def async_main():
     args = parse_args()
 
     if args.daemon:
-        server_main(args)
+        await server_main(args)
         return
 
-    asyncio.run(client_main(args))
+    if await try_the_server(args):
+        await client_main(args)
+    else:
+        print("server not running!")
+
+
+def main():
+    # TODO: Change setup.cfg entry point?
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":

@@ -2,14 +2,9 @@ import argparse
 import asyncio
 from datetime import datetime
 from aiohttp import (
-    ClientSession,
-    ClientTimeout,
-    ClientConnectorError,
-    ConnectionTimeoutError,
     web,
 )
 from watchfiles import awatch
-from yarl import URL
 from reccmp.compare import Compare
 from reccmp.project.detect import (
     RecCmpTarget,
@@ -150,7 +145,6 @@ async def bump_timeout(request, handler):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="web")
     parser.add_argument("--port", type=int, required=False, default=8080)
-    parser.add_argument("--daemon", action="store_true", default=False)
 
     argparse_add_project_target_args(parser)
     argparse_add_logging_args(parser)
@@ -203,41 +197,9 @@ async def server_main(args: argparse.Namespace):
     # web.run_app(app, host="127.0.0.1", port=args.port)
 
 
-async def try_the_server(args: argparse.Namespace) -> bool:
-    base_url = URL.build(scheme="http", host="127.0.0.1", port=args.port)
-
-    timeout_settings = ClientTimeout(connect=3)
-    async with ClientSession(base_url=base_url, timeout=timeout_settings) as session:
-        try:
-            async with session.get("/ready") as response:
-                return response.status == 200
-
-        except (ClientConnectorError, ConnectionTimeoutError):
-            pass
-
-    return False
-
-
-async def client_main(args: argparse.Namespace):
-    base_url = URL.build(scheme="http", host="127.0.0.1", port=args.port)
-    async with ClientSession(base_url=base_url) as session:
-        async with session.get("/list") as response:
-            jason = await response.json()
-            for ent in jason:
-                print(f"{ent['addr']:#08x}  {ent['name']}")
-
-
 async def async_main():
     args = parse_args()
-
-    if args.daemon:
-        await server_main(args)
-        return
-
-    if await try_the_server(args):
-        await client_main(args)
-    else:
-        print("server not running!")
+    await server_main(args)
 
 
 def main():

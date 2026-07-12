@@ -8,10 +8,6 @@ from aiohttp import (
     ConnectionTimeoutError,
 )
 from yarl import URL
-from reccmp.project.detect import (
-    argparse_add_project_target_args,
-    argparse_parse_project_target,
-)
 from reccmp.project.logging import (
     argparse_add_logging_args,
     argparse_parse_logging,
@@ -20,9 +16,11 @@ from reccmp.project.logging import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="web")
+    parser.add_argument(
+        "--target", metavar="<target-id>", help="ID of the target", required=True
+    )
     parser.add_argument("--port", type=int, required=False, default=8080)
 
-    argparse_add_project_target_args(parser)
     argparse_add_logging_args(parser)
 
     args = parser.parse_args()
@@ -71,8 +69,6 @@ async def client_main(session: ClientSession) -> bool:
 
 async def async_main():
     args = parse_args()
-    # TODO: actually use the target
-    _ = argparse_parse_project_target(args)
 
     base_url = URL.build(scheme="http", host="127.0.0.1", port=args.port)
     # TODO: Any reason for connection delay on localhost?

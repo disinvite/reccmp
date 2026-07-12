@@ -1,7 +1,7 @@
 import logging
 import difflib
 import struct
-from typing import Iterable, Iterator
+from typing import Iterator
 from typing_extensions import Self
 from reccmp.project.detect import RecCmpTarget
 from reccmp.compare.diff import EntityCompareResult, RawDiffOutput
@@ -32,8 +32,8 @@ from .match_msvc import (
     match_imports,
 )
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
-from .diff import DiffReport
 from .lines import LinesDb
+from .report import ReccmpComparedEntity
 from .analyze import (
     create_imports,
     create_import_thunks,
@@ -341,7 +341,7 @@ class Compare:
             match_ratio=ratio,
         )
 
-    def _compare_match(self, match: ReccmpMatch) -> DiffReport | None:
+    def _compare_match(self, match: ReccmpMatch) -> ReccmpComparedEntity | None:
         """Router for comparison type"""
 
         if match.size is None or match.any_size() == 0:
@@ -370,14 +370,16 @@ class Compare:
         best_name = match.best_name()
         assert best_name is not None
 
-        return DiffReport(
-            match_type=output_type,
+        return ReccmpComparedEntity(
             orig_addr=match.orig_addr,
-            recomp_addr=match.recomp_addr,
             name=best_name,
-            result=result,
-            is_library=match.get("library", False),
+            accuracy=result.match_ratio,
+            type=output_type,
+            recomp_addr=match.recomp_addr,
+            is_effective_match=result.is_effective_match,
             is_stub=match.get("stub", False),
+            is_library=match.get("library", False),
+            rdiff=result.diff,
         )
 
     ## Public API
@@ -402,26 +404,26 @@ class Compare:
     def get_variables(self) -> Iterator[ReccmpMatch]:
         return self._db.get_matches_by_type(EntityType.DATA)
 
-    def compare_address(self, addr: int) -> DiffReport | None:
+    def compare_address(self, addr: int) -> ReccmpComparedEntity | None:
         match = self._db.get_one_match(addr)
         if match is None:
             return None
 
         return self._compare_match(match)
 
-    def compare_all(self) -> Iterable[DiffReport]:
+    def compare_all(self) -> Iterator[ReccmpComparedEntity]:
         for match in self._db.get_matches():
             diff = self._compare_match(match)
             if diff is not None:
                 yield diff
 
-    def compare_functions(self) -> Iterable[DiffReport]:
+    def compare_functions(self) -> Iterator[ReccmpComparedEntity]:
         for match in self.get_functions():
             diff = self._compare_match(match)
             if diff is not None:
                 yield diff
 
-    def compare_vtables(self) -> Iterable[DiffReport]:
+    def compare_vtables(self) -> Iterator[ReccmpComparedEntity]:
         for match in self.get_vtables():
             diff = self._compare_match(match)
             if diff is not None:

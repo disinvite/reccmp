@@ -153,7 +153,7 @@ def test_compare_function():
     report = to_report(compare)
     assert len(report.entities) == 1
 
-    e = report.entities["0x0"]
+    e = report.entities[0]
     assert e is not None
     assert e.accuracy == 1.0
     assert e.is_stub is False
@@ -162,8 +162,8 @@ def test_compare_function():
     assert e.type == EntityType.FUNCTION
 
     # String representation of address. No padding.
-    assert e.orig_addr == "0x0"
-    assert e.recomp_addr == "0x0"
+    assert e.orig_addr == 0
+    assert e.recomp_addr == 0
 
     # No diff generated for a match
     udiff = get_udiff(e)
@@ -188,7 +188,7 @@ def test_compare_function_stub():
     report = to_report(compare)
     assert len(report.entities) == 1
 
-    e = report.entities["0x0"]
+    e = report.entities[0]
     assert e is not None
     assert e.accuracy == 0.0
     assert e.is_stub is True
@@ -218,7 +218,7 @@ def test_compare_function_diff():
     report = to_report(compare)
     assert len(report.entities) == 1
 
-    e = report.entities["0x0"]
+    e = report.entities[0]
     assert e is not None
     assert e.accuracy == 0.0
     assert e.is_effective_match is False
@@ -248,7 +248,7 @@ def test_compare_function_effective_match():
     report = to_report(compare)
     assert len(report.entities) == 1
 
-    e = report.entities["0x0"]
+    e = report.entities[0]
     assert e is not None
     # Should retain non-effective accuracy.
     assert e.accuracy != 1.0
@@ -300,7 +300,7 @@ def test_compare_function_diff_context():
     report = to_report(compare)
     assert len(report.entities) == 1
 
-    e = report.entities["0x0"]
+    e = report.entities[0]
     assert e is not None
     assert e.accuracy != 1.0
     assert e.is_effective_match is False
@@ -351,7 +351,7 @@ def test_compare_vtable_match():
     report = to_report(compare)
     assert len(report.entities) == 2
 
-    e = report.entities["0x1"]
+    e = report.entities[1]
     assert e is not None
     assert e.accuracy == 1.0
 
@@ -408,7 +408,7 @@ def test_compare_vtable_diff():
     report = to_report(compare)
     assert len(report.entities) == 4
 
-    e = report.entities["0xc"]
+    e = report.entities[12]
     assert e is not None
     assert e.accuracy != 1.0
 
@@ -440,7 +440,7 @@ def test_aggregate_workflow():
 
     report = to_report(compare)
     assert len(report.entities) == 1
-    entity = report.entities["0x0"]
+    entity = report.entities[0]
 
     # The function matches, it has no diff data.
     assert entity.udiff is None
@@ -454,12 +454,12 @@ def test_aggregate_workflow():
 def test_report_function_alignment():
     def test_entity(
         orig_addr: int, recomp_addr: int, entity_type: EntityType
-    ) -> tuple[str, ReccmpComparedEntity]:
+    ) -> tuple[int, ReccmpComparedEntity]:
         return (
-            hex(orig_addr),
+            orig_addr,
             ReccmpComparedEntity(
-                orig_addr=hex(orig_addr),
-                recomp_addr=hex(recomp_addr),
+                orig_addr=orig_addr,
+                recomp_addr=recomp_addr,
                 name="hello",
                 accuracy=1.0,
                 type=entity_type,
@@ -502,12 +502,12 @@ def test_report_function_accuracy():
         *,
         effective: bool = False,
         stub: bool = False,
-    ) -> tuple[str, ReccmpComparedEntity]:
+    ) -> tuple[int, ReccmpComparedEntity]:
         return (
-            hex(addr),
+            addr,
             ReccmpComparedEntity(
-                orig_addr=hex(addr),
-                recomp_addr=hex(addr),
+                orig_addr=addr,
+                recomp_addr=addr,
                 name="hello",
                 accuracy=accuracy,
                 type=entity_type,

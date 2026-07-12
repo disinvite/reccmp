@@ -128,7 +128,7 @@ async def handle_addr(request):
     if not ent:
         raise web.HTTPNotFound()
 
-    return web.json_response({"name": ent.name, "accuracy": ent.ratio})
+    return web.json_response({"name": ent.name, "accuracy": ent.accuracy})
 
 
 async def handle_ready(request):

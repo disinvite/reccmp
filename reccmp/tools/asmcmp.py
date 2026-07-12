@@ -19,7 +19,7 @@ from reccmp.utils import (
 )
 
 from reccmp.compare import Compare
-from reccmp.compare.diff import DiffReport, raw_diff_to_udiff
+from reccmp.compare.diff import raw_diff_to_udiff
 from reccmp.compare.report import (
     ReccmpStatusReport,
     ReccmpComparedEntity,
@@ -50,20 +50,21 @@ def gen_json(json_file: str, json_str: str):
         f.write(json_str)
 
 
-def print_match_verbose(match: DiffReport, show_both_addrs: bool = False):
-    percenttext = percent_string(match.effective_ratio, match.is_effective_match)
+def print_match_verbose(match: ReccmpComparedEntity, show_both_addrs: bool = False):
+    percenttext = percent_string(match.effective_accuracy, match.is_effective_match)
 
     if show_both_addrs:
-        addrs = f"0x{match.orig_addr:x} / 0x{match.recomp_addr:x}"
+        addrs = f"{match.orig_addr:#x} / {match.recomp_addr:#x}"
     else:
-        addrs = hex(match.orig_addr)
+        addrs = f"{match.orig_addr:#x}"
 
-    grouped_diff = match.match_type != EntityType.VTABLE
-    udiff = raw_diff_to_udiff(match.result.diff, grouped=grouped_diff)
+    grouped_diff = match.type != EntityType.VTABLE
+    assert match.rdiff is not None
+    udiff = raw_diff_to_udiff(match.rdiff, grouped=grouped_diff)
 
-    if match.effective_ratio == 1.0:
+    if match.effective_accuracy == 1.0:
         ok_text = reccmp.color.Fore.GREEN + "✨ OK! ✨" + reccmp.color.Style.RESET_ALL
-        if match.ratio == 1.0:
+        if match.accuracy == 1.0:
             print(f"{addrs}: {match.name} 100% match.\n\n{ok_text}\n\n")
         else:
             print_combined_diff(udiff, show_both_addrs)
@@ -84,9 +85,9 @@ def print_match_oneline(match: ReccmpComparedEntity, show_both_addrs: bool = Fal
     percenttext = percent_string(match.effective_accuracy, match.is_effective_match)
 
     if show_both_addrs:
-        addrs = f"{match.orig_addr} / {match.recomp_addr}"
+        addrs = f"{match.orig_addr:#x} / {match.recomp_addr:#x}"
     else:
-        addrs = match.orig_addr
+        addrs = f"{match.orig_addr:#x}"
 
     if match.is_stub:
         print(f"  {match.name} ({addrs}) is a stub.")
@@ -178,16 +179,18 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def dump_all_matched_functions(matches: Sequence[DiffReport]):
+def dump_all_matched_functions(matches: Sequence[ReccmpComparedEntity]):
     logger.info("Creating assembly dump files.")
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     orig_order = sorted(matches, key=lambda m: m.orig_addr)
-    recomp_order = sorted(matches, key=lambda m: m.recomp_addr)
+    recomp_order = sorted(matches, key=lambda m: m.recomp_addr or -1)
 
     with open(f"reccmp-{timestamp}-orig.txt", "w+", encoding="utf-8") as f:
         for match in orig_order:
+            if match.rdiff is None:
+                continue
             f.write(f"; {match.name}\n")
-            for addr, line in match.result.diff.orig_inst:
+            for addr, line in match.rdiff.orig_inst:
                 if addr:
                     f.write(f"{addr:10}: {line}\n")
                 else:
@@ -195,8 +198,10 @@ def dump_all_matched_functions(matches: Sequence[DiffReport]):
 
     with open(f"reccmp-{timestamp}-recomp.txt", "w+", encoding="utf-8") as f:
         for match in recomp_order:
+            if match.rdiff is None:
+                continue
             f.write(f"; {match.name}\n")
-            for addr, line in match.result.diff.recomp_inst:
+            for addr, line in match.rdiff.recomp_inst:
                 if addr:
                     f.write(f"{addr:10}: {line}\n")
                 else:
@@ -242,7 +247,7 @@ def main() -> int:
     for match in compared:
         # if we are ignoring this function, skip to next one and don't add it to the entities list
         if (
-            match.match_type == EntityType.FUNCTION
+            match.type == EntityType.FUNCTION
             and match.name in target.report_config.ignore_functions
         ):
             continue

@@ -1,7 +1,7 @@
 import logging
 import difflib
 import struct
-from typing import Iterator
+from typing import Callable, Iterator
 from typing_extensions import Self
 from reccmp.project.detect import RecCmpTarget
 from reccmp.compare.diff import EntityCompareResult, RawDiffOutput
@@ -33,7 +33,7 @@ from .match_msvc import (
 )
 from .db import EntityDb, ReccmpEntity, ReccmpMatch
 from .lines import LinesDb
-from .report import ReccmpComparedEntity
+from .report import ReccmpComparedEntity, ReccmpStatusReport
 from .analyze import (
     create_imports,
     create_import_thunks,
@@ -341,6 +341,37 @@ class Compare:
             match_ratio=ratio,
         )
 
+    def _compare_non_match(self, ent: ReccmpEntity) -> ReccmpComparedEntity | None:
+        assert ent.orig_addr is not None
+
+        if ent.get("skip", False):
+            return None
+
+        assert ent.entity_type is not None
+
+        if ent.entity_type in (EntityType.FUNCTION, EntityType.VTORDISP):
+            output_type = EntityType.FUNCTION
+
+        elif ent.entity_type == EntityType.VTABLE:
+            output_type = EntityType.VTABLE
+
+        else:
+            return None
+
+        name = ent.best_name()
+        if name is None:
+            name = f"Unknown {output_type.name}"
+
+        return ReccmpComparedEntity(
+            orig_addr=ent.orig_addr,
+            name=name,
+            accuracy=0.0,
+            type=output_type,
+            recomp_addr=None,
+            is_stub=True,
+            is_library=ent.get("library", False),
+        )
+
     def _compare_match(self, match: ReccmpMatch) -> ReccmpComparedEntity | None:
         """Router for comparison type"""
 
@@ -411,15 +442,26 @@ class Compare:
 
         return self._compare_match(match)
 
-    def compare_all(self) -> Iterator[ReccmpComparedEntity]:
-        for match in self._db.get_matches():
-            diff = self._compare_match(match)
-            if diff is not None:
-                yield diff
+    def compare_all(
+        self, filter_fn: Callable[[ReccmpEntity], bool] | None = None
+    ) -> Iterator[ReccmpComparedEntity]:
+        for ent in self._db.all(ImageId.ORIG):
+            if ent.entity_type not in (
+                EntityType.FUNCTION,
+                EntityType.VTORDISP,
+                EntityType.VTABLE,
+            ):
+                continue
 
-    def compare_functions(self) -> Iterator[ReccmpComparedEntity]:
-        for match in self.get_functions():
-            diff = self._compare_match(match)
+            if filter_fn and not filter_fn(ent):
+                continue
+
+            if ent.recomp_addr is not None:
+                assert isinstance(ent, ReccmpMatch)
+                diff = self._compare_match(ent)
+            else:
+                diff = self._compare_non_match(ent)
+
             if diff is not None:
                 yield diff
 
@@ -428,3 +470,13 @@ class Compare:
             diff = self._compare_match(match)
             if diff is not None:
                 yield diff
+
+    def to_report(
+        self, filter_fn: Callable[[ReccmpEntity], bool] | None = None
+    ) -> ReccmpStatusReport:
+        """Creates a ReccmpStatusReport using the current reccmp state."""
+        report = ReccmpStatusReport(filename=self.orig_bin.filepath.name)
+        for match in self.compare_all(filter_fn):
+            report.add_match(match)
+
+        return report

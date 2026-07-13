@@ -91,6 +91,11 @@ def report_function_alignment(report: ReccmpStatusReport) -> int:
     return count
 
 
+def report_count_functions(report: ReccmpStatusReport) -> int:
+    """Count of all functions, matched or unmatched, stub or non-stub."""
+    return sum(1 for ent in report.entities.values() if ent.type == EntityType.FUNCTION)
+
+
 def report_function_accuracy(report: ReccmpStatusReport) -> tuple[int, float, float]:
     """Collects the accuracy and effective accuracy of all compared functions in the report.
     Returns (function_count, total_accuracy, total_effective_accuracy).
@@ -102,7 +107,11 @@ def report_function_accuracy(report: ReccmpStatusReport) -> tuple[int, float, fl
     total_effective_accuracy = 0.0
 
     for ent in report.entities.values():
-        if ent.type == EntityType.FUNCTION and not ent.is_stub:
+        if (
+            ent.type == EntityType.FUNCTION
+            and not ent.is_stub
+            and ent.recomp_addr is not None
+        ):
             function_count += 1
             total_accuracy += ent.accuracy
             total_effective_accuracy += ent.effective_accuracy

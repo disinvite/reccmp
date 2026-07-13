@@ -33,10 +33,7 @@ def to_report(compare: Compare) -> ReccmpStatusReport:
     """Creates a ReccmpStatusReport using the current reccmp state,
     serializes to JSON text, then deserializes back to a new report object.
     The goal is to see the state of the data after serialization."""
-    report = ReccmpStatusReport(filename=compare.target_id)
-    for match in compare.compare_all():
-        report.add_match(match)
-
+    report = compare.to_report()
     json_text = serialize_reccmp_report(report, diff_included=True)
     return deserialize_reccmp_report(json_text)
 

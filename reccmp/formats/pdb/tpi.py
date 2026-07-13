@@ -418,7 +418,7 @@ class LfArglist(CodeViewLeaf):
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfArglist":
-        (leaf_type, _) = unpack_from("<2H", data, offset=offset)
+        leaf_type, _ = unpack_from("<2H", data, offset=offset)
         offset += 4
 
         (count,) = unpack_from("<H", data, offset=offset)

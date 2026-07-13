@@ -349,6 +349,7 @@ class CvdumpTypesParser:
 
         return sorted(members, key=lambda m: m.offset)
 
+    # pylint: disable=too-many-return-statements
     def get(self, type_key: CvdumpTypeKey) -> TypeInfo:
         """Convert our dictionary values read from the cvdump output
         into a consistent format for the given type."""
@@ -387,8 +388,14 @@ class CvdumpTypesParser:
         if obj.get("is_forward_ref", False):
             # Get the forward reference to follow.
             # If this is LF_CLASS/LF_STRUCTURE, it is the UDT value.
-            # For LF_MODIFIER, it is the type being modified.
             forward_ref = obj.get("udt", None) or obj.get("modifies", None)
+            if forward_ref is None:
+                raise CvdumpIntegrityError(f"Null forward ref for type {type_key}")
+
+            return self.get(forward_ref)
+
+        if obj_type == "LF_MODIFIER":
+            forward_ref = obj.get("modifies", None)
             if forward_ref is None:
                 raise CvdumpIntegrityError(f"Null forward ref for type {type_key}")
 
@@ -651,11 +658,8 @@ class CvdumpTypesParser:
         match = self.MODIFIES_RE.search(leaf)
         assert match is not None
 
-        # For convenience, because this is essentially the same thing
-        # as an LF_CLASS forward ref.
         return {
             "type": leaf_type,
-            "is_forward_ref": True,
             "modifies": CvdumpTypeKey.from_str(match.group("type")),
             "modification": match.group("modification"),
         }

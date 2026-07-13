@@ -5,7 +5,7 @@ import argparse
 import logging
 from typing import Sequence
 from pathlib import Path
-from reccmp.utils import diff_json, gen_svg, progress_stats, write_html_report
+from reccmp.utils import diff_json, gen_svg, write_html_report
 from reccmp.compare.report import (
     ReccmpStatusReport,
     combine_reports,
@@ -13,6 +13,7 @@ from reccmp.compare.report import (
     ReccmpReportSameSourceError,
     deserialize_reccmp_report,
     serialize_reccmp_report,
+    report_progress_stats,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--svg-icon",
         metavar="icon",
+        type=Path,
         help="Icon to use in SVG (PNG)",
     )
     parser.add_argument(
@@ -191,7 +193,7 @@ def main():
             write_html_report(args.html, agg_report)
 
         if args.svg is not None:
-            implemented_funcs, raw_accuracy = progress_stats(agg_report)
+            implemented_funcs, raw_accuracy = report_progress_stats(agg_report)
             if implemented_funcs == 0:
                 logger.error(
                     "No comparable functions in aggregate report; skipping SVG."
@@ -225,7 +227,7 @@ def main():
                 args.diff[0],
             )
 
-        diff_json(saved_data, agg_report, show_both_addrs=False, is_plain=args.no_color)
+        diff_json(saved_data, agg_report, show_both_addrs=False)
 
     return 0
 

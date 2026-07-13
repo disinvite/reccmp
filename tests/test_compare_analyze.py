@@ -30,10 +30,12 @@ def fixture_db():
 def get_ref_addr(db: EntityDb, img: ImageId, addr: int) -> int | None:
     """Helper function to retrieve the ref address from the refs table.
     It is not visible through the ReccmpEntity / ReccmpMatch API."""
-    for (ref,) in db.sql.execute(
-        "SELECT ref FROM refs WHERE img = ? AND addr = ?", (img, addr)
-    ):
-        return ref
+    ent = db.get(img, addr)
+    if ent is not None:
+        key = "ref_orig" if img == ImageId.ORIG else "ref_recomp"
+        ref = ent.get(key)
+        if ref:
+            return ref
 
     return None
 
@@ -43,10 +45,9 @@ def get_ref_displacement(
 ) -> tuple[int, int] | None:
     """Helper function to retrieve the displacement from the refs table.
     It is not visible through the ReccmpEntity / ReccmpMatch API."""
-    for disp in db.sql.execute(
-        "SELECT disp0, disp1 FROM refs WHERE img = ? AND addr = ?", (img, addr)
-    ):
-        return disp
+    ent = db.get(img, addr)
+    if ent is not None:
+        return ent.get("displacement")
 
     return None
 
@@ -79,6 +80,21 @@ def test_create_analysis_strings_do_not_replace(db: EntityDb):
     e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") != EntityType.STRING
+
+
+def test_create_analysis_strings_do_not_replace_overlap(db: EntityDb):
+    """Should not create new entity if it would overlap an existing one."""
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.FUNCTION, size=10)
+
+    binfile = Mock(spec=[])
+    binfile.iter_string = Mock(return_value=[(105, "Hello")])
+    binfile.relocations = set()
+
+    create_analysis_strings(db, ImageId.ORIG, binfile)
+
+    e = db.get(ImageId.ORIG, 105)
+    assert e is None
 
 
 def test_create_analysis_strings_not_relocated(db: EntityDb):
@@ -167,6 +183,23 @@ def test_create_analysis_floats_do_not_replace(db: EntityDb):
     e = db.get(ImageId.ORIG, 100)
     assert e is not None
     assert e.get("type") != EntityType.FLOAT
+
+
+def test_create_analysis_floats_do_not_replace_overlap(db: EntityDb):
+    """Should not create new entity if it would overlap an existing one."""
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 100, type=EntityType.DATA, size=10)
+
+    binfile = Mock(spec=[])
+
+    with patch(
+        "reccmp.compare.analyze.find_float_consts",
+        return_value=[(105, 4, 0.5)],
+    ):
+        create_analysis_floats(db, ImageId.ORIG, binfile)
+
+    e = db.get(ImageId.ORIG, 105)
+    assert e is None
 
 
 def test_create_analysis_vtordisps(db: EntityDb, binfile: PEImage):

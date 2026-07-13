@@ -1,16 +1,23 @@
 import base64
+import enum
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable, Iterator
 import logging
-import colorama
 from pystache import Renderer  # type: ignore[import-untyped]
 from reccmp.assets import get_asset_file
+import reccmp.color
 from reccmp.compare.report import (
     ReccmpStatusReport,
     ReccmpComparedEntity,
     serialize_reccmp_report,
 )
-from reccmp.types import EntityType
+
+
+def safe_denominator(v: int) -> int:
+    if v == 0:
+        return 1
+    return v
 
 
 def reccmp_pack_generator(lines: Iterable[str]) -> Iterator[str]:
@@ -45,29 +52,24 @@ def read_js_file(filename: str) -> str:
     return file_header + "".join(lines)
 
 
-def progress_stats(report: ReccmpStatusReport) -> tuple[int, float]:
-    """Count comparable functions in the report and sum their effective-match accuracy.
+def get_base64_icon(path: Path) -> str:
+    if path.suffix.lower() != ".png":
+        logging.getLogger().error("Icon must be PNG image: %s", path)
+        return ""
 
-    Returns (implemented_funcs, raw_accuracy). Stubs and non-FUNCTION entities are excluded.
-    Entities with no recorded type (older reports that did not serialize the field) are
-    treated as functions to preserve backward-compatible behavior."""
-    implemented = 0
-    raw_accuracy = 0.0
-    for entity in report.entities.values():
-        if entity.is_stub:
-            continue
-        if entity.type is not None and entity.type != EntityType.FUNCTION:
-            continue
-        implemented += 1
-        raw_accuracy += entity.accuracy
-    return implemented, raw_accuracy
+    try:
+        with path.open("rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except FileNotFoundError:
+        logging.getLogger().error("Could not open icon: %s", path)
+        return ""
 
 
 # pylint: disable=too-many-positional-arguments
 def gen_svg(
     svg_file: str,
     name_svg: str,
-    icon: str | None,
+    icon: Path | None,
     svg_implemented_funcs: int,
     total_funcs: int,
     raw_accuracy: float,
@@ -75,8 +77,7 @@ def gen_svg(
     """Render the progress SVG badge from the bundled template."""
     icon_data = None
     if icon:
-        with open(icon, "rb") as iconfile:
-            icon_data = base64.b64encode(iconfile.read()).decode("utf-8")
+        icon_data = get_base64_icon(icon)
 
     total_statistic = raw_accuracy / total_funcs
     full_percentbar_width = 127.18422
@@ -85,8 +86,8 @@ def gen_svg(
         {
             "name": name_svg,
             "icon": icon_data,
-            "implemented": f"{(svg_implemented_funcs / total_funcs * 100):.2f}% ({svg_implemented_funcs}/{total_funcs})",
-            "accuracy": f"{(raw_accuracy / svg_implemented_funcs * 100):.2f}%",
+            "implemented": f"{(svg_implemented_funcs / safe_denominator(total_funcs) * 100):.2f}% ({svg_implemented_funcs}/{total_funcs})",
+            "accuracy": f"{(raw_accuracy / safe_denominator(svg_implemented_funcs) * 100):.2f}%",
             "progbar": total_statistic * full_percentbar_width,
             "percent": f"{(total_statistic * 100):.2f}%",
         },
@@ -95,7 +96,9 @@ def gen_svg(
         svgfile.write(output_data)
 
 
-def write_html_report(html_file: str, report: ReccmpStatusReport):
+def write_html_report(
+    html_file: str, report: ReccmpStatusReport, icon: Path | None = None
+):
     """Create the interactive HTML diff viewer with the given report."""
     # For the flat-file report, the component JS files must be added in a particular order
     # so that any dependencies required by a particular file have already been resolved.
@@ -126,9 +129,13 @@ def write_html_report(html_file: str, report: ReccmpStatusReport):
     # Convert the report to a JSON string to insert in the HTML template.
     report_str = serialize_reccmp_report(report, diff_included=True)
 
+    favicon = ""
+    if icon:
+        favicon = get_base64_icon(icon)
+
     output_data = Renderer().render_path(
         get_asset_file("template.html"),
-        {"report": report_str, "reccmp_js": reccmp_js},
+        {"report": report_str, "reccmp_js": reccmp_js, "favicon": favicon},
     )
 
     with open(html_file, "w", encoding="utf-8") as htmlfile:
@@ -149,10 +156,10 @@ def print_combined_diff(udiff, plain: bool = False, show_both: bool = False):
             print("+++")
             print(slug)
         else:
-            print(f"{colorama.Fore.RED}---")
-            print(f"{colorama.Fore.GREEN}+++")
-            print(f"{colorama.Fore.BLUE}{slug}")
-            print(colorama.Style.RESET_ALL, end="")
+            print(f"{reccmp.color.Fore.RED}---")
+            print(f"{reccmp.color.Fore.GREEN}+++")
+            print(f"{reccmp.color.Fore.BLUE}{slug}")
+            print(reccmp.color.Style.RESET_ALL, end="")
 
         for subgroup in subgroups:
             equal = subgroup.get("both") is not None
@@ -175,7 +182,7 @@ def print_combined_diff(udiff, plain: bool = False, show_both: bool = False):
                         print(f"{addr_prefix} : -{line}")
                     else:
                         print(
-                            f"{addr_prefix} : {colorama.Fore.RED}-{line}{colorama.Style.RESET_ALL}"
+                            f"{addr_prefix} : {reccmp.color.Fore.RED}-{line}{reccmp.color.Style.RESET_ALL}"
                         )
 
                 for recomp_addr, line in subgroup["recomp"]:
@@ -190,14 +197,14 @@ def print_combined_diff(udiff, plain: bool = False, show_both: bool = False):
                         print(f"{addr_prefix} : +{line}")
                     else:
                         print(
-                            f"{addr_prefix} : {colorama.Fore.GREEN}+{line}{colorama.Style.RESET_ALL}"
+                            f"{addr_prefix} : {reccmp.color.Fore.GREEN}+{line}{reccmp.color.Style.RESET_ALL}"
                         )
 
         # Newline between each diff subgroup.
         print()
 
 
-def print_diff(udiff, plain):
+def print_diff(udiff):
     """Print diff in difflib.unified_diff format."""
     if udiff is None:
         return False
@@ -210,26 +217,22 @@ def print_diff(udiff, plain):
             # Skip unneeded parts of the diff for the brief view
             continue
         # Work out color if we are printing color
-        if not plain:
-            if line.startswith("+"):
-                color = colorama.Fore.GREEN
-            elif line.startswith("-"):
-                color = colorama.Fore.RED
-        print(color + line)
-        # Reset color if we're printing in color
-        if not plain:
-            print(colorama.Style.RESET_ALL, end="")
+        if line.startswith("+"):
+            color = reccmp.color.Fore.GREEN
+        elif line.startswith("-"):
+            color = reccmp.color.Fore.RED
+        print(f"{color}{line}{reccmp.color.Style.RESET_ALL}")
     return has_diff
 
 
 def get_percent_color(value: float) -> str:
     """Return colorama ANSI escape character for the given decimal value."""
     if value == 1.0:
-        return colorama.Fore.GREEN
+        return reccmp.color.Fore.GREEN
     if value > 0.8:
-        return colorama.Fore.YELLOW
+        return reccmp.color.Fore.YELLOW
 
-    return colorama.Fore.RED
+    return reccmp.color.Fore.RED
 
 
 def percent_string(
@@ -249,9 +252,9 @@ def percent_string(
         [
             get_percent_color(ratio),
             percenttext,
-            colorama.Fore.RED if is_effective else "",
+            reccmp.color.Fore.RED if is_effective else "",
             effective_star,
-            colorama.Style.RESET_ALL,
+            reccmp.color.Style.RESET_ALL,
         ]
     )
 
@@ -272,7 +275,9 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
             new_pct = (
                 "stub"
                 if new.is_stub
-                else percent_string(new.accuracy, new.is_effective_match, is_plain)
+                else percent_string(
+                    new.effective_accuracy, new.is_effective_match, is_plain
+                )
             )
 
             # Prefer the current name of this function if we have it.
@@ -285,7 +290,9 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
             old_pct = (
                 "stub"
                 if saved.is_stub
-                else percent_string(saved.accuracy, saved.is_effective_match, is_plain)
+                else percent_string(
+                    saved.effective_accuracy, saved.is_effective_match, is_plain
+                )
             )
 
             if name == "":
@@ -302,6 +309,74 @@ def diff_json_display(show_both_addrs: bool = False, is_plain: bool = False):
         return f"{addr_string} - {name} ({old_pct} -> {new_pct})"
 
     return formatter
+
+
+class ReccmpDiffJudgement(enum.Enum):
+    NO_CHANGE = enum.auto()
+    """The entity did not change in a way worth reporting."""
+    NEW = enum.auto()
+    """This entity did not appear in the saved report."""
+    INCREASE = enum.auto()
+    """This entity's accuracy increased from the saved report."""
+    DECREASE = enum.auto()
+    """This entity's accuracy decreased from the saved report."""
+    DROPPED = enum.auto()
+    """This entity no longer exists."""
+    ENTROPY = enum.auto()
+    """This entity's accuracy changed, but we have determined it to be functionally-equivalent."""
+
+
+# pylint: disable=too-many-return-statements
+def entity_diff_change(
+    saved: ReccmpComparedEntity | None, new: ReccmpComparedEntity | None
+) -> ReccmpDiffJudgement:
+    if saved is None and new is not None:
+        return ReccmpDiffJudgement.NEW
+
+    if saved is not None and new is None:
+        return ReccmpDiffJudgement.DROPPED
+
+    assert saved and new
+
+    # Do not report changes if the entity is a stub in both reports.
+    # (Regression in GH #405)
+    if saved.is_stub and new.is_stub:
+        return ReccmpDiffJudgement.NO_CHANGE
+
+    if saved.is_stub and not new.is_stub:
+        return ReccmpDiffJudgement.INCREASE
+
+    if not saved.is_stub and new.is_stub:
+        return ReccmpDiffJudgement.DECREASE
+
+    # The entity is still functionally equivalent despite the degradation.
+    if saved.accuracy == 1.0 and new.is_effective_match:
+        return ReccmpDiffJudgement.ENTROPY
+
+    # GH #431.
+    # Previously, we reported changes in either direction as ENTROPY.
+    if saved.is_effective_match and new.accuracy == 1.0:
+        return ReccmpDiffJudgement.INCREASE
+
+    # Don't report internal accuracy changes if it is still an effective match.
+    if saved.is_effective_match and new.is_effective_match:
+        return ReccmpDiffJudgement.NO_CHANGE
+
+    # Don't consider accuracy if either report has an effective match.
+    if saved.is_effective_match and not new.is_effective_match:
+        return ReccmpDiffJudgement.DECREASE
+
+    if not saved.is_effective_match and new.is_effective_match:
+        return ReccmpDiffJudgement.INCREASE
+
+    # It is not a stub or effective match. Compare raw accuracy.
+    if saved.accuracy < new.accuracy:
+        return ReccmpDiffJudgement.INCREASE
+
+    if saved.accuracy > new.accuracy:
+        return ReccmpDiffJudgement.DECREASE
+
+    return ReccmpDiffJudgement.NO_CHANGE
 
 
 def diff_json(
@@ -352,67 +427,24 @@ def diff_json(
         for addr in sorted(all_addrs)
     }
 
-    DiffSubsectionType = dict[
-        str, tuple[ReccmpComparedEntity | None, ReccmpComparedEntity | None]
-    ]
-
-    # The criteria for diff judgement is in these dict comprehensions:
-    # Any function not in the saved file
-    new_functions: DiffSubsectionType = {
-        key: (saved, new) for key, (saved, new) in combined.items() if saved is None
-    }
-
-    # Any function now missing from the saved file
-    # or a non-stub -> stub conversion
-    dropped_functions: DiffSubsectionType = {
-        key: (saved, new)
-        for key, (saved, new) in combined.items()
-        if new is None
-        or (new is not None and saved is not None and new.is_stub and not saved.is_stub)
-    }
-
-    # TODO: move these two into functions if the assessment gets more complex
-    # Any function with increased match percentage
-    # or stub -> non-stub conversion
-    improved_functions: DiffSubsectionType = {
-        key: (saved, new)
-        for key, (saved, new) in combined.items()
-        if saved is not None
-        and new is not None
-        and (new.accuracy > saved.accuracy or (not new.is_stub and saved.is_stub))
-    }
-
-    # Any non-stub function with decreased match percentage
-    degraded_functions: DiffSubsectionType = {
-        key: (saved, new)
-        for key, (saved, new) in combined.items()
-        if saved is not None
-        and new is not None
-        and new.accuracy < saved.accuracy
-        and not saved.is_stub
-        and not new.is_stub
-    }
-
-    # Any function with former or current "effective" match
-    entropy_functions: DiffSubsectionType = {
-        key: (saved, new)
-        for key, (saved, new) in combined.items()
-        if saved is not None
-        and new is not None
-        and new.accuracy == 1.0
-        and saved.accuracy == 1.0
-        and new.is_effective_match != saved.is_effective_match
+    judgements = {
+        key: entity_diff_change(*diff_pair) for key, diff_pair in combined.items()
     }
 
     get_diff_str = diff_json_display(show_both_addrs, is_plain)
 
-    for diff_name, diff_dict in [
-        ("New", new_functions),
-        ("Increased", improved_functions),
-        ("Decreased", degraded_functions),
-        ("Dropped", dropped_functions),
-        ("Compiler entropy", entropy_functions),
+    for diff_name, diff_judgement in [
+        ("New", ReccmpDiffJudgement.NEW),
+        ("Increased", ReccmpDiffJudgement.INCREASE),
+        ("Decreased", ReccmpDiffJudgement.DECREASE),
+        ("Dropped", ReccmpDiffJudgement.DROPPED),
+        ("Compiler entropy", ReccmpDiffJudgement.ENTROPY),
     ]:
+        diff_dict = {
+            key: value
+            for key, value in combined.items()
+            if judgements.get(key) == diff_judgement
+        }
         if len(diff_dict) == 0:
             continue
 

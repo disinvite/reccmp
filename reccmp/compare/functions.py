@@ -1,4 +1,3 @@
-from datetime import datetime
 from dataclasses import dataclass
 from functools import cache
 import struct
@@ -14,16 +13,13 @@ from reccmp.compare.asm.replacement import (
 from reccmp.compare.db import EntityDb, ReccmpMatch
 from reccmp.compare.diff import EntityCompareResult, RawDiffOutput
 from reccmp.compare.event import ReccmpEvent, ReccmpReportProtocol
+from reccmp.cvdump.types import CvdumpTypesParser
 from reccmp.formats.exceptions import (
     InvalidVirtualAddressError,
     InvalidVirtualReadError,
 )
 from reccmp.formats import Image, PEImage
 from reccmp.types import ImageId
-
-
-def timestamp_string() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 def has_asserts(image: Image) -> bool:
@@ -50,17 +46,7 @@ def create_valid_addr_lookup(
         if addr > bin_file.imagebase and bin_file.is_relocated_addr(addr):
             return True
 
-        # Check whether the address points to valid data
-        entity = db.get(image_id, addr, exact=False)
-        if entity is None:
-            return False
-        base_addr = entity.addr(image_id)
-        if base_addr is None:
-            # should never happen
-            return False
-
-        address_is_contained_in_entity = addr <= base_addr + entity.any_size(image_id)
-        return address_is_contained_in_entity
+        return db.intersects(image_id, addr)
 
     return lookup
 
@@ -86,8 +72,7 @@ class FunctionComparator:
     orig_bin: Image
     recomp_bin: Image
     report: ReccmpReportProtocol
-    runid: str = timestamp_string()
-    debug: bool = False
+    types: CvdumpTypesParser
     is_32bit: bool = True
 
     def __post_init__(self):
@@ -97,6 +82,7 @@ class FunctionComparator:
                 self.db,
                 ImageId.ORIG,
                 create_bin_lookup(self.orig_bin),
+                self.types.get_name_for_offset,
             ),
             is_32bit=self.is_32bit,
         )
@@ -108,25 +94,10 @@ class FunctionComparator:
                 self.db,
                 ImageId.RECOMP,
                 create_bin_lookup(self.recomp_bin),
+                self.types.get_name_for_offset,
             ),
             is_32bit=self.is_32bit,
         )
-
-    def _dump_asm(self, orig_combined, recomp_combined):
-        """Append the provided assembly output to the debug files"""
-        with open(f"reccmp-{self.runid}-orig.txt", "a", encoding="utf-8") as f:
-            for addr, line in orig_combined:
-                if addr:
-                    f.write(f"{addr:8x}: {line}\n")
-                else:
-                    f.write(f"        : {line}\n")
-
-        with open(f"reccmp-{self.runid}-recomp.txt", "a", encoding="utf-8") as f:
-            for addr, line in recomp_combined:
-                if addr:
-                    f.write(f"{addr:8x}: {line}\n")
-                else:
-                    f.write(f"        : {line}\n")
 
     def _source_ref_of_recomp_addr(self, recomp_addr: int | None) -> str | None:
         if recomp_addr is None:
@@ -145,9 +116,9 @@ class FunctionComparator:
 
         if orig_size is None:
             assert recomp_size is not None
-            next_orig = self.db.get_next_orig_addr(match.orig_addr)
-            if next_orig is not None:
-                orig_size = min(next_orig - match.orig_addr, recomp_size)
+            orig_max = match.max_size(ImageId.ORIG)
+            if orig_max is not None:
+                orig_size = min(orig_max, recomp_size)
             else:
                 orig_size = recomp_size
 
@@ -173,9 +144,6 @@ class FunctionComparator:
 
         orig_combined = self.orig_sanitize.parse_asm(orig_raw, match.orig_addr)
         recomp_combined = self.recomp_sanitize.parse_asm(recomp_raw, match.recomp_addr)
-
-        if self.debug:
-            self._dump_asm(orig_combined, recomp_combined)
 
         # Check for assert calls only if we expect to find them
         if has_asserts(self.orig_bin):

@@ -1,26 +1,22 @@
 # C++ file parser
 
-import io
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Iterator
-from enum import Enum
 from .util import (
     get_class_name,
     get_variable_name,
     get_synthetic_name,
-    remove_trailing_comment,
     get_string_contents,
-    ParserCodeString,
-    sanitize_code_line,
-    scopeDetectRegex,
 )
 from .marker import (
     DecompMarker,
     MarkerCategory,
-    match_marker,
+    MarkerType,
     is_marker_exact,
     ProjectAliases,
+    new_match_marker,
+    newMarkerRegex,
 )
 from .node import (
     ParserLineSymbol,
@@ -31,20 +27,16 @@ from .node import (
     ParserString,
 )
 from .error import ParserAlert, AlertCode
-
-
-class ReaderState(Enum):
-    SEARCH = 0
-    WANT_SIG = 1
-    IN_FUNC = 2
-    IN_TEMPLATE = 3
-    WANT_CURLY = 4
-    IN_GLOBAL = 5
-    IN_FUNC_GLOBAL = 6
-    IN_VTABLE = 7
-    IN_SYNTHETIC = 8
-    IN_LIBRARY = 9
-    DONE = 100
+from .tokenizer import (
+    CodeToken,
+    get_line_column_pos,
+    get_newlines_from_text,
+    get_scopes_from_tokens,
+    report_blank_lines,
+    scope_detect_churn,
+    tokenize_code_file,
+    TokenType,
+)
 
 
 @dataclass(frozen=True)
@@ -54,80 +46,18 @@ class ReccmpParserResult:
     path: PurePath
 
 
-class MarkerDict:
-    def __init__(self) -> None:
-        self.markers: dict = {}
-
-    def insert(self, marker: DecompMarker) -> bool:
-        """Return True if this insert would overwrite"""
-        if marker.key in self.markers:
-            return True
-
-        self.markers[marker.key] = marker
-        return False
-
-    def query(
-        self, category: MarkerCategory, module: str, extra: str | None = None
-    ) -> DecompMarker | None:
-        return self.markers.get((category, module, extra))
-
-    def iter(self) -> Iterator[DecompMarker]:
-        for _, marker in self.markers.items():
-            yield marker
-
-    def empty(self):
-        self.markers = {}
-
-
-class CurlyManager:
-    """Overly simplified scope manager"""
-
-    def __init__(self):
-        self._stack = []
-
-    def reset(self):
-        self._stack = []
-
-    def _pop(self):
-        """Pop stack safely"""
-        try:
-            self._stack.pop()
-        except IndexError:
-            pass
-
-    def get_prefix(self, name: str | None = None) -> str:
-        """Return the prefix for where we are."""
-
-        scopes = [t for t in self._stack if t != "{"]
-        if len(scopes) == 0:
-            return name if name is not None else ""
-
-        if name is not None and name not in scopes:
-            scopes.append(name)
-
-        return "::".join(scopes)
-
-    def read_line(self, raw_line: str):
-        """Read a line of code and update the stack."""
-        line = sanitize_code_line(raw_line)
-        if (match := scopeDetectRegex.match(line)) is not None:
-            if not line.endswith(";"):
-                self._stack.append(match.group("name"))
-
-        change = line.count("{") - line.count("}")
-        if change > 0:
-            for _ in range(change):
-                self._stack.append("{")
-        elif change < 0:
-            for _ in range(-change):
-                self._pop()
-
-            if len(self._stack) == 0:
-                return
-
-            last = self._stack[-1]
-            if last != "{":
-                self._pop()
+MARKER_CATEGORY_MAP = {
+    MarkerType.FUNCTION: MarkerCategory.FUNCTION,
+    MarkerType.STUB: MarkerCategory.FUNCTION,
+    MarkerType.SYNTHETIC: MarkerCategory.FUNCTION,
+    MarkerType.TEMPLATE: MarkerCategory.FUNCTION,
+    MarkerType.LIBRARY: MarkerCategory.FUNCTION,
+    MarkerType.VTABLE: MarkerCategory.VTABLE,
+    MarkerType.GLOBAL: MarkerCategory.VARIABLE,
+    MarkerType.STRING: MarkerCategory.STRING,
+    MarkerType.LINE: MarkerCategory.ADDRESS,
+    MarkerType.UNKNOWN: MarkerCategory.ADDRESS,
+}
 
 
 class DecompParser:
@@ -135,61 +65,47 @@ class DecompParser:
     # Could combine output lists into a single list to get under the limit,
     # but not right now
     def __init__(self, aliases: ProjectAliases | None = None) -> None:
+        self.text: str = ""
         # The lists to be populated as we parse
         self._symbols: list[ParserSymbol] = []
         self.alerts: list[ParserAlert] = []
 
-        self.line_number: int = 0
-        self.state: ReaderState = ReaderState.SEARCH
+        self.found_markers: dict[int, tuple[str, ...]] = {}
 
-        self.last_line: str = ""
-
-        self.curly = CurlyManager()
-
-        # To allow for multiple markers where code is shared across different
-        # modules, save lists of compatible markers that appear in sequence
-        self.fun_markers = MarkerDict()
-        self.var_markers = MarkerDict()
-        self.tbl_markers = MarkerDict()
-
-        # To handle functions that are entirely indented (i.e. those defined
-        # in class declarations), remember how many whitespace characters
-        # came before the opening curly brace and match that up at the end.
-        # This should give us the same or better accuracy for a well-formed file.
-        # The alternative is counting the curly braces on each line
-        # but that's probably too cumbersome.
-        self.curly_indent_stops: int = 0
-
-        # For non-synthetic functions, save the line number where the function begins
-        # (i.e. where we see the curly brace) along with the function signature.
-        # We will need both when we reach the end of the function.
-        self.function_start: int = 0
-        self.function_sig: str = ""
+        self.buckets: dict[
+            MarkerCategory, dict[tuple[str, str | None], DecompMarker]
+        ] = {category: {} for category in MarkerCategory}
+        self.marker_types: set[MarkerCategory] = set()
 
         self.filename: PurePath = PurePath("")
 
         self.aliases = aliases or {}
 
+        self.newlines: list[int] = []
+        self.enclosures: dict[int, int] = {}
+        self.scopes: list[tuple[int, int, str]] = []
+        self.scopes_for_markers: dict[int, list[str]] = {}
+        self.seen_functions: dict[str, list[tuple[int, range]]] = {}
+
     def reset_and_set_filename(self, filename: PurePath):
+        self.text = ""
         self._symbols = []
         self.alerts = []
 
-        self.line_number = 0
-        self.state = ReaderState.SEARCH
+        self.found_markers.clear()
 
-        self.last_line = ""
+        for bucket in self.buckets.values():
+            bucket.clear()
 
-        self.fun_markers.empty()
-        self.var_markers.empty()
-        self.tbl_markers.empty()
-
-        self.curly_indent_stops = 0
-        self.function_start = 0
-        self.function_sig = ""
+        self.marker_types.clear()
 
         self.filename = filename
 
-        self.curly.reset()
+        self.newlines = []
+        self.enclosures.clear()
+        self.scopes.clear()
+        self.scopes_for_markers.clear()
+        self.seen_functions.clear()
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -212,397 +128,477 @@ class DecompParser:
             if module is None or s.module == module:
                 yield s
 
-    def _recover(self):
-        """We hit a syntax error and need to reset temp structures"""
-        self.state = ReaderState.SEARCH
-        self.fun_markers.empty()
-        self.var_markers.empty()
-        self.tbl_markers.empty()
-
-    def _syntax_warning(self, code):
+    def _alert(self, code: AlertCode, pos: int = -1, text: str = ""):
+        line_no, _ = get_line_column_pos(self.newlines, pos)
         self.alerts.append(
             ParserAlert(
                 path=self.filename,
-                line_number=self.line_number,
+                line_number=line_no,
                 code=code,
-                detail=self.last_line.strip(),
+                detail=text.strip(),
             )
         )
 
-    def _syntax_error(self, code):
-        self._syntax_warning(code)
-        self._recover()
+    def handle_marker(self, marker: DecompMarker):
+        category = MARKER_CATEGORY_MAP[marker.type]
+        if not self.marker_types:
+            self.marker_types.add(category)
 
-    def _function_starts_here(self):
-        self.function_start = self.line_number
+        elif category not in self.marker_types:
+            if (self.marker_types | {category}) == {
+                MarkerCategory.VARIABLE,
+                MarkerCategory.STRING,
+            }:
+                self.marker_types.add(category)
+            else:
+                self._alert(AlertCode.INCOMPATIBLE_MARKER, marker.pos)
+                return
 
-    def _function_marker(self, marker: DecompMarker):
-        if self.fun_markers.insert(marker):
-            self._syntax_warning(AlertCode.DUPLICATE_MODULE)
-        self.state = ReaderState.WANT_SIG
+        # Allow duplicate modules with different vtable base classes.
+        key = (marker.module, marker.extra)
+        bucket = self.buckets[category]
+        if key in bucket:
+            # Do not overwrite
+            self._alert(AlertCode.DUPLICATE_MODULE, marker.pos)
+            return
 
-    def _nameref_marker(self, marker: DecompMarker):
-        """Functions explicitly referenced by name are set here"""
-        if self.fun_markers.insert(marker):
-            self._syntax_warning(AlertCode.DUPLICATE_MODULE)
+        self.buckets[category][key] = marker
 
-        if marker.is_template():
-            self.state = ReaderState.IN_TEMPLATE
-        elif marker.is_synthetic():
-            self.state = ReaderState.IN_SYNTHETIC
-        else:
-            self.state = ReaderState.IN_LIBRARY
+    def check_for_gaps(self, markers: list[DecompMarker], finish_pos: int):
+        for blank_line in report_blank_lines(
+            self.newlines, self.text, markers[0].pos, finish_pos
+        ):
+            self._alert(AlertCode.UNEXPECTED_BLANK_LINE, blank_line)
 
-    def _function_done(self, lookup_by_name: bool = False, unexpected: bool = False):
-        end_line = self.line_number
-        if unexpected:
-            # If we missed the end of the previous function, assume it ended
-            # on the previous line and that whatever we are tracking next
-            # begins on the current line.
-            end_line -= 1
+    def _finish_name_function(
+        self,
+        markers: list[DecompMarker],
+        function_name: str,
+        pos: int,
+    ):
+        # Same line: derived from line comment
+        start_line, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
 
-        for marker in self.fun_markers.iter():
-            name_is_symbol = (
-                marker.extra is not None and marker.extra.lower() == "symbol"
-            )
-            if name_is_symbol and not lookup_by_name:
-                self._syntax_warning(AlertCode.SYMBOL_OPTION_IGNORED)
-                name_is_symbol = False
+        first_type = None
 
-            is_folded = marker.extra is not None and marker.extra.lower() == "folded"
+        for marker in markers:
+            if marker.type != MarkerType.STUB:
+                if not first_type:
+                    first_type = marker.type
+                elif first_type != marker.type:
+                    self._alert(AlertCode.VARYING_MARKER_TYPES, marker.pos)
+
+            extra_str = (marker.extra or "").lower()
+            name_is_symbol = extra_str == "symbol"
+            is_folded = extra_str == "folded"
 
             self._symbols.append(
                 ParserFunction(
                     type=marker.type,
-                    line_number=self.function_start,
+                    line_number=start_line,
                     module=marker.module,
                     offset=marker.offset,
-                    name=self.function_sig,
+                    name=function_name,
                     filename=self.filename,
-                    lookup_by_name=lookup_by_name,
+                    lookup_by_name=True,
                     name_is_symbol=name_is_symbol,
+                    end_line=start_line,
+                    is_folded=is_folded,
+                )
+            )
+
+    def _finish_line_function(
+        self,
+        markers: list[DecompMarker],
+        start: int,
+        end: int,
+    ):
+        start_line, _ = get_line_column_pos(self.newlines, start)
+        end_line, _ = get_line_column_pos(self.newlines, end)
+        self.check_for_gaps(markers, start)
+
+        for marker in markers:
+            if marker.type in {
+                MarkerType.SYNTHETIC,
+                MarkerType.TEMPLATE,
+                MarkerType.LIBRARY,
+            }:
+                self._alert(AlertCode.BAD_NAMEREF, marker.pos)
+                continue
+
+            extra_str = (marker.extra or "").lower()
+
+            if extra_str == "symbol":
+                self._alert(AlertCode.SYMBOL_OPTION_IGNORED, marker.pos)
+
+            is_folded = extra_str == "folded"
+
+            self.seen_functions.setdefault(marker.module, []).insert(
+                0, (marker.offset, range(start, end + 1))
+            )
+
+            self._symbols.append(
+                ParserFunction(
+                    type=marker.type,
+                    line_number=start_line,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name="",  # TODO: This was never accurate
+                    filename=self.filename,
+                    lookup_by_name=False,
+                    name_is_symbol=False,
                     end_line=end_line,
                     is_folded=is_folded,
                 )
             )
 
-        self.fun_markers.empty()
-        self.curly_indent_stops = 0
-        self.state = ReaderState.SEARCH
+    def _finish_string(
+        self, markers: list[DecompMarker], text: str, is_widechar: bool, pos: int
+    ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
 
-    def _vtable_marker(self, marker: DecompMarker):
-        if self.tbl_markers.insert(marker):
-            self._syntax_warning(AlertCode.DUPLICATE_MODULE)
-        self.state = ReaderState.IN_VTABLE
+        for marker in markers:
+            self._symbols.append(
+                ParserString(
+                    type=marker.type,
+                    line_number=line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=text,
+                    filename=self.filename,
+                    is_widechar=is_widechar,
+                )
+            )
 
-    def _vtable_done(self, class_name: str):
-        for marker in self.tbl_markers.iter():
+    def find_function_for_static(self, module: str, pos: int) -> int | None:
+        functions = self.seen_functions.get(module, [])
+        for func_addr, func_span in functions:
+            if pos in func_span:
+                return func_addr
+
+        return None
+
+    def _finish_variable(
+        self,
+        markers: list[DecompMarker],
+        variable_name: str,
+        pos: int,
+    ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
+
+        parent_functions = {}
+        for marker in markers:
+            func_addr = self.find_function_for_static(marker.module, marker.pos)
+            if func_addr:
+                parent_functions[marker.module] = func_addr
+
+        # If any are defined
+        is_static = bool(parent_functions)
+
+        for marker in markers:
+            names = self.scopes_for_markers[marker.pos]
+            qualified_name = "::".join([*names, variable_name])
+
+            parent_function = None
+            if is_static:
+                if marker.module in parent_functions:
+                    parent_function = parent_functions[marker.module]
+                else:
+                    self._alert(AlertCode.ORPHANED_STATIC_VARIABLE, marker.pos)
+                    continue
+
+            self._symbols.append(
+                ParserVariable(
+                    type=marker.type,
+                    line_number=line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=qualified_name,
+                    filename=self.filename,
+                    is_static=is_static,
+                    parent_function=parent_function,
+                )
+            )
+
+    def _finish_vtable(
+        self,
+        markers: list[DecompMarker],
+        class_name: str,
+        pos: int,
+    ):
+        line_number, _ = get_line_column_pos(self.newlines, pos)
+        self.check_for_gaps(markers, pos)
+
+        for marker in markers:
+            names = self.scopes_for_markers[marker.pos]
+            qualified_name = "::".join([*names, class_name])
             self._symbols.append(
                 ParserVtable(
                     type=marker.type,
-                    line_number=self.line_number,
+                    line_number=line_number,
                     module=marker.module,
                     offset=marker.offset,
-                    name=self.curly.get_prefix(class_name),
+                    name=qualified_name,
                     filename=self.filename,
                     base_class=marker.extra,
                 )
             )
 
-        self.tbl_markers.empty()
-        self.state = ReaderState.SEARCH
+    def _finish_line(self, markers: list[DecompMarker]):
+        for marker in markers:
+            line_number, _ = get_line_column_pos(self.newlines, marker.pos)
+            self._symbols.append(
+                ParserLineSymbol(
+                    type=marker.type,
+                    line_number=line_number,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=f"{self.filename.name}:{line_number}",
+                    filename=self.filename,
+                )
+            )
 
-    def _variable_marker(self, marker: DecompMarker):
-        if self.var_markers.insert(marker):
-            self._syntax_warning(AlertCode.DUPLICATE_MODULE)
-
-        if self.state in (ReaderState.IN_FUNC, ReaderState.IN_FUNC_GLOBAL):
-            self.state = ReaderState.IN_FUNC_GLOBAL
-        else:
-            self.state = ReaderState.IN_GLOBAL
-
-    def _variable_done(
-        self, variable_name: str | None = None, string: ParserCodeString | None = None
+    def code_vtable(
+        self,
+        text: str,
+        candidates: list[CodeToken],
+        markers: list[DecompMarker],
     ):
-        if variable_name is None and string is None:
-            self._syntax_error(AlertCode.NO_SUITABLE_NAME)
-            return
+        vtable_class = None
+        vtable_pos = 0
 
-        for marker in self.var_markers.iter():
-            if marker.is_string():
-                assert string is not None
-                self._symbols.append(
-                    ParserString(
-                        type=marker.type,
-                        line_number=self.line_number,
-                        module=marker.module,
-                        offset=marker.offset,
-                        name=string.text,
-                        filename=self.filename,
-                        is_widechar=string.is_widechar,
-                    )
-                )
-            else:
-                parent_function = None
-                is_static = self.state == ReaderState.IN_FUNC_GLOBAL
+        for start, stop, token in candidates:
+            if token == TokenType.LINE_COMMENT:
+                excerpt = text[start:stop]
+                vtable_class = get_class_name(excerpt)
+                if vtable_class is not None:
+                    # Allow continuation here for `// SIZE comments`
+                    self._finish_vtable(markers, vtable_class, start)
+                    return
 
-                # If this is a static variable, we need to get the function
-                # where it resides so that we can match it up later with the
-                # mangled names of both variable and function from cvdump.
-                if is_static:
-                    fun_marker = self.fun_markers.query(
-                        MarkerCategory.FUNCTION, marker.module
-                    )
+            elif token == TokenType.CURLY_OPEN:
+                break
 
-                    if fun_marker is None:
-                        self._syntax_warning(AlertCode.ORPHANED_STATIC_VARIABLE)
-                        continue
+            elif token == TokenType.CODE:
+                excerpt = text[start:stop]
+                vtable_class = get_class_name(excerpt.strip())  # TODO
+                vtable_pos = start
+                break
 
-                    parent_function = fun_marker.offset
-
-                self._symbols.append(
-                    ParserVariable(
-                        type=marker.type,
-                        line_number=self.line_number,
-                        module=marker.module,
-                        offset=marker.offset,
-                        name=self.curly.get_prefix(variable_name),
-                        filename=self.filename,
-                        is_static=is_static,
-                        parent_function=parent_function,
-                    )
-                )
-
-        self.var_markers.empty()
-        if self.state == ReaderState.IN_FUNC_GLOBAL:
-            self.state = ReaderState.IN_FUNC
-        else:
-            self.state = ReaderState.SEARCH
-
-    def _line_marker(self, marker: DecompMarker):
-        self._symbols.append(
-            ParserLineSymbol(
-                type=marker.type,
-                line_number=self.line_number,
-                module=marker.module,
-                offset=marker.offset,
-                name=f"{self.filename.name}:{self.line_number}",
-                filename=self.filename,
-            )
-        )
-
-    def _handle_marker(self, marker: DecompMarker):
-        # Cannot handle any markers between function sig and opening curly brace
-        if self.state == ReaderState.WANT_CURLY:
-            self._syntax_error(AlertCode.UNEXPECTED_MARKER)
-            return
-
-        # If we are inside a function, the only markers we accept are:
-        # GLOBAL, indicating a static variable
-        # STRING, indicating a literal string.
-        # Otherwise we assume that the parser missed the end of the function
-        # and we have moved on to something else.
-        # This is unlikely to occur with well-formed code, but
-        # we can recover easily by just ending the function here.
-        if self.state == ReaderState.IN_FUNC and not marker.allowed_in_func():
-            self._syntax_warning(AlertCode.MISSED_END_OF_FUNCTION)
-            self._function_done(unexpected=True)
-
-        # TODO: How uncertain are we of detecting the end of a function
-        # in a clang-formatted file? For now we assume we have missed the
-        # end if we detect a non-GLOBAL marker while state is IN_FUNC.
-        # Maybe these cases should be syntax errors instead
-
-        if marker.is_regular_function():
-            if self.state in (
-                ReaderState.SEARCH,
-                ReaderState.WANT_SIG,
-            ):
-                # We will allow multiple offsets if we have just begun
-                # the code block, but not after we hit the curly brace.
-                self._function_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.is_template():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_TEMPLATE):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.is_synthetic():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_SYNTHETIC):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.is_library():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_LIBRARY):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        # Strings and variables are almost the same thing
-        elif marker.is_string() or marker.is_variable():
-            if self.state in (
-                ReaderState.SEARCH,
-                ReaderState.IN_GLOBAL,
-                ReaderState.IN_FUNC,
-                ReaderState.IN_FUNC_GLOBAL,
-            ):
-                self._variable_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.is_vtable():
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_VTABLE):
-                self._vtable_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.is_line():
-            self._line_marker(marker)
-
-        else:
-            self._syntax_warning(AlertCode.UNKNOWN_ANNOTATION)
-
-    def read_line(self, line: str):
-        if self.state == ReaderState.DONE:
-            return
-
-        self.last_line = line  # TODO: Useful or hack for error reporting?
-        self.line_number += 1
-
-        marker = match_marker(line, aliases=self.aliases)
-        if marker is not None:
-            # TODO: what's the best place for this?
-            # Does it belong with reading or marker handling?
-            if not is_marker_exact(self.last_line):
-                self._syntax_warning(AlertCode.NOT_STRICT_FORMAT)
-            self._handle_marker(marker)
-            return
-
-        self.curly.read_line(line)
-
-        line_strip = line.strip()
-        if self.state in (
-            ReaderState.IN_SYNTHETIC,
-            ReaderState.IN_TEMPLATE,
-            ReaderState.IN_LIBRARY,
-        ):
-            # Explicit nameref functions provide the function name
-            # on the next line (in a // comment)
-            name = get_synthetic_name(line)
-            if name is None:
-                self._syntax_error(AlertCode.BAD_NAMEREF)
-            else:
-                self.function_sig = name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
-
-        elif self.state == ReaderState.WANT_SIG:
-            # Ignore blanks on the way to function start or function name
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
-
-            elif line_strip.startswith("//"):
-                # If we found a comment, assume implicit lookup-by-name
-                # function and end here. We know this is not a decomp marker
-                # because it would have been handled already.
-                synthetic_name = get_synthetic_name(line)
-                assert synthetic_name is not None
-                self.function_sig = synthetic_name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
-
-            elif line_strip == "{":
-                # We missed the function signature but we can recover from this
-                self.function_sig = "(unknown)"
-                self._function_starts_here()
-                self._syntax_warning(AlertCode.MISSED_START_OF_FUNCTION)
-                self.state = ReaderState.IN_FUNC
-
-            else:
-                # Inline functions may end with a comment. Strip that out
-                # to help parsing.
-                self.function_sig = remove_trailing_comment(line_strip)
-
-                # The range of lines for this function begins when we see a non-blank line.
-                self._function_starts_here()
-
-                # Now check to see if the opening curly bracket is on the
-                # same line. clang-format should prevent this (BraceWrapping)
-                # but it is easy to detect.
-                # If the entire function is on one line, handle that too.
-                if self.function_sig.endswith("{"):
-                    self.state = ReaderState.IN_FUNC
-                elif self.function_sig.endswith("}") or self.function_sig.endswith(
-                    "};"
-                ):
-                    self._function_done()
-                elif self.function_sig.endswith(");"):
-                    # Detect forward reference or declaration
-                    self._syntax_error(AlertCode.NO_IMPLEMENTATION)
-                else:
-                    self.state = ReaderState.WANT_CURLY
-
-        elif self.state == ReaderState.WANT_CURLY:
-            if line_strip == "{":
-                self.curly_indent_stops = line.index("{")
-                self.state = ReaderState.IN_FUNC
-
-        elif self.state == ReaderState.IN_FUNC:
-            if line_strip.startswith("}") and line[self.curly_indent_stops] == "}":
-                self._function_done()
-
-        elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
-            # TODO: Known problem that an error here will cause us to abandon a
-            # function we have already parsed if state == IN_FUNC_GLOBAL.
-            # However, we are not tolerant of _any_ syntax problems in our
-            # CI actions, so the solution is to just fix the invalid marker.
-            variable_name = None
-
-            global_markers_queued = any(
-                m.is_variable() for m in self.var_markers.iter()
-            )
-
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
+            elif token == TokenType.SEMICOLON:
+                self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
                 return
 
-            if global_markers_queued:
-                # Not the greatest solution, but a consequence of combining GLOBAL and
-                # STRING markers together. If the marker precedes a return statement, it is
-                # valid for a STRING marker to be here, but not a GLOBAL. We need to look
-                # ahead and tell whether this *would* fail.
-                if line_strip.startswith("return"):
-                    self._syntax_error(AlertCode.GLOBAL_NOT_VARIABLE)
+        if vtable_class:
+            self._finish_vtable(markers, vtable_class, vtable_pos)
+        else:
+            start = candidates[0][0]
+            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+
+    def code_function(
+        self,
+        text: str,
+        candidates: list[CodeToken],
+        markers: list[DecompMarker],
+    ):
+        found_sig = False
+        sig_pos = 0
+
+        for start, stop, token in candidates:
+            if token == TokenType.CODE:
+                # TODO: Detect function signature. Discard if we detect `if (x)`
+                if not found_sig:
+                    # TODO: default param with EQUAL could split CODE token.
+                    found_sig = True
+                    sig_pos = start
+
+            if token == TokenType.LINE_COMMENT and not found_sig:
+                # Allow comments between signature and curly bracket.
+                # e.g. `vtable+0x08`
+                excerpt = text[start:stop]
+                synthetic_name = get_synthetic_name(excerpt)
+                assert synthetic_name is not None
+                self._finish_name_function(markers, synthetic_name, start)
+                return
+
+            if token == TokenType.SEMICOLON:
+                self._alert(AlertCode.NO_IMPLEMENTATION, start)
+                return
+
+            if token == TokenType.CURLY_OPEN:
+                if not found_sig:
+                    self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
                     return
-                if line_strip.startswith("//"):
-                    # If we found a comment, assume implicit lookup-by-name
-                    # function and end here. We know this is not a decomp marker
-                    # because it would have been handled already.
-                    variable_name = get_synthetic_name(line)
+
+                if start not in self.enclosures:
+                    self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+                    return
+
+                func_end = self.enclosures[start]
+                self._finish_line_function(markers, sig_pos, func_end)
+                return
+
+            if token == TokenType.CURLY_CLOSE:
+                # Make sure we abort as to not match with a subsequent curly bracket.
+                self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+                return
+
+        # Ran to end without finding it
+        start = candidates[0][0]
+        self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+
+    def code_variable(
+        self,
+        text: str,
+        candidates: list[CodeToken],
+        markers: list[DecompMarker],
+    ):
+        variable_name = None
+
+        for start, stop, token in candidates:
+            excerpt = text[start:stop]
+
+            if token == TokenType.CODE:
+                if excerpt.startswith("return"):
+                    self._alert(AlertCode.GLOBAL_NOT_VARIABLE, start)
+                    return
+
+                variable_name = get_variable_name(excerpt)
+                if variable_name:
+                    self._finish_variable(markers, variable_name, start)
                 else:
-                    variable_name = get_variable_name(line)
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
 
-            string = get_string_contents(line)
-            self._variable_done(variable_name, string)
+                return
 
-        elif self.state == ReaderState.IN_VTABLE:
-            vtable_class = get_class_name(line)
-            if vtable_class is not None:
-                self._vtable_done(class_name=vtable_class)
+            if token == TokenType.LINE_COMMENT:
+                variable_name = get_synthetic_name(excerpt)
+                if variable_name:
+                    self._finish_variable(markers, variable_name, start)
+                else:
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
+
+                return
+
+            self._alert(AlertCode.NO_SUITABLE_NAME, start, excerpt)
+            return
+
+    def code_string(
+        self,
+        text: str,
+        candidates: list[CodeToken],
+        markers: list[DecompMarker],
+    ):
+        for start, stop, token in candidates:
+            # TODO: read from #define
+            if token == TokenType.STRING:
+                excerpt = text[start:stop]
+                string_obj = get_string_contents(excerpt)
+
+                if string_obj:
+                    self._finish_string(
+                        markers, string_obj.text, string_obj.is_widechar, start
+                    )
+
+                else:
+                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
+
+            elif token == TokenType.SEMICOLON:
+                break
+
+    def get_marker_sets(
+        self, tokens: list[CodeToken]
+    ) -> list[tuple[list[CodeToken], list[CodeToken]]]:
+        markers: list[CodeToken] = []
+        candidates: list[CodeToken] = []
+        output = []
+
+        for x in tokens:
+            if x[0] in self.found_markers:
+                # If we have begun reading candidates, this is the end of this group.
+                if candidates:
+                    output.append((list(markers), list(candidates)))
+                    markers.clear()
+                    candidates.clear()
+
+                markers.append(x)
+            elif markers:
+                # Only add if we have read any markers.
+                candidates.append(x)
+
+        if markers:
+            output.append((list(markers), list(candidates)))
+
+        return output
 
     def read(self, text: str):
-        for line in io.StringIO(text, newline=None):
-            self.read_line(line)
+        # TODO: better than passing it everywhere?
+        self.text = text
+        self.found_markers = {
+            m.start(): m.groups() for m in newMarkerRegex.finditer(text)
+        }
+        if not self.found_markers:
+            return
+
+        tokens = tokenize_code_file(text)
+        self.newlines = get_newlines_from_text(text)
+        self.enclosures, _ = scope_detect_churn(tokens)
+        # TODO: error if any unpaired curly brackets remain.
+
+        # TODO: naming and refactor
+        self.scopes = get_scopes_from_tokens(text, self.enclosures)
+        xxx = [(range(start, stop), name) for start, stop, name in self.scopes]
+        for pos in self.found_markers.keys():
+            self.scopes_for_markers[pos] = [name for span, name in xxx if pos in span]
+
+        for marker_tokens, candidates in self.get_marker_sets(tokens):
+            if not candidates:
+                self._alert(AlertCode.UNEXPECTED_END_OF_FILE, len(text))
+                continue  # ?
+
+            for x in marker_tokens:
+                marker = new_match_marker(x[0], self.found_markers[x[0]], self.aliases)
+                if marker.type == MarkerType.UNKNOWN:
+                    self._alert(AlertCode.UNKNOWN_ANNOTATION, x[0], text[x[0] : x[1]])
+                    continue
+
+                self.handle_marker(marker)
+                if not is_marker_exact(text, x[0]):
+                    self._alert(AlertCode.NOT_STRICT_FORMAT, x[0], text[x[0] : x[1]])
+
+            for category, bucket in self.buckets.items():
+                if not bucket:
+                    continue
+
+                markers = list(bucket.values())
+
+                if category == MarkerCategory.FUNCTION:
+                    self.code_function(text, candidates, markers)
+
+                elif category == MarkerCategory.VTABLE:
+                    self.code_vtable(text, candidates, markers)
+
+                elif category == MarkerCategory.VARIABLE:
+                    self.code_variable(text, candidates, markers)
+
+                elif category == MarkerCategory.STRING:
+                    self.code_string(text, candidates, markers)
+
+                elif category == MarkerCategory.ADDRESS:
+                    self._finish_line(markers)
+
+                bucket.clear()
+                self.marker_types.discard(category)
 
     def finish(self):
-        if self.state != ReaderState.SEARCH:
-            self._syntax_warning(AlertCode.UNEXPECTED_END_OF_FILE)
-
-        self.state = ReaderState.DONE
+        # if self.state != ReaderState.SEARCH:
+        #    self._alert(AlertCode.UNEXPECTED_END_OF_FILE)
+        #
+        # self.state = ReaderState.DONE
+        pass
 
     def to_result(self) -> ReccmpParserResult:
         return ReccmpParserResult(

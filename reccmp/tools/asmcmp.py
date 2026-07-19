@@ -238,25 +238,22 @@ def main() -> int:
 
     report = ReccmpStatusReport(filename=target.original_path.name)
 
-    # Build report:
-    for match in compared:
-        # if we are ignoring this function, skip to next one and don't add it to the entities list
-        if (
-            match.match_type == EntityType.FUNCTION
-            and match.name in target.report_config.ignore_functions
-        ):
-            continue
+    def report_filter(ent: ReccmpComparedEntity) -> bool:
+        if ent.is_function() and ent.name in target.report_config.ignore_functions:
+            return True
 
-        if args.nolib and match.is_library:
-            continue
+        if args.nolib and ent.is_library:
+            return True
 
-        report.add_match(match)
+        return False
+
+    report.filter_entities(report_filter)
 
     # Count how many functions have the same virtual address in orig and recomp.
     functions_aligned_count = report_function_alignment(report)
 
     # Number of functions compared (i.e. excluding stubs)
-    function_count, _, total_effective_accuracy = report_function_accuracy(report)
+    implemented_funcs, _, total_effective_accuracy = report_function_accuracy(report)
 
     # Print diff summary to terminal
     if not args.silent and args.diff is None:
@@ -293,11 +290,10 @@ def main() -> int:
     if args.html is not None:
         write_html_report(args.html, report, target_icon)
 
-    implemented_funcs = function_count
+    function_count = report.function_total
 
     # Add known but unmatched functions to our count
     function_count += compare.count_unmatched_functions()
-
     # If we know how many functions are in the file (via analysis with Ghidra or other tools)
     # we can substitute an alternate value to use when calculating the percentages below.
     if args.total:

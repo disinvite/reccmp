@@ -20,7 +20,6 @@ def test_strings():
     """Make sure we correctly parse escaped characters."""
     assert list(tokenize_code_file('"test"')) == [(0, 6, TokenType.STRING)]
     assert list(tokenize_code_file('"\\""')) == [(0, 4, TokenType.STRING)]
-    assert list(tokenize_code_file('"\\""')) == [(0, 4, TokenType.STRING)]
     assert list(tokenize_code_file('"\\\\"')) == [(0, 4, TokenType.STRING)]
     assert list(tokenize_code_file('"\'"')) == [(0, 3, TokenType.STRING)]
 
@@ -72,6 +71,20 @@ def test_digit_separator():
         TokenType.CODE,
         TokenType.EQUAL,
         TokenType.CODE,
+    ]
+
+
+def test_digit_separator_naive_skip():
+    """When disqualifying a CHAR token, do not skip delimiters it contains."""
+    assert tokenize_code_file("int x = 1'000; int y = 2'000;") == [
+        (0, 6, TokenType.CODE),
+        (6, 7, TokenType.EQUAL),
+        (8, 13, TokenType.CODE),
+        (13, 14, TokenType.SEMICOLON),
+        (15, 21, TokenType.CODE),
+        (21, 22, TokenType.EQUAL),
+        (23, 28, TokenType.CODE),
+        (28, 29, TokenType.SEMICOLON),
     ]
 
 

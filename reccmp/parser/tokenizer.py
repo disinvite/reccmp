@@ -49,7 +49,11 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
     # Start of code token between delimiters.
     start = 0
 
-    for match in r_newSplitter.finditer(text):
+    # Pull out the iterator to a variable so the
+    # digit separator case can overwrite it.
+    matches = r_newSplitter.finditer(text)
+
+    while (match := next(matches, None)) is not None:
         pos, stop = match.span()
         first = text[pos]
 
@@ -65,6 +69,9 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
             token_type = TokenType.STRING
         elif first == "'":
             if pos and text[pos - 1] in string.hexdigits:
+                # Reset the iterator to skip the single quote.
+                # Do not skip delimiters inside this rejected CHAR token.
+                matches = r_newSplitter.finditer(text, pos + 1)
                 continue
 
             token_type = TokenType.CHAR

@@ -228,15 +228,16 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
     interrupted = False
     global_mask = set()
     mask = set()
-    legs: list[list[int]] = [[]]
+    # Each leg records its curly brackets as (offset, token) so we can compare
+    # branches by their bracket *sequence*, not just how many brackets they have.
+    legs: list[list[tuple[int, TokenType]]] = [[]]
 
     for start, _, token in remain:
         # Build a list of all tokens that will be affected in this PPC block.
         mask.add(start)
 
-        # TODO: need to be careful with nonsense blocks like `#if { #else } #end`
         if token in (TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE):
-            legs[-1].append(start)
+            legs[-1].append((start, token))
 
         elif token == TokenType.PPC_IF:
             # New block begins here. If one was already started,
@@ -252,14 +253,18 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
         elif token == TokenType.PPC_END:
             # `not interrupted`: branches are all at the same PPC level
             # `len(legs) > 1`: there is more than one option
-            # `all(len(leg)...`: same bracket level for each branch (TODO)
+            # signature match: every branch has the same bracket sequence
+            # (same count AND same open/close direction). Folding one branch in
+            # for another is only valid if they are structurally identical.
+            # Rejects nonsense like `#if { #else } #endif`.
+            signature = [token for _, token in legs[0]]
             if (
                 not interrupted
                 and len(legs) > 1
-                and all(len(leg) == len(legs[0]) for leg in legs)
+                and all([t for _, t in leg] == signature for leg in legs)
             ):
                 # Retain only the curly brackets from the first branch.
-                keepers = set(legs[0])
+                keepers = {start for start, _ in legs[0]}
                 # All others in this block will be deleted.
                 global_mask |= mask - keepers
 

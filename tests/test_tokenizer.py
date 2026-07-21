@@ -29,7 +29,6 @@ def test_chars():
     Note: we don't care if the char is more than 1 character."""
     assert list(tokenize_code_file("'x'")) == [(0, 3, TokenType.CHAR)]
     assert list(tokenize_code_file("'\\''")) == [(0, 4, TokenType.CHAR)]
-    assert list(tokenize_code_file("'\\''")) == [(0, 4, TokenType.CHAR)]
     assert list(tokenize_code_file("'\\\\'")) == [(0, 4, TokenType.CHAR)]
     assert list(tokenize_code_file("'\"'")) == [(0, 3, TokenType.CHAR)]
 
@@ -146,12 +145,68 @@ def test_line_col_conversion():
     assert get_line_column_pos(newlines, 17) == (3, 1)
 
 
+def test_scope_detect_empty():
+    """Base case: no tokens to parse, no scopes returned."""
+    scopes, remain = scope_detect_churn(tokenize_code_file(""))
+    assert not scopes
+    assert not remain
+
+
+def test_scope_detect_single_pair():
+    """Return a single scope."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{}"))
+    assert scopes == {0: 1}
+    assert not remain
+
+
+def test_scope_detect_reverse_pair():
+    """Invalid input. Discarded tokens are returned in the `remain` list."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("}{"))
+    assert not scopes
+    assert remain == [(0, 1, TokenType.CURLY_CLOSE), (1, 2, TokenType.CURLY_OPEN)]
+
+
+def test_scope_detect_nested():
+    """Can returned layered scopes."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{{}}"))
+    assert scopes == {0: 3, 1: 2}
+    assert not remain
+
+
+def test_scope_detect_siblings():
+    """Two adjacent pairs at the same level."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{}{}"))
+    assert scopes == {0: 1, 2: 3}
+    assert not remain
+
+
+def test_scope_detect_nested_two_levels():
+    """Outer scope is paired on the second pass."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{{}{}}"))
+    assert scopes == {0: 5, 1: 2, 3: 4}
+    assert not remain
+
+
+def test_scope_detect_unpaired_close():
+    """Unpaired closing bracket returned in the `remain` list."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{}}"))
+    assert scopes == {0: 1}
+    assert remain == [(2, 3, TokenType.CURLY_CLOSE)]
+
+
+def test_scope_detect_unpaired_open():
+    """Unpaired opening brackets returned in the `remain` list."""
+    scopes, remain = scope_detect_churn(tokenize_code_file("{{}"))
+    assert scopes == {1: 2}
+    assert remain == [(0, 1, TokenType.CURLY_OPEN)]
+
+
 def test_scope_detect_folding_with_invalid_ppc():
+    """Should not crash if the input has invalid PPC statements."""
     code = "#endif"
     tokens = tokenize_code_file(code)
     scopes, _ = scope_detect_churn(tokens)
     assert not scopes
-    # Should not crash
 
 
 def test_scope_detect_inner_curly_open_outer_curly_close():
@@ -175,8 +230,8 @@ def test_scope_detect_inner_curly_open_outer_curly_close():
     assert scopes == {0: 40, 21: 38}
 
 
+@pytest.mark.xfail(reason="TODO: Defeated by naive pairing with enable_ppc=False.")
 def test_scope_detect_unbalanced_ppc_branches():
-    """TODO: Do we want this?"""
     code = dedent("""\
         {
         #ifdef COMPAT_MODE
@@ -188,7 +243,7 @@ def test_scope_detect_unbalanced_ppc_branches():
     """)
     tokens = tokenize_code_file(code)
     scopes, _ = scope_detect_churn(tokens)
-    assert scopes
+    assert not scopes
 
 
 def test_scope_detect_extern_c():
@@ -207,6 +262,120 @@ def test_scope_detect_extern_c():
     assert scopes == {23: 45}
 
 
+def test_scope_detect_three_elif_branches():
+    """When folding an N-way PPC branch with equal bracket sequences,
+    use the brackets from the first branch to complete the scope."""
+    code = dedent("""\
+        {
+        #if A
+        {
+        #elif B
+        {
+        #elif C
+        {
+        #endif
+        }
+        }
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {0: 39, 8: 37}
+    assert not remain
+
+
+def test_scope_detect_nested_ppc():
+    """A #if block nested inside another #if block. Both brackets pair normally."""
+    code = dedent("""\
+        #if A
+        {
+        #if B
+        {
+        #endif
+        }
+        #endif
+        }
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {6: 32, 14: 23}
+    assert not remain
+
+
+def test_scope_detect_same_direction_multi_bracket_legs():
+    """PPC branches with multiple brackets can fold as long as the sequences are equal."""
+    code = dedent("""\
+        {{
+        #if A
+        {{
+        #else
+        {{
+        #endif
+        }}
+        }}
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {0: 32, 1: 31, 9: 29, 10: 28}
+    assert not remain
+
+
+def test_scope_detect_both_branches_balanced():
+    """Make sure that we can pair brackets inside of each leg of a PPC branch.
+    All pairs are returned, even though the "correct" way would choose only one leg."""
+    code = dedent("""\
+        #if A
+        {
+        }
+        #else
+        {
+        }
+        #endif
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {6: 8, 16: 18}
+    # TODO: Why return PPC tokens here?
+    assert tokens_only(remain) == [
+        TokenType.PPC_IF,
+        TokenType.PPC_ELSE,
+        TokenType.PPC_END,
+    ]
+
+
+def test_scope_detect_unequal_branch_counts():
+    """Cannot resolve a single pair of brackets from this example.
+    The brackets are unbalanced whether we ignore the PPC boundaries or not."""
+    code = dedent("""\
+        {
+        #if A
+        {
+        {
+        #else
+        {
+        #endif
+        }
+        }
+        }
+    """)
+    scopes, _ = scope_detect_churn(tokenize_code_file(code))
+    assert not scopes
+
+
+def test_scope_detect_mismatched_direction_multi_leg():
+    """PPC branch legs do not have equal sequences. Do not pair any brackets.
+    We also cannot pair by ignoring the PPC boundaries because the total is unbalanced.
+    """
+    code = dedent("""\
+        {
+        #if A
+        {
+        #elif B
+        {
+        #elif C
+        }
+        #endif
+        }
+    """)
+    scopes, _ = scope_detect_churn(tokenize_code_file(code))
+    assert not scopes
+
+
 def test_scope_detect_invalid_folding_1():
     """Cannot return any scopes."""
     code = dedent("""\
@@ -221,9 +390,10 @@ def test_scope_detect_invalid_folding_1():
     assert not scopes
 
 
-@pytest.mark.xfail(reason="TODO")
+@pytest.mark.xfail(reason="TODO: We do not delete tokens from partial PPC resolution.")
 def test_scope_detect_ignore_if_0():
-    """Same as above, but we should ignore the invalid PPC branch."""
+    """Same as `detect_invalid_folding_1`, but if we delete tokens from
+    the `#if 0` leg then we could return the expected bracket pair."""
     code = dedent("""\
         {
         #ifdef 0
@@ -236,10 +406,9 @@ def test_scope_detect_ignore_if_0():
     assert scopes
 
 
-@pytest.mark.xfail(reason="TODO")
+@pytest.mark.xfail(reason="TODO: Defeated by naive pairing with enable_ppc=False.")
 def test_scope_detect_invalid_folding_2():
-    """Cannot return any scopes.
-    Naively enabling all scopes will create pairs."""
+    """Do not return any scopes, despite the fact that we have global balance of brackets."""
     code = dedent("""\
         {
         #ifdef TEST

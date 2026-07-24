@@ -230,13 +230,35 @@ def test_scope_detect_inner_curly_open_outer_curly_close():
     assert scopes == {0: 40, 21: 38}
 
 
-@pytest.mark.xfail(reason="TODO: Defeated by naive pairing with enable_ppc=False.")
 def test_scope_detect_unbalanced_ppc_branches():
+    """In this example, the brackets are globally balanced,
+    but the PPC block has two legs with different bracket sequences.
+    We should not pair any brackets, even the outer two."""
     code = dedent("""\
         {
         #ifdef COMPAT_MODE
         {
         #else
+        #endif
+        }
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = scope_detect_churn(tokens)
+    assert not scopes
+
+
+def test_scope_detect_unbalanced_ppc_branches_no_inner_else():
+    """In this example, the brackets are globally balanced,
+    but the PPC block has two legs with different bracket sequences.
+    We should not pair any brackets, even the outer two.
+    Here the #else token is outside the impossible bracket
+    pairing, so it is less obvious that it is wrong."""
+    code = dedent("""\
+        {
+        #ifdef COMPAT_MODE
+        #else
+        {
         #endif
         }
         }
@@ -406,7 +428,6 @@ def test_scope_detect_ignore_if_0():
     assert scopes
 
 
-@pytest.mark.xfail(reason="TODO: Defeated by naive pairing with enable_ppc=False.")
 def test_scope_detect_invalid_folding_2():
     """Do not return any scopes, despite the fact that we have global balance of brackets."""
     code = dedent("""\
@@ -421,3 +442,64 @@ def test_scope_detect_invalid_folding_2():
     tokens = tokenize_code_file(code)
     scopes, _ = scope_detect_churn(tokens)
     assert not scopes
+
+
+def test_scope_detect_reject_impossible_naive_pairing_1():
+    """Brackets are globally balanced, but we must reject the naive pairing
+    because it is impossible: both legs of the PPC block would be active.
+    Both legs have the same bracket sequence, so we can emit one pair,
+    leaving one extra open bracket."""
+    code = dedent("""\
+        {
+        {
+        #if A
+        }
+        #else
+        }
+        #endif
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {2: 10}
+    assert remain == [(0, 1, TokenType.CURLY_OPEN)]
+
+
+def test_scope_detect_reject_impossible_naive_pairing_2():
+    """Brackets are globally balanced, but we must reject the naive pairing
+    because it is impossible: both legs of the PPC block would be active.
+    Both legs have the same bracket sequence, so we can emit one pair,
+    leaving one extra closing bracket."""
+    code = dedent("""\
+        #if A
+        {
+        #else
+        {
+        #endif
+        }
+        }
+    """)
+    scopes, remain = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {6: 23}
+    assert remain == [(25, 26, TokenType.CURLY_CLOSE)]
+
+
+@pytest.mark.xfail(
+    reason="TODO: Could salvage the first pairing if we discard the empty PPC block"
+)
+def test_scope_detect_salvage_valid_pairing():
+    """Our handling of this case rejects the second (questionable) pair but
+    we should return the first pair. The empty PPC can be removed easily."""
+    code = dedent("""\
+        {
+        #ifdef X
+        #endif
+        }
+        {
+        #ifdef Y
+        {
+        #else
+        }
+        #endif
+        }
+    """)
+    scopes, _ = scope_detect_churn(tokenize_code_file(code))
+    assert scopes == {0: 18}

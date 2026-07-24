@@ -283,6 +283,51 @@ def all_curly_paired(tokens: list[CodeToken]) -> bool:
     return True
 
 
+def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) -> bool:
+    """Check the new bracket pairs from reduce_scopes(enable_ppc=False)
+    and determine whether any of them are:
+    1. Impossible: the brackets are in the same PPC block, divided by #else,
+    so both of them could not be active at the same time.
+    2. Conditional: one bracket is in inside a PPC block with an #else,
+    the other is outside. Later processing will permit the case where ALL
+    options in a PPC block have the same sequence of brackets, but they are
+    rejected here.
+
+    If any pairing has a problem, reject them all.
+
+    We allow the case where one bracket is inside a PPC block WITHOUT
+    an #else, and the other is outside the block. (`extern "C"` example)
+
+    We also need to allow for PPC blocks with an #else where the #if and #endif
+    are also part of the bracket sequence.
+    (i.e. don't check only for an #else token)."""
+    # Start by collecting each the boundaries of each PPC block and its legs.
+    stack: list[tuple[int, list[int]]] = []
+    blocks: list[list[int]] = []  # (if_pos, separators, endif_pos)
+    for start, _, token in tokens:
+        if token == TokenType.PPC_IF:
+            stack.append((start, []))
+        elif token == TokenType.PPC_ELSE:
+            if stack:
+                stack[-1][1].append(start)
+        elif token == TokenType.PPC_END:
+            if stack:
+                if_pos, separators = stack.pop()
+                if separators:
+                    blocks.append([if_pos, *separators, start])
+
+    # Test each pairing against every PPC block with an #else/#elif.
+    for open_pos, close_pos in ranges:
+        # `boundaries` has the position of each #if/#else/.../#endif
+        # component of the PPC block.
+        for boundaries in blocks:
+            # Check whether the entire PPC block is between the brackets.
+            if not all(open_pos < b < close_pos for b in boundaries):
+                return False
+
+    return True
+
+
 def scope_detect_churn(
     tokens: list[CodeToken],
 ) -> tuple[dict[int, int], list[CodeToken]]:
@@ -305,9 +350,11 @@ def scope_detect_churn(
 
         # Can we simply enable all PPC regions and match remaining brackets?
         new_ranges, new_remain = reduce_scopes(remain, enable_ppc=False)
-        # If there is nothing left, this was successful.
-        # Otherwise, do not update the lists with partial matches.
-        if not new_remain:
+        # This is only allowed if:
+        # 1. All remaining brackets are paired.
+        # 2. No pairing joins two regions separated by #else/#elif.
+        # `new_remain` has had its PPC tokens removed, so use `remain`.
+        if not new_remain and check_naive_folding(new_ranges, remain):
             out_ranges.extend(new_ranges)
             remain = new_remain
             break

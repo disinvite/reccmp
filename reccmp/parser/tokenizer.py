@@ -10,6 +10,7 @@ class TokenType(enum.IntEnum):
     CURLY_CLOSE = enum.auto()
     PPC_IF = enum.auto()
     PPC_ELSE = enum.auto()
+    PPC_ELIF = enum.auto()
     PPC_END = enum.auto()
     PPC_OTHER = enum.auto()
     SEMICOLON = enum.auto()
@@ -79,7 +80,9 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
             ppc_name = match.group(1).lower()
             if ppc_name.startswith("if"):
                 token_type = TokenType.PPC_IF
-            elif ppc_name.startswith("el"):
+            elif ppc_name.startswith("elif"):
+                token_type = TokenType.PPC_ELIF
+            elif ppc_name == "else":
                 token_type = TokenType.PPC_ELSE
             elif ppc_name == "endif":
                 token_type = TokenType.PPC_END
@@ -165,6 +168,7 @@ def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
             TokenType.CURLY_OPEN,
             TokenType.CURLY_CLOSE,
             TokenType.PPC_IF,
+            TokenType.PPC_ELIF,
             TokenType.PPC_ELSE,
             TokenType.PPC_END,
         }
@@ -198,6 +202,7 @@ def reduce_scopes(
             stack.append(x)
         elif enable_ppc and x[2] in {
             TokenType.PPC_IF,
+            TokenType.PPC_ELIF,
             TokenType.PPC_ELSE,
             TokenType.PPC_END,
         }:
@@ -246,7 +251,7 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
             mask = {start}
             legs = [[]]
 
-        elif token == TokenType.PPC_ELSE:
+        elif token in (TokenType.PPC_ELSE, TokenType.PPC_ELIF):
             # New branch begins here
             legs.append([])
 
@@ -283,6 +288,122 @@ def all_curly_paired(tokens: list[CodeToken]) -> bool:
     return True
 
 
+# A constant preprocessor condition: `#if 0/1` or `#elif 0/1`. The condition must
+# run to the end of the line so a real expression like `#if 0 || FOO` is left
+# alone. An optional trailing line comment is permitted.
+r_ppc_const = re.compile(r"#\s*(?:el)?if\s+([01])\s*(?://.*)?$", flags=re.M)
+# r_ppc_const = re.compile(r"\#\s*([01])\s*\n")
+
+
+class LegStatus(enum.Enum):
+    """Whether a leg of a preprocessor conditional can be taken."""
+
+    NEVER = enum.auto()  # constant-0, or shadowed by an earlier ALWAYS leg
+    SOMETIMES = enum.auto()  # non-constant: decided at compile time, not here
+    ALWAYS = enum.auto()  # constant-1, or the #else every dead leg falls through to
+
+
+def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeToken]:
+    """Remove tokens on preprocessor branches that are dead because of a constant
+    `#if 0` / `#if 1` condition.
+
+    `#if 0`: the #if branch is impossible. Drop it and its body. If an #else
+    follows, keep that branch as ordinary (unconditional) code and drop the block's
+    PPC tokens. If an #elif follows instead, rewrite that #elif into an #if so the
+    remaining legs are still a valid conditional.
+
+    `#if 1`: the #if branch always wins. Keep its body and drop every other leg
+    along with the block's own PPC tokens.
+
+    A non-constant `#if` passes through untouched, except that any dead `#elif 0`
+    leg inside it is removed. Constant blocks nested inside a surviving branch are
+    resolved the same way; those inside a dead branch are dropped wholesale."""
+    # Find every constant condition in one sweep, keyed on the position of its `#`.
+    # That is where the matching PPC token starts, so the block scan below is a
+    # dict lookup instead of a regex match per directive. A hit inside a comment or
+    # string is inert: nothing queries that position.
+    constants = {m.start(): m.group(1) for m in r_ppc_const.finditer(text)}
+
+    # Bail immediately if there is no constant condition anywhere.
+    if not constants:
+        return tokens
+
+    # Collect each complete conditional block: the token index of every
+    # #if/#elif/#else leg (with its constant value, if any) and its #endif.
+    # Each leg is (token index, leg token type, "0"/"1" constant or None).
+    Leg = tuple[int, TokenType, str | None]
+    stack: list[list[Leg]] = []
+    blocks: list[tuple[list[Leg], int]] = []
+
+    for i, (start, _, token_type) in enumerate(tokens):
+        if token_type == TokenType.PPC_IF:
+            stack.append([(i, token_type, constants.get(start))])
+        elif stack:
+            # An #else never carries a condition, so the lookup misses and it
+            # picks up a None const the same way a non-constant #elif does.
+            if token_type in (TokenType.PPC_ELIF, TokenType.PPC_ELSE):
+                stack[-1].append((i, token_type, constants.get(start)))
+            elif token_type == TokenType.PPC_END:
+                blocks.append((stack.pop(), i))
+
+    # Decide which token indices to delete and which #elif to promote to #if.
+    # We only ever add to `delete`, so deletions made for a block nested inside a
+    # surviving leg (blocks are processed inner-first) are always preserved.
+    delete: set[int] = set()
+    promote: set[int] = set()
+
+    for legs, endif in blocks:
+        # Boundary token index of each leg, plus the #endif. Leg n covers the
+        # tokens in range(bounds[n] + 1, bounds[n + 1]).
+        bounds = [idx for idx, _, _ in legs] + [endif]
+
+        # Classify every leg left to right.
+        #   `decided`: an ALWAYS leg was already seen, so the rest are shadowed.
+        #   `all_dead`: every leg so far is NEVER, so a const-1/#else here is the
+        #   first that must be taken. After any SOMETIMES leg it no longer holds:
+        #   a later const-1/#else might be skipped for that earlier condition.
+        statuses: list[LegStatus] = []
+        decided = False
+        all_dead = True
+        for _, kind, const in legs:
+            if decided or const == "0":
+                statuses.append(LegStatus.NEVER)
+            elif all_dead and (const == "1" or kind is TokenType.PPC_ELSE):
+                statuses.append(LegStatus.ALWAYS)
+                decided = True
+            else:
+                statuses.append(LegStatus.SOMETIMES)
+                all_dead = False
+
+        # Delete every dead leg wholesale (directive and body).
+        for n, status in enumerate(statuses):
+            if status is LegStatus.NEVER:
+                delete.update(range(bounds[n], bounds[n + 1]))
+
+        if LegStatus.SOMETIMES in statuses:
+            # A conditional survives. Promote the first surviving leg to #if if it
+            # began as an #elif, so the remaining legs are still a valid block.
+            first = statuses.index(LegStatus.SOMETIMES)
+            if first > 0:
+                promote.add(bounds[first])
+        else:
+            # The block collapses. Drop its #endif, and if a leg is always taken,
+            # drop that leg's directive too so its body becomes unconditional.
+            # (With no ALWAYS leg, every leg was dead and the block vanishes.)
+            delete.add(endif)
+            if LegStatus.ALWAYS in statuses:
+                delete.add(bounds[statuses.index(LegStatus.ALWAYS)])
+
+    if not delete and not promote:
+        return tokens
+
+    return [
+        (start, stop, TokenType.PPC_IF if i in promote else token_type)
+        for i, (start, stop, token_type) in enumerate(tokens)
+        if i not in delete
+    ]
+
+
 def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) -> bool:
     """Check the new bracket pairs from reduce_scopes(enable_ppc=False)
     and determine whether any of them are:
@@ -307,7 +428,7 @@ def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) 
     for start, _, token in tokens:
         if token == TokenType.PPC_IF:
             stack.append((start, []))
-        elif token == TokenType.PPC_ELSE:
+        elif token in (TokenType.PPC_ELSE, TokenType.PPC_ELIF):
             if stack:
                 stack[-1][1].append(start)
         elif token == TokenType.PPC_END:

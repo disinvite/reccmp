@@ -639,6 +639,34 @@ def test_namespace_in_comment(parser):
     assert parser.vtables[1].name == "TglImpl::RendererImpl<D3DRMImpl::D3DRM>"
 
 
+def test_vtable_skip_comment_to_code(parser):
+    """A comment that is not a class name (i.e. `// SIZE`) should not stop
+    the search for the class."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        // SIZE 0x1a8
+        class Act2Actor : public LegoAnimActor {
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.vtables) == 1
+    assert parser.vtables[0].name == "Act2Actor"
+
+
+def test_vtable_skip_comment_to_comment(parser):
+    """Same, but the class name is in a later comment."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        // SIZE 0x1a8
+        // class Tgl::Object
+        """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.vtables) == 1
+    assert parser.vtables[0].name == "Tgl::Object"
+
+
 def test_function_symbol_option(parser):
     """Indicate that the name for this name-based function marker is the function's symbol (linker name)."""
     parser.read("""\
@@ -974,7 +1002,8 @@ def test_issue_56(parser):
     """)
 
     assert len(parser.vtables) == 0
-    assert len(parser.alerts) != 0  # TODO: which error?
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.NO_SUITABLE_NAME
 
 
 def test_issue_184(parser):

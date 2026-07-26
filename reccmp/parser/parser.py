@@ -369,36 +369,33 @@ class DecompParser:
         candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
-        vtable_class = None
-        vtable_pos = 0
-
         for start, stop, token in candidates:
             if token == TokenType.LINE_COMMENT:
                 excerpt = text[start:stop]
                 vtable_class = get_class_name(excerpt)
                 if vtable_class is not None:
-                    # Allow continuation here for `// SIZE comments`
                     self._finish_vtable(markers, vtable_class, start)
                     return
 
-            elif token == TokenType.CURLY_OPEN:
-                break
+                # Don't break so we skip past `// SIZE` comments.
 
             elif token == TokenType.CODE:
                 excerpt = text[start:stop]
                 vtable_class = get_class_name(excerpt.strip())  # TODO
-                vtable_pos = start
+                if vtable_class is not None:
+                    self._finish_vtable(markers, vtable_class, start)
+                    return
+
+                # Once we read the first code token, we must find a class name there.
                 break
 
-            elif token == TokenType.SEMICOLON:
-                self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
-                return
+            elif token in (TokenType.CURLY_OPEN, TokenType.SEMICOLON):
+                # We have either begun the class or this is a forward reference.
+                break
 
-        if vtable_class:
-            self._finish_vtable(markers, vtable_class, vtable_pos)
-        else:
-            start = candidates[0][0]
-            self._alert(AlertCode.MISSED_END_OF_FUNCTION, start)
+        # Ran out of candidates without reading a class name.
+        start = candidates[0][0]
+        self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
     def code_function(
         self,

@@ -1068,3 +1068,99 @@ def test_issue_184(parser):
     assert len(parser.functions) == 1
     name = parser.functions[0].name
     assert len(name) == len(name.strip())
+
+
+def test_string_markers_inside_struct(parser):
+    """Can read all embedded strings inside this struct, not just the first one."""
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        EdgeReference TestRaceCar::g_skBMap[] = {
+            {// STRING: TEST 0x2000
+             "EDG03_772",
+             NULL
+            },
+            {// STRING: TEST 0x3000
+             "EDG03_773",
+             NULL
+            },
+            {// STRING: TEST 0x4000
+             "EDG03_774",
+             NULL
+            }
+        };
+    """)
+
+    assert len(parser.variables) == 1
+    assert len(parser.strings) == 3
+    assert len(parser.alerts) == 0
+
+
+def test_variable_function_pointer(parser):
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        void (*g_omniUserMessage)(const char*, int) = NULL;
+    """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "g_omniUserMessage"
+    assert len(parser.alerts) == 0
+
+
+def test_variable_initialized_array(parser):
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        static int rotateIndex[] = {1, 2, 0};
+    """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "rotateIndex"
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_nameref_variable_inside_function(parser):
+    """Should not create a static variable."""
+
+    parser.read("""\
+        // FUNCTION: TEST 0x1000
+        void test() {
+            // GLOBAL: TEST 0x2000
+            // NotStaticVariable
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.variables) == 0
+    assert parser.alerts
+    # TODO: New error code
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_vtable_forward_ref(parser):
+    """By convention, we expect the `// VTABLE` mark to appear before
+    the class declaration, not a forward reference."""
+
+    parser.read("""\
+        // VTABLE: TEST 0x1000
+        class ForwardRef;
+    """)
+
+    assert len(parser.vtables) == 0
+    assert parser.alerts
+    # TODO: New error code
+
+
+def test_stop_after_failed_variable_read(parser):
+    """Should abort when we fail to read a variable name from the #define expression.
+    Do not read the class name that follows."""
+
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        #define TEST_MACRO 1234
+
+        class Hello;
+    """)
+
+    assert len(parser.variables) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.NO_SUITABLE_NAME

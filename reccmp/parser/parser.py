@@ -8,6 +8,7 @@ from .util import (
     get_variable_name,
     get_synthetic_name,
     get_string_contents,
+    is_function_signature,
 )
 from .marker import (
     DecompMarker,
@@ -403,13 +404,19 @@ class DecompParser:
         candidates: list[CodeToken],
         markers: list[DecompMarker],
     ):
+        # pylint: disable=too-many-return-statements
         found_sig = False
         sig_pos = 0
 
         for start, stop, token in candidates:
             if token == TokenType.CODE:
-                # TODO: Detect function signature. Discard if we detect `if (x)`
                 if not found_sig:
+                    # Reject the marker if this is an if-block or a class,
+                    # not a function.
+                    if not is_function_signature(text[start:stop]):
+                        self._alert(AlertCode.MISSED_START_OF_FUNCTION, start)
+                        return
+
                     # Use the position from the first CODE token.
                     # Args may be split by an equal sign (default param)
                     # or by inline comments.

@@ -83,6 +83,31 @@ def get_variable_name(line: str) -> str | None:
     return None
 
 
+# A control-flow statement. These are followed by a curly bracket just like a
+# function, so we have to reject them before we mistake one for a signature.
+control_start_regex = re.compile(r"(?:if|else|for|while|switch|do|try|catch)\b")
+
+# The start of a type definition. These keywords can also begin a function
+# signature that returns an elaborated type. (i.e. `class Foo* GetFoo()`)
+type_start_regex = re.compile(r"(?:class|struct|union|enum|namespace)\b")
+
+
+def is_function_signature(line: str) -> bool:
+    """We cannot positively identify a function signature, but we can rule out
+    code that is clearly something else. This catches a FUNCTION marker
+    on an if-block or a class definition."""
+
+    if control_start_regex.match(line):
+        return False
+
+    # Only a function has parentheses, so use them to tell a type definition
+    # apart from a function that returns that type.
+    if type_start_regex.match(line) and "(" not in line:
+        return False
+
+    return True
+
+
 class ParserCodeString(NamedTuple):
     text: str
     is_widechar: bool

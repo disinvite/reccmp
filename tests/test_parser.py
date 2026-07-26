@@ -918,7 +918,6 @@ def test_code_markers_not_aligned_to_finish(parser):
     )  # TODO: new error type
 
 
-@pytest.mark.xfail(reason="TODO")
 def test_code_function_over_if_block(parser):
     """Should recognize that the code token is not a valid function signature."""
     parser.read("""\
@@ -933,7 +932,6 @@ def test_code_function_over_if_block(parser):
     )  # TODO: new error type
 
 
-@pytest.mark.xfail(reason="TODO")
 def test_code_function_over_class(parser):
     """Should recognize that the code token is not a valid function signature."""
     parser.read("""\
@@ -946,6 +944,58 @@ def test_code_function_over_class(parser):
     assert (
         parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
     )  # TODO: new error type
+
+
+def test_code_function_over_namespace(parser):
+    """Same as above. A namespace has no parentheses."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        namespace Test {
+        }
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+def test_code_function_over_enum(parser):
+    """Same as above. `enum class` begins with a type keyword."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        enum class Color {};
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+def test_code_function_returns_elaborated_type(parser):
+    """`class` here is the return type, not a class definition.
+    The parentheses tell them apart."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        class Foo* GetFoo() {}
+    """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
+
+
+def test_code_function_template_default_type(parser):
+    """The equal sign splits the signature before the parentheses appear.
+    Should not reject it for having none."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        template <typename T = int>
+        void test(T p_value) {}
+    """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
 
 
 @pytest.mark.xfail(reason="TODO")

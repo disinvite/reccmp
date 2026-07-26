@@ -1164,3 +1164,125 @@ def test_stop_after_failed_variable_read(parser):
     assert len(parser.variables) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.NO_SUITABLE_NAME
+
+
+def test_function_with_alternate_impl(parser):
+    """This function has varying arguments depending on PPC variables.
+    Placing the marker outside the PPC block is valid. Should not alert.
+    The function "starts" on the line with the first signature.
+    This is okay even if the second implementation is chosen because
+    the start and end lines are the boundaries for searching the lines database."""
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #ifdef COMPAT_MODE
+        void Hello::Test(int p_param)
+        #else
+        void Hello::Test(int p_param, bool p_option)
+        #endif
+        {
+            // function body
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 3
+    assert parser.functions[0].end_line == 9
+    assert len(parser.alerts) == 0
+
+
+def test_function_over_unwrapped_if_1(parser):
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #if 1
+        void Hello::Test(int p_param)
+        {
+            // function body
+        }
+        #endif
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 3
+    assert parser.functions[0].end_line == 6
+    assert len(parser.alerts) == 0
+
+
+def test_function_over_if_0(parser):
+    """The section commented by `#if 0` is removed, so we match with the function that follows.
+    Should not alert to unexpected blank lines because there are not any. This check looks at
+    the original text, not the filtered token list."""
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #if 0
+        void Hello::Test(int p_param) {}
+        #endif
+        void Hello::Next(int p_param) {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 5
+    assert parser.functions[0].end_line == 5
+    assert len(parser.alerts) == 0
+
+
+def test_if_0_deletes_annotation(parser):
+    """Do not attempt to match tokens obscured by an `#if 0` block."""
+    parser.read("""\
+        #if 0
+        // FUNCTION: TEST 0x2000
+        void Hello::Test(int p_param) {}
+        #endif
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_with_nameref_vtable(parser):
+    parser.read("""\
+        namespace test {
+            // VTABLE: TEST 0x1000
+            // class Pizza
+        };
+    """)
+
+    assert "test" not in parser.vtables[0].name
+    assert len(parser.alerts) == 0
+
+
+def test_scope_with_code_vtable(parser):
+    parser.read("""\
+        namespace test {
+            // VTABLE: TEST 0x1000
+            class Pizza {};
+        };
+    """)
+
+    assert "test" in parser.vtables[0].name
+    assert len(parser.alerts) == 0
+
+
+def test_scope_with_nameref_function(parser):
+    parser.read("""\
+        namespace test {
+            // FUNCTION: TEST 0x2000
+            // Hello
+        };
+    """)
+
+    assert "test" not in parser.functions[0].name
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_with_nameref_variable(parser):
+    parser.read("""\
+        namespace test {
+            // GLOBAL: TEST 0x4000
+            // Actor_Example
+        };
+    """)
+
+    assert "test" not in parser.variables[0].name
+    assert len(parser.alerts) == 0

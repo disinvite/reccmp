@@ -114,6 +114,22 @@ def test_function_indent_knr_second_bracket_indented(parser: DecompParser):
     assert parser.functions[0].end_line == 3
 
 
+def test_function_default_argument(parser: DecompParser):
+    """The CODE token with the function signature is split by the equal sign.
+    Make sure we report the function start correctly. It is the line with `void`,
+    not the second line where args begin."""
+    parser.read(dedent("""\
+        // FUNCTION: TEST 0x1234
+        void DefaultArgs(
+            int p_param = 0)
+        {
+        }
+        """))
+    assert len(parser.alerts) == 0
+    assert parser.functions[0].line_number == 2
+    assert parser.functions[0].end_line == 5
+
+
 def test_function_indent_lisp(parser: DecompParser):
     """Brackets are on different lines but on the same line as code.
     Same syntax as AFXWIN1.INL"""

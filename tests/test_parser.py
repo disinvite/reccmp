@@ -3,6 +3,8 @@ import pytest
 from reccmp.parser.parser import DecompParser
 from reccmp.parser.error import AlertCode
 
+# pylint: disable=too-many-lines
+
 
 @pytest.fixture(name="parser")
 def fixture_parser():

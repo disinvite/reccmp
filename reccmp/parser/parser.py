@@ -410,7 +410,9 @@ class DecompParser:
             if token == TokenType.CODE:
                 # TODO: Detect function signature. Discard if we detect `if (x)`
                 if not found_sig:
-                    # TODO: default param with EQUAL could split CODE token.
+                    # Use the position from the first CODE token.
+                    # Args may be split by an equal sign (default param)
+                    # or by inline comments.
                     found_sig = True
                     sig_pos = start
 

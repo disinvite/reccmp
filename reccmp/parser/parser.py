@@ -33,6 +33,7 @@ from .tokenizer import (
     get_line_column_pos,
     get_newlines_from_text,
     get_scopes_from_tokens,
+    get_string_from_ppc,
     report_blank_lines,
     scope_detect_churn,
     tokenize_code_file,
@@ -494,7 +495,6 @@ class DecompParser:
         markers: list[DecompMarker],
     ):
         for start, stop, token in candidates:
-            # TODO: read from #define
             if token == TokenType.STRING:
                 excerpt = text[start:stop]
                 string_obj = get_string_contents(excerpt)
@@ -503,12 +503,25 @@ class DecompParser:
                     self._finish_string(
                         markers, string_obj.text, string_obj.is_widechar, start
                     )
+                    return
 
-                else:
-                    self._alert(AlertCode.NO_SUITABLE_NAME, start)
-
-            elif token == TokenType.SEMICOLON:
                 break
+
+            if token == TokenType.PPC_OTHER:
+                # Read the first string found in the #define token.
+                string_token = get_string_from_ppc(text, start, stop)
+                if string_token is not None:
+                    self.code_string(text, [string_token], markers)
+                    return
+
+                break
+
+            if token == TokenType.SEMICOLON:
+                break
+
+        # Did not successfully finish the string.
+        start = candidates[0][0]
+        self._alert(AlertCode.NO_SUITABLE_NAME, start)
 
     def get_marker_sets(
         self, tokens: list[CodeToken]

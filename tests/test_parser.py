@@ -424,6 +424,18 @@ def test_string_ignore_g_prefix(parser):
     assert len(parser.alerts) == 0
 
 
+def test_string_in_define(parser):
+    """Read a string from a #define expression."""
+
+    parser.read("""\
+        // STRING: TEST 0x1234
+        #define TEST_STRING "hello"
+        """)
+    assert len(parser.strings) == 1
+    assert len(parser.alerts) == 0
+    assert parser.strings[0].name == "hello"
+
+
 def test_class_variable(parser):
     """We should accurately name static variables that are class members."""
 

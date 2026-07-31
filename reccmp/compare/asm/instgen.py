@@ -244,25 +244,27 @@ class InstructGen:
 
             elif sect_type == SectionType.ADDR_TAB:
                 pointer_size = 4 if self.is_32bit else 2
-                # Clamp to multiple of 4 (dwords)
+                # Clamp to pointer size to allow for imprecise section cut.
                 read_size = (
                     (self.section_end - self.cur_addr) // pointer_size
                 ) * pointer_size
-                offsets = range(
+                # 32-bit addresses of each destination in the jump table.
+                table_offsets = range(
                     self.section_start, self.section_start + read_size, pointer_size
                 )
-                dwords = self.blob[
+                # 16 or 32-bit destinations in the table.
+                code_offsets = self.blob[
                     self.cur_addr - self.start : self.cur_addr - self.start + read_size
                 ]
                 addrs: list[int]
 
                 if self.is_32bit:
-                    addrs = [addr for addr, in struct.iter_unpack("<L", dwords)]
+                    addrs = [addr for addr, in struct.iter_unpack("<L", code_offsets)]
                 else:
                     code_seg_mask = self.start & 0xFFFF0000
                     addrs = [
                         code_seg_mask + addr
-                        for addr, in struct.iter_unpack("<H", dwords)
+                        for addr, in struct.iter_unpack("<H", code_offsets)
                     ]
 
                 for addr in addrs:
@@ -270,7 +272,7 @@ class InstructGen:
                     # should factor into the label name.
                     self._insert_confirmed_addr(addr, SectionType.CODE)
 
-                jump_table = list(zip(offsets, addrs))
+                jump_table = list(zip(table_offsets, addrs))
                 # for (t0,t1) in jump_table:
                 #     print(f"{t0:x} : --> {t1:x}")
 

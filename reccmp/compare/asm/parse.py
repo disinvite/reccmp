@@ -105,12 +105,7 @@ class ParseAsm:
     def lcall_replace(self, match: re.Match) -> str:
         seg_str, _, ofs_str = match.group(1).partition(", ")
         value = (int(seg_str, 16) << 16) + int(ofs_str, 16)
-        # return self.replace(value, exact=True)
-        placeholder = self.lookup(value, exact=True)
-        if placeholder is not None:
-            return placeholder
-
-        return match.group(0)
+        return self.replace(value, exact=True)
 
     def hex_replace_always(self, match: re.Match) -> str:
         """If a pointer value was matched, always insert a placeholder"""

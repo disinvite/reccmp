@@ -318,10 +318,14 @@ def test_blank_line_before_completion_token(
 
 ####
 # 5. The marker types of one category must agree.
-# The first marker of the group sets the pattern for the group.
-# A STUB marker is the exception. It can combine with a FUNCTION marker.
-# The completion token then sets the pattern for the group.
-# A STUB marker cannot combine with a nameref type.
+# The completion token decides the pattern for the group: a lookup by name
+# or a lookup by line number. The parser judges each marker of the group
+# against the completion token, not against the first marker.
+# A FUNCTION marker suits either completion token.
+# A STUB marker suits a code line only.
+# A nameref marker type suits a nameref comment only.
+# The parser rejects each marker that does not suit the completion token.
+# The position of the marker in the group makes no difference.
 ####
 
 # fmt: off
@@ -334,14 +338,27 @@ AGREEING_TYPES = [
     (MarkerType.TEMPLATE,  MarkerType.TEMPLATE),
 ]
 
+# Each marker of the pair suits the completion token, but the types vary.
 DISAGREEING_TYPES = [
-    (MarkerType.FUNCTION,  MarkerType.SYNTHETIC),
-    (MarkerType.FUNCTION,  MarkerType.LIBRARY),
     (MarkerType.SYNTHETIC, MarkerType.FUNCTION),
     (MarkerType.TEMPLATE,  MarkerType.SYNTHETIC),
     (MarkerType.LIBRARY,   MarkerType.TEMPLATE),
-    (MarkerType.SYNTHETIC, MarkerType.STUB),
-    (MarkerType.STUB,      MarkerType.LIBRARY),
+]
+
+# The first type is a nameref type and does not suit a code completion token.
+# The second type does suit it. (rejected type, accepted type)
+NAMEREF_TYPE_ON_CODE = [
+    (MarkerType.SYNTHETIC, MarkerType.FUNCTION),
+    (MarkerType.LIBRARY,   MarkerType.FUNCTION),
+    (MarkerType.LIBRARY,   MarkerType.STUB),
+]
+
+# The first type refers to code and does not suit a nameref completion token.
+# The second type does suit it. (rejected type, accepted type)
+CODE_TYPE_ON_NAMEREF = [
+    (MarkerType.STUB, MarkerType.FUNCTION),
+    (MarkerType.STUB, MarkerType.SYNTHETIC),
+    (MarkerType.STUB, MarkerType.LIBRARY),
 ]
 # fmt: on
 
@@ -371,9 +388,8 @@ def test_marker_types_agree(
 def test_marker_types_disagree(
     parser: DecompParser, first: MarkerType, second: MarkerType
 ):
-    """The two marker types of the group do not agree. The parser gives a warning.
-    The parser keeps the two markers. The first marker sets the pattern for
-    the group: a lookup by name or a lookup by line number."""
+    """The two marker types of the group do not agree, but each one suits the
+    completion token. The parser gives a warning and keeps the two markers."""
     nameref = first in NAMEREF_TYPES
     parser.read(dedent(f"""\
         // {first.name}: TEST 0x1234
@@ -387,6 +403,86 @@ def test_marker_types_disagree(
         (second, "HELLO", 0x5555),
     ]
     assert all(s.is_nameref() is nameref for s in parser.iter_symbols())
+
+
+@pytest.mark.xfail(
+    reason="The parser rejects a marker before it reads the completion token."
+)
+@pytest.mark.parametrize("rejected, accepted", NAMEREF_TYPE_ON_CODE)
+def test_nameref_type_on_code_token_reject_first(
+    parser: DecompParser, rejected: MarkerType, accepted: MarkerType
+):
+    """A nameref marker type requires a nameref comment as the completion token.
+    The completion token here is a code line. The parser gives an error and
+    rejects the nameref marker. The parser keeps the other marker."""
+    parser.read(dedent(f"""\
+        // {rejected.name}: TEST 0x1234
+        // {accepted.name}: HELLO 0x5555
+        {FUNCTION_TOKEN}
+        """))
+    assert AlertCode.BAD_NAMEREF in [a.code for a in parser.alerts]
+    assert symbol_tuples(parser) == [
+        (accepted, "HELLO", 0x5555),
+    ]
+
+
+@pytest.mark.xfail(
+    reason="The parser rejects a marker before it reads the completion token."
+)
+@pytest.mark.parametrize("rejected, accepted", NAMEREF_TYPE_ON_CODE)
+def test_nameref_type_on_code_token_reject_second(
+    parser: DecompParser, rejected: MarkerType, accepted: MarkerType
+):
+    """The parser rejects the nameref marker in the second position too."""
+    parser.read(dedent(f"""\
+        // {accepted.name}: TEST 0x1234
+        // {rejected.name}: HELLO 0x5555
+        {FUNCTION_TOKEN}
+        """))
+    assert AlertCode.BAD_NAMEREF in [a.code for a in parser.alerts]
+    assert symbol_tuples(parser) == [
+        (accepted, "TEST", 0x1234),
+    ]
+
+
+@pytest.mark.xfail(
+    reason="The parser rejects a marker before it reads the completion token."
+)
+@pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
+def test_code_type_on_nameref_token_reject_first(
+    parser: DecompParser, rejected: MarkerType, accepted: MarkerType
+):
+    """A STUB marker refers to code and cannot take a nameref comment as the
+    completion token. The parser gives an error and rejects the STUB marker.
+    The parser keeps the other marker."""
+    parser.read(dedent(f"""\
+        // {rejected.name}: TEST 0x1234
+        // {accepted.name}: HELLO 0x5555
+        {NAMEREF_TOKEN}
+        """))
+    assert AlertCode.INCOMPATIBLE_MARKER in [a.code for a in parser.alerts]
+    assert symbol_tuples(parser) == [
+        (accepted, "HELLO", 0x5555),
+    ]
+
+
+@pytest.mark.xfail(
+    reason="The parser rejects a marker before it reads the completion token."
+)
+@pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
+def test_code_type_on_nameref_token_reject_second(
+    parser: DecompParser, rejected: MarkerType, accepted: MarkerType
+):
+    """The parser rejects the STUB marker in the second position too."""
+    parser.read(dedent(f"""\
+        // {accepted.name}: TEST 0x1234
+        // {rejected.name}: HELLO 0x5555
+        {NAMEREF_TOKEN}
+        """))
+    assert AlertCode.INCOMPATIBLE_MARKER in [a.code for a in parser.alerts]
+    assert symbol_tuples(parser) == [
+        (accepted, "TEST", 0x1234),
+    ]
 
 
 ####

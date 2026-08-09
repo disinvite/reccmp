@@ -495,6 +495,10 @@ class DecompParser:
         ):
             # Explicit nameref functions provide the function name
             # on the next line (in a // comment)
+            if len(line_strip) == 0:
+                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
+                return
+
             name = get_synthetic_name(line)
             if name is None:
                 self._syntax_error(AlertCode.BAD_NAMEREF)
@@ -593,6 +597,10 @@ class DecompParser:
             self._variable_done(variable_name, string)
 
         elif self.state == ReaderState.IN_VTABLE:
+            if len(line_strip) == 0:
+                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
+                return
+
             vtable_class = get_class_name(line)
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)

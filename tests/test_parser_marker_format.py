@@ -20,6 +20,16 @@ def fixture_parser() -> DecompParser:
     return DecompParser()
 
 
+def symbol_tuples(parser: DecompParser) -> list[tuple[MarkerType, str, int]]:
+    """The type, module, and offset of each symbol from the parser."""
+    return [(s.type, s.module, s.offset) for s in parser.iter_symbols()]
+
+
+def symbol_names(parser: DecompParser) -> list[str]:
+    """The name of each symbol from the parser."""
+    return [s.name for s in parser.iter_symbols()]
+
+
 # The completion token for each marker type.
 FUNCTION_TOKEN = "void function_one() {}"
 VARIABLE_TOKEN = 'char* g_variable = "hello";'
@@ -50,31 +60,156 @@ ALL_TYPES = [
 
 
 ####
-# 1. Horizontal alignment of grouped markers.
+# 1a. Single marker horizontally aligned to completion token.
 ####
 
 
 @pytest.mark.parametrize("marker_type", ALL_TYPES)
-def test_marker_group_alignment_ok(parser: DecompParser, marker_type: MarkerType):
-    """Each marker of the group has the same indentation.
-    The parser gives no alert."""
+def test_horizontal_alignment_single_marker(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Single marker aligned to completion token. No warning."""
+    parser.read(dedent(f"""\
+        // {marker_type.name}: TEST 0x1234
+        {TOKENS[marker_type]}
+        """))
+    assert not parser.alerts
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_single_marker_warning(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Single marker NOT aligned to completion token. Warn but accept marker."""
+    parser.read(dedent(f"""\
+          // {marker_type.name}: TEST 0x1234
+        {TOKENS[marker_type]}
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    # Alerts point to the markers not aligned to the completion token.
+    assert parser.alerts[0].line_number == 1
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+####
+# 1b. Single marker horizontally aligned to completion token. Completion token is indented.
+####
+
+
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_single_marker_indented(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Single marker aligned to completion token. Completion token indented."""
+    parser.read(dedent(f"""\
+        class Test {{
+          // {marker_type.name}: TEST 0x1234
+          {TOKENS[marker_type]}
+        }};
+        """))
+    assert not parser.alerts
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_single_marker_indented_warning(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Single marker NOT aligned to completion token. Completion token indented. Warn but accept marker."""
+    parser.read(dedent(f"""\
+        class Test {{
+            // {marker_type.name}: TEST 0x1234
+          {TOKENS[marker_type]}
+        }};
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    assert parser.alerts[0].line_number == 2
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_single_marker_indented_different_whitespace(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Single marker NOT aligned to completion token: marker uses soft tabs,
+    completion token indented with hard tabs. Warn but accept marker."""
+    parser.read(dedent(f"""\
+        class Test {{
+         // {marker_type.name}: TEST 0x1234
+        \t{TOKENS[marker_type]}
+        }};
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    # Alerts point to the markers not aligned to the completion token.
+    assert parser.alerts[0].line_number == 2
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+####
+# 1c. Horizontal alignment of grouped markers to completion token.
+####
+
+
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_marker_group(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Marker group all aligned to completion token. No warnings."""
     parser.read(dedent(f"""\
         // {marker_type.name}: TEST 0x1234
         // {marker_type.name}: HELLO 0x5555
         {TOKENS[marker_type]}
         """))
     assert not parser.alerts
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (marker_type, "TEST", 0x1234),
         (marker_type, "HELLO", 0x5555),
     ]
 
 
-@pytest.mark.xfail(reason="The parser does not check the alignment now.")
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
 @pytest.mark.parametrize("marker_type", ALL_TYPES)
-def test_marker_group_alignment_bad(parser: DecompParser, marker_type: MarkerType):
-    """The second marker of the group has more indentation than the first.
-    The parser gives a warning."""
+def test_horizontal_alignment_marker_group_unequal_first(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Marker group with first marker NOT aligned to other tokens. Warn but accept markers."""
+    parser.read(dedent(f"""\
+          // {marker_type.name}: TEST 0x1234
+        // {marker_type.name}: HELLO 0x5555
+        {TOKENS[marker_type]}
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    assert parser.alerts[0].line_number == 1
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+        (marker_type, "HELLO", 0x5555),
+    ]
+
+
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_marker_group_unequal_second(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Marker group with second marker NOT aligned to other tokens. Warn but accept markers."""
     parser.read(dedent(f"""\
         // {marker_type.name}: TEST 0x1234
           // {marker_type.name}: HELLO 0x5555
@@ -82,6 +217,33 @@ def test_marker_group_alignment_bad(parser: DecompParser, marker_type: MarkerTyp
         """))
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    assert parser.alerts[0].line_number == 2
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+        (marker_type, "HELLO", 0x5555),
+    ]
+
+
+@pytest.mark.xfail(reason="Horizontal alignment not verified.")
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_horizontal_alignment_marker_group_unequal_both(
+    parser: DecompParser, marker_type: MarkerType
+):
+    """Marker group with completion token NOT aligned to markers. Warn but accept markers."""
+    parser.read(dedent(f"""\
+          // {marker_type.name}: TEST 0x1234
+          // {marker_type.name}: HELLO 0x5555
+        {TOKENS[marker_type]}
+        """))
+    assert len(parser.alerts) == 2
+    assert parser.alerts[0].code == AlertCode.MARKER_NOT_ALIGNED
+    assert parser.alerts[1].code == AlertCode.MARKER_NOT_ALIGNED
+    assert parser.alerts[0].line_number == 1
+    assert parser.alerts[1].line_number == 2
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+        (marker_type, "HELLO", 0x5555),
+    ]
 
 
 ####
@@ -101,7 +263,7 @@ def test_completion_token_alignment_ok(parser: DecompParser, marker_type: Marker
         }};
         """))
     assert not parser.alerts
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (marker_type, "TEST", 0x1234),
     ]
 
@@ -197,7 +359,7 @@ def test_marker_types_agree(
         {NAMEREF_TOKEN if nameref else FUNCTION_TOKEN}
         """))
     assert not parser.alerts
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (first, "TEST", 0x1234),
         (second, "HELLO", 0x5555),
     ]
@@ -220,7 +382,7 @@ def test_marker_types_disagree(
         """))
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.VARYING_MARKER_TYPES
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (first, "TEST", 0x1234),
         (second, "HELLO", 0x5555),
     ]
@@ -259,7 +421,7 @@ def test_marker_categories_disagree(
     assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
 
     # The first marker is the only symbol from this block.
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (first, "TEST", 0x1234),
     ]
 
@@ -273,7 +435,7 @@ def test_variable_and_string_combine(parser: DecompParser):
         {VARIABLE_TOKEN}
         """))
     assert not parser.alerts
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (MarkerType.GLOBAL, "TEST", 0x1234),
         (MarkerType.STRING, "HELLO", 0x5555),
     ]
@@ -302,9 +464,10 @@ def test_nameref_value_spaces(
         // {marker_type.name}: TEST 0x1234
         {comment}
         """))
-    assert [(s.type, s.name) for s in parser.iter_symbols()] == [
-        (marker_type, "Test::Function"),
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
     ]
+    assert symbol_names(parser) == ["Test::Function"]
 
 
 ####
@@ -325,7 +488,7 @@ def test_extra_slashes(parser: DecompParser, slashes: str):
         {FUNCTION_TOKEN}
         """))
     assert not parser.alerts
-    assert [(s.type, s.module, s.offset) for s in parser.iter_symbols()] == [
+    assert symbol_tuples(parser) == [
         (MarkerType.FUNCTION, "TEST", 0x1234),
         (MarkerType.STUB, "HELLO", 0x5555),
     ]
@@ -340,9 +503,10 @@ def test_extra_slashes_nameref(parser: DecompParser, slashes: str):
         {slashes} Test::Function
         """))
     assert not parser.alerts
-    assert [(s.type, s.name) for s in parser.iter_symbols()] == [
-        (MarkerType.SYNTHETIC, "Test::Function"),
+    assert symbol_tuples(parser) == [
+        (MarkerType.SYNTHETIC, "TEST", 0x1234),
     ]
+    assert symbol_names(parser) == ["Test::Function"]
 
 
 # fmt: off

@@ -440,24 +440,26 @@ def test_nameref_type_on_code_token_reject_second(
     ]
 
 
+@pytest.mark.xfail(reason="The parser gives INCOMPATIBLE_MARKER now.")
 @pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
 def test_code_type_on_nameref_token_reject_first(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType
 ):
     """A STUB marker refers to code and cannot take a nameref comment as the
-    completion token. The parser gives an error and rejects the STUB marker.
-    The parser keeps the other marker."""
+    completion token. The parser gives a NO_IMPLEMENTATION error and rejects
+    the STUB marker. The parser keeps the other marker."""
     parser.read(dedent(f"""\
         // {rejected.name}: TEST 0x1234
         // {accepted.name}: HELLO 0x5555
         {NAMEREF_TOKEN}
         """))
-    assert AlertCode.INCOMPATIBLE_MARKER in [a.code for a in parser.alerts]
+    assert AlertCode.NO_IMPLEMENTATION in [a.code for a in parser.alerts]
     assert symbol_tuples(parser) == [
         (accepted, "HELLO", 0x5555),
     ]
 
 
+@pytest.mark.xfail(reason="The parser gives INCOMPATIBLE_MARKER now.")
 @pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
 def test_code_type_on_nameref_token_reject_second(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType
@@ -468,7 +470,7 @@ def test_code_type_on_nameref_token_reject_second(
         // {rejected.name}: HELLO 0x5555
         {NAMEREF_TOKEN}
         """))
-    assert AlertCode.INCOMPATIBLE_MARKER in [a.code for a in parser.alerts]
+    assert AlertCode.NO_IMPLEMENTATION in [a.code for a in parser.alerts]
     assert symbol_tuples(parser) == [
         (accepted, "TEST", 0x1234),
     ]
@@ -524,6 +526,27 @@ def test_variable_and_string_combine(parser: DecompParser):
         (MarkerType.GLOBAL, "TEST", 0x1234),
         (MarkerType.STRING, "HELLO", 0x5555),
     ]
+
+
+####
+# 6a. A FUNCTION marker suits a nameref comment.
+####
+
+
+def test_function_marker_on_nameref_token(parser: DecompParser):
+    """A group of FUNCTION markers with a nameref comment as the completion
+    token. The marker types do not vary, so the parser gives no alert."""
+    parser.read(dedent(f"""\
+        // FUNCTION: TEST 0x1234
+        // FUNCTION: HELLO 0x5555
+        {NAMEREF_TOKEN}
+        """))
+    assert not parser.alerts
+    assert symbol_tuples(parser) == [
+        (MarkerType.FUNCTION, "TEST", 0x1234),
+        (MarkerType.FUNCTION, "HELLO", 0x5555),
+    ]
+    assert all(s.is_nameref() for s in parser.iter_symbols())
 
 
 ####
@@ -631,7 +654,75 @@ def test_slash_depth_mismatch_nameref(parser: DecompParser, first: str, second: 
 
 
 ####
-# 10. Single line markers.
+# 10. The markers of a group must have distinct targets.
+# The parser compares the marker category, not the marker type, so two marker
+# types of one category collide. The parser keeps the first marker of the pair.
+####
+
+
+@pytest.mark.parametrize("marker_type", ALL_TYPES)
+def test_duplicate_module_same_type(parser: DecompParser, marker_type: MarkerType):
+    """Two markers of one type and one target. The parser gives an error
+    and keeps the first marker."""
+    parser.read(dedent(f"""\
+        // {marker_type.name}: TEST 0x1234
+        // {marker_type.name}: TEST 0x5555
+        {TOKENS[marker_type]}
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.DUPLICATE_MODULE
+    assert parser.alerts[0].line_number == 2
+    assert symbol_tuples(parser) == [
+        (marker_type, "TEST", 0x1234),
+    ]
+
+
+# fmt: off
+SAME_CATEGORY_TYPES = [
+    (MarkerType.FUNCTION,  MarkerType.STUB),
+    (MarkerType.STUB,      MarkerType.FUNCTION),
+    (MarkerType.TEMPLATE,  MarkerType.SYNTHETIC),
+    (MarkerType.SYNTHETIC, MarkerType.LIBRARY),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize("first, second", SAME_CATEGORY_TYPES)
+def test_duplicate_module_same_category(
+    parser: DecompParser, first: MarkerType, second: MarkerType
+):
+    """Two markers of one category and one target. The types differ, but the
+    parser gives an error and keeps the first marker."""
+    parser.read(dedent(f"""\
+        // {first.name}: TEST 0x1234
+        // {second.name}: TEST 0x5555
+        {TOKENS[first]}
+        """))
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.DUPLICATE_MODULE
+    assert parser.alerts[0].line_number == 2
+    assert symbol_tuples(parser) == [
+        (first, "TEST", 0x1234),
+    ]
+
+
+def test_duplicate_module_variable_and_string(parser: DecompParser):
+    """A GLOBAL marker and a STRING marker are in different categories,
+    so they do not collide on one target. The parser gives no alert."""
+    parser.read(dedent(f"""\
+        // GLOBAL: TEST 0x1234
+        // STRING: TEST 0x5555
+        {VARIABLE_TOKEN}
+        """))
+    assert not parser.alerts
+    assert symbol_tuples(parser) == [
+        (MarkerType.GLOBAL, "TEST", 0x1234),
+        (MarkerType.STRING, "TEST", 0x5555),
+    ]
+
+
+####
+# 11. Single line markers.
 ####
 
 

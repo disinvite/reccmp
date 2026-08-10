@@ -67,15 +67,18 @@ def test_variable(parser):
 
 
 def test_synthetic_plus_marker(parser):
-    """Marker tracking preempts synthetic name detection.
-    Should fail with error and not log the synthetic"""
+    """A SYNTHETIC marker and a FUNCTION marker can share a group. The nameref
+    comment suits both, so the parser keeps both markers. The marker types vary,
+    so the parser warns."""
     parser.read("""\
         // SYNTHETIC: HEY 0x555
         // FUNCTION: HOWDY 0x1234
+        // TestClass::TestMethod
         """)
-    assert len(parser.functions) == 0
+    assert len(parser.functions) == 2
+    assert all(f.lookup_by_name for f in parser.functions)
     assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
+    assert parser.alerts[0].code == AlertCode.VARYING_MARKER_TYPES
 
 
 def test_different_markers_different_module(parser):
@@ -112,18 +115,20 @@ def test_different_markers_same_module(parser):
 
 
 def test_unexpected_synthetic(parser):
-    """FUNCTION then SYNTHETIC should fail to report either one"""
-    parser.read("""\
+    """A SYNTHETIC marker has no code to refer to. The completion token here is
+    a code line, so the parser discards the SYNTHETIC marker and reports only
+    the FUNCTION marker."""
+    parser.read(dedent("""\
         // FUNCTION: HOWDY 0x1234
-        // SYNTHETIC: HOWDY 0x5555
+        // SYNTHETIC: HEY 0x5555
         void interesting_function() {
         }
-        """)
+        """))
 
     assert parser.state == ReaderState.SEARCH
-    assert len(parser.functions) == 0
-    assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
+    assert len(parser.functions) == 1
+    assert parser.functions[0].offset == 0x1234
+    assert AlertCode.BAD_NAMEREF in [a.code for a in parser.alerts]
 
 
 @pytest.mark.skip(reason="not implemented yet")
@@ -212,10 +217,11 @@ def test_synthetic_same_module(parser):
 
 def test_synthetic_no_comment(parser):
     """Synthetic marker followed by a code line (i.e. non-comment)"""
-    parser.read("""\
+    parser.read(dedent("""\
         // SYNTHETIC: TEST 0x1234
-        int x = 123;
-        """)
+        void interesting_function() {
+        }
+        """))
     assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.BAD_NAMEREF

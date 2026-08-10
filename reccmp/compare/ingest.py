@@ -190,6 +190,7 @@ def load_markers(
                 fun.offset,
                 type=EntityType.FUNCTION,
                 stub=fun.should_skip(),
+                library=fun.is_library(),
             )
 
             assert fun.filename is not None

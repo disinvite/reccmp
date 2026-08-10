@@ -38,13 +38,10 @@ class ReaderState(Enum):
     SEARCH = 0
     WANT_SIG = 1
     IN_FUNC = 2
-    IN_TEMPLATE = 3
     WANT_CURLY = 4
     IN_GLOBAL = 5
     IN_FUNC_GLOBAL = 6
     IN_VTABLE = 7
-    IN_SYNTHETIC = 8
-    IN_LIBRARY = 9
     DONE = 100
 
 
@@ -240,36 +237,22 @@ class DecompParser:
     def _function_marker(self, marker: DecompMarker):
         if self.fun_markers.insert(marker):
             self._syntax_warning(AlertCode.DUPLICATE_MODULE)
+
         self.state = ReaderState.WANT_SIG
 
-    def _nameref_marker(self, marker: DecompMarker):
-        """Functions explicitly referenced by name are set here"""
-        if self.fun_markers.insert(marker):
-            self._syntax_warning(AlertCode.DUPLICATE_MODULE)
-
-        if marker.type == MarkerType.TEMPLATE:
-            self.state = ReaderState.IN_TEMPLATE
-        elif marker.type == MarkerType.SYNTHETIC:
-            self.state = ReaderState.IN_SYNTHETIC
-        else:
-            self.state = ReaderState.IN_LIBRARY
-
-    def _function_done(self, lookup_by_name: bool = False, unexpected: bool = False):
-        end_line = self.line_number
-        if unexpected:
-            # If we missed the end of the previous function, assume it ended
-            # on the previous line and that whatever we are tracking next
-            # begins on the current line.
-            end_line -= 1
+    def _finish_name_function(self):
+        types = set()
 
         for marker in self.fun_markers.iter():
+            if marker.type == MarkerType.STUB:
+                self._syntax_warning(AlertCode.INCOMPATIBLE_MARKER)
+                continue
+
+            types.add(marker.type)
+
             name_is_symbol = (
                 marker.extra is not None and marker.extra.lower() == "symbol"
             )
-            if name_is_symbol and not lookup_by_name:
-                self._syntax_warning(AlertCode.SYMBOL_OPTION_IGNORED)
-                name_is_symbol = False
-
             is_folded = marker.extra is not None and marker.extra.lower() == "folded"
 
             self._symbols.append(
@@ -280,8 +263,52 @@ class DecompParser:
                     offset=marker.offset,
                     name=self.function_sig,
                     filename=self.filename,
-                    lookup_by_name=lookup_by_name,
+                    lookup_by_name=True,
                     name_is_symbol=name_is_symbol,
+                    end_line=self.line_number,
+                    is_folded=is_folded,
+                )
+            )
+
+        if len(types) > 1:
+            self._syntax_warning(AlertCode.VARYING_MARKER_TYPES)
+
+        self.fun_markers.empty()
+        self.curly_indent_stops = 0
+        self.state = ReaderState.SEARCH
+
+    def _finish_code_function(self, unexpected: bool = False):
+        end_line = self.line_number
+        if unexpected:
+            # If we missed the end of the previous function, assume it ended
+            # on the previous line and that whatever we are tracking next
+            # begins on the current line.
+            end_line -= 1
+
+        for marker in self.fun_markers.iter():
+            if marker.extra is not None and marker.extra.lower() == "symbol":
+                self._syntax_warning(AlertCode.SYMBOL_OPTION_IGNORED)
+
+            is_folded = marker.extra is not None and marker.extra.lower() == "folded"
+
+            if marker.type in (
+                MarkerType.SYNTHETIC,
+                MarkerType.TEMPLATE,
+                MarkerType.LIBRARY,
+            ):
+                self._syntax_warning(AlertCode.BAD_NAMEREF)
+                continue
+
+            self._symbols.append(
+                ParserFunction(
+                    type=marker.type,
+                    line_number=self.function_start,
+                    module=marker.module,
+                    offset=marker.offset,
+                    name=self.function_sig,
+                    filename=self.filename,
+                    lookup_by_name=False,
+                    name_is_symbol=False,
                     end_line=end_line,
                     is_folded=is_folded,
                 )
@@ -413,14 +440,20 @@ class DecompParser:
             MarkerType.STRING,
         ):
             self._syntax_warning(AlertCode.MISSED_END_OF_FUNCTION)
-            self._function_done(unexpected=True)
+            self._finish_code_function(unexpected=True)
 
         # TODO: How uncertain are we of detecting the end of a function
         # in a clang-formatted file? For now we assume we have missed the
         # end if we detect a non-GLOBAL marker while state is IN_FUNC.
         # Maybe these cases should be syntax errors instead
 
-        if marker.type in (MarkerType.FUNCTION, MarkerType.STUB):
+        if marker.type in (
+            MarkerType.FUNCTION,
+            MarkerType.STUB,
+            MarkerType.SYNTHETIC,
+            MarkerType.TEMPLATE,
+            MarkerType.LIBRARY,
+        ):
             if self.state in (
                 ReaderState.SEARCH,
                 ReaderState.WANT_SIG,
@@ -428,24 +461,6 @@ class DecompParser:
                 # We will allow multiple offsets if we have just begun
                 # the code block, but not after we hit the curly brace.
                 self._function_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.type == MarkerType.TEMPLATE:
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_TEMPLATE):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.type == MarkerType.SYNTHETIC:
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_SYNTHETIC):
-                self._nameref_marker(marker)
-            else:
-                self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
-
-        elif marker.type == MarkerType.LIBRARY:
-            if self.state in (ReaderState.SEARCH, ReaderState.IN_LIBRARY):
-                self._nameref_marker(marker)
             else:
                 self._syntax_error(AlertCode.INCOMPATIBLE_MARKER)
 
@@ -492,39 +507,30 @@ class DecompParser:
         self.curly.read_line(line)
 
         line_strip = line.strip()
-        if self.state in (
-            ReaderState.IN_SYNTHETIC,
-            ReaderState.IN_TEMPLATE,
-            ReaderState.IN_LIBRARY,
+
+        # A marker block cannot have a blank line before its completion token.
+        # The exceptions are the states inside a function body, where a blank
+        # line is ordinary code formatting.
+        if len(line_strip) == 0 and self.state not in (
+            ReaderState.SEARCH,
+            ReaderState.IN_FUNC,
+            ReaderState.WANT_CURLY,
         ):
-            # Explicit nameref functions provide the function name
-            # on the next line (in a // comment)
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
-                return
+            self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
+            return
 
-            name = get_synthetic_name(line)
-            if name is None:
-                self._syntax_error(AlertCode.BAD_NAMEREF)
-            else:
-                self.function_sig = name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
-
-        elif self.state == ReaderState.WANT_SIG:
-            # Ignore blanks on the way to function start or function name
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
-
-            elif line_strip.startswith("//"):
+        if self.state == ReaderState.WANT_SIG:
+            if line_strip.startswith("//"):
                 # If we found a comment, assume implicit lookup-by-name
                 # function and end here. We know this is not a decomp marker
                 # because it would have been handled already.
                 synthetic_name = get_synthetic_name(line)
-                assert synthetic_name is not None
-                self.function_sig = synthetic_name
-                self._function_starts_here()
-                self._function_done(lookup_by_name=True)
+                if synthetic_name is None:
+                    self._syntax_error(AlertCode.BAD_NAMEREF)
+                else:
+                    self.function_sig = synthetic_name
+                    self._function_starts_here()
+                    self._finish_name_function()
 
             elif line_strip == "{":
                 # We missed the function signature but we can recover from this
@@ -550,7 +556,7 @@ class DecompParser:
                 elif self.function_sig.endswith("}") or self.function_sig.endswith(
                     "};"
                 ):
-                    self._function_done()
+                    self._finish_code_function()
                 elif self.function_sig.endswith(");"):
                     # Detect forward reference or declaration
                     self._syntax_error(AlertCode.NO_IMPLEMENTATION)
@@ -564,7 +570,7 @@ class DecompParser:
 
         elif self.state == ReaderState.IN_FUNC:
             if line_strip.startswith("}") and line[self.curly_indent_stops] == "}":
-                self._function_done()
+                self._finish_code_function()
 
         elif self.state in (ReaderState.IN_GLOBAL, ReaderState.IN_FUNC_GLOBAL):
             # TODO: Known problem that an error here will cause us to abandon a
@@ -576,10 +582,6 @@ class DecompParser:
             global_markers_queued = any(
                 m.type == MarkerType.GLOBAL for m in self.var_markers.iter()
             )
-
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
-                return
 
             if global_markers_queued:
                 # Not the greatest solution, but a consequence of combining GLOBAL and
@@ -601,10 +603,6 @@ class DecompParser:
             self._variable_done(variable_name, string)
 
         elif self.state == ReaderState.IN_VTABLE:
-            if len(line_strip) == 0:
-                self._syntax_warning(AlertCode.UNEXPECTED_BLANK_LINE)
-                return
-
             vtable_class = get_class_name(line)
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)

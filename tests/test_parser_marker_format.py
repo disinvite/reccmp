@@ -299,6 +299,7 @@ def test_blank_line_between_markers(parser: DecompParser, marker_type: MarkerTyp
         """))
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 @pytest.mark.parametrize("marker_type", ALL_TYPES)
@@ -314,6 +315,7 @@ def test_blank_line_before_completion_token(
         """))
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 ####
@@ -383,7 +385,6 @@ def test_marker_types_agree(
     assert all(s.is_nameref() is nameref for s in parser.iter_symbols())
 
 
-@pytest.mark.xfail(reason="The parser gives an error here, not a warning.")
 @pytest.mark.parametrize("first, second", DISAGREEING_TYPES)
 def test_marker_types_disagree(
     parser: DecompParser, first: MarkerType, second: MarkerType
@@ -405,9 +406,6 @@ def test_marker_types_disagree(
     assert all(s.is_nameref() is nameref for s in parser.iter_symbols())
 
 
-@pytest.mark.xfail(
-    reason="The parser rejects a marker before it reads the completion token."
-)
 @pytest.mark.parametrize("rejected, accepted", NAMEREF_TYPE_ON_CODE)
 def test_nameref_type_on_code_token_reject_first(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType
@@ -426,9 +424,6 @@ def test_nameref_type_on_code_token_reject_first(
     ]
 
 
-@pytest.mark.xfail(
-    reason="The parser rejects a marker before it reads the completion token."
-)
 @pytest.mark.parametrize("rejected, accepted", NAMEREF_TYPE_ON_CODE)
 def test_nameref_type_on_code_token_reject_second(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType
@@ -445,9 +440,6 @@ def test_nameref_type_on_code_token_reject_second(
     ]
 
 
-@pytest.mark.xfail(
-    reason="The parser rejects a marker before it reads the completion token."
-)
 @pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
 def test_code_type_on_nameref_token_reject_first(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType
@@ -466,9 +458,6 @@ def test_code_type_on_nameref_token_reject_first(
     ]
 
 
-@pytest.mark.xfail(
-    reason="The parser rejects a marker before it reads the completion token."
-)
 @pytest.mark.parametrize("rejected, accepted", CODE_TYPE_ON_NAMEREF)
 def test_code_type_on_nameref_token_reject_second(
     parser: DecompParser, rejected: MarkerType, accepted: MarkerType

@@ -163,7 +163,7 @@ def test_load_code_function_nameref_variants(
                 // _atol
 
                 // STUB: TEST 0x1008b4b0
-                // _atoi
+                int _atoi(const char *) { /* TODO */ }
 
                 // SYNTHETIC: TEST 0x100380e0
                 // Pizza::`scalar deleting destructor'
@@ -205,7 +205,6 @@ def test_load_code_function_nameref_variants(
     assert entity.get("type") == EntityType.FUNCTION
     assert entity.get("library") is False
     assert entity.get("stub") is True
-    assert entity.get("name") == "_atoi"
 
     # SYNTHETIC
     entity = db.get(ImageId.ORIG, 0x100380E0)

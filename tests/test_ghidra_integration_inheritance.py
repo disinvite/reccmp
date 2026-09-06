@@ -38,6 +38,8 @@ import pytest
 from .cvdump_sample import load_cvdump_sample
 from .ghidra_integration_test_setup import (
     GhidraTypeTestHelper,
+)
+from .ghidra_helpers import (
     component,
     components_of,
     dereference,

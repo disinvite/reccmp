@@ -3,28 +3,9 @@ import re
 from ast import literal_eval
 from typing import NamedTuple
 
-# The goal here is to just read whatever is on the next line, so some
-# flexibility in the formatting seems OK
-templateCommentRegex = re.compile(r"\s*//\s*(.*)")
-
-# To remove any comment (//) or block comment (/*) and its leading spaces
-# from the end of a code line
-trailingCommentRegex = re.compile(r"(\s*(?://|/\*).*)$")
-
-# Get char contents, ignore escape characters
-singleQuoteRegex = re.compile(r"('(?:[^\'\\]|\\.)')")
-
-# Match contents of block comment on one line
-blockCommentRegex = re.compile(r"(/\*.*?\*/)")
-
-# Match contents of single comment on one line
-regularCommentRegex = re.compile(r"(//.*)")
-
-# Get string contents, ignore escape characters that might interfere
-doubleQuoteRegex = re.compile(r'(L)?("(?:[^"\\]|\\.)*")')
-
-# Detect a line that would cause us to enter a new scope
-scopeDetectRegex = re.compile(r"(?:class|struct|namespace) (?P<name>\w+).*(?:{)?")
+# Read the text from the LINE_COMMENT token, remove leading
+# and trailing whitespace, and ignore extra frontslashes.
+templateCommentRegex = re.compile(r"/{2,}\s*(.*\S)")
 
 
 def get_synthetic_name(line: str) -> str | None:
@@ -38,42 +19,11 @@ def get_synthetic_name(line: str) -> str | None:
     return None
 
 
-def sanitize_code_line(line: str) -> str:
-    """Helper for scope manager. Removes sections from a code line
-    that would cause us to incorrectly detect curly brackets.
-    This is a very naive implementation and fails entirely on multi-line
-    strings or comments."""
-
-    line = singleQuoteRegex.sub("''", line)
-    line = doubleQuoteRegex.sub('""', line)
-    line = blockCommentRegex.sub("", line)
-    line = regularCommentRegex.sub("", line)
-
-    return line.strip()
-
-
-def remove_trailing_comment(line: str) -> str:
-    return trailingCommentRegex.sub("", line)
-
-
-def is_blank_or_comment(line: str) -> bool:
-    """Helper to read ahead after the offset comment is matched.
-    There could be blank lines or other comments before the
-    function signature, and we want to skip those."""
-    line_strip = line.strip()
-    return (
-        len(line_strip) == 0
-        or line_strip.startswith("//")
-        or line_strip.startswith("/*")
-        or line_strip.endswith("*/")
-    )
-
-
 template_regex = re.compile(r"<(?P<type>[\w]+)\s*(?P<asterisks>\*+)?\s*>")
 
 
 class_decl_regex = re.compile(
-    r"\s*(?:\/\/)?\s*(?:class|struct) ((?:\w+(?:<.+>)?(?:::)?)+)"
+    r"\s*(?:/{2,})?\s*(?:class|struct) ((?:\w+(?:<.+>)?(?:::)?)+)"
 )
 
 
@@ -106,6 +56,8 @@ def get_class_name(line: str) -> str | None:
     return None
 
 
+# Previously we allowed `=` or `;` to end the variable name.
+# These are now distinct tokens, so we stop at the end of the CODE token.
 global_regex = re.compile(
     r"""
     (?P<name>(?:\w+::)*\w+)       # Any identifier with 0-N namespace qualifiers
@@ -113,8 +65,9 @@ global_regex = re.compile(
         \(\w|                     # - Open paren: call constructor
         \)\(|                     # - Close paren, open paren: function pointer variable
         \[.*|                     # - Open bracket: array with or without size
-        \s*=.*|                   # - Direct assignment
-        ;                         # - Not initialized
+        \s*=|
+        \s*;|
+        \s*$                      # - End of string
     )
 """,
     flags=re.X,
@@ -130,6 +83,31 @@ def get_variable_name(line: str) -> str | None:
     return None
 
 
+# A control-flow statement. These are followed by a curly bracket just like a
+# function, so we have to reject them before we mistake one for a signature.
+control_start_regex = re.compile(r"(?:if|else|for|while|switch|do|try|catch)\b")
+
+# The start of a type definition. These keywords can also begin a function
+# signature that returns an elaborated type. (i.e. `class Foo* GetFoo()`)
+type_start_regex = re.compile(r"(?:class|struct|union|enum|namespace)\b")
+
+
+def is_function_signature(line: str) -> bool:
+    """We cannot positively identify a function signature, but we can rule out
+    code that is clearly something else. This catches a FUNCTION marker
+    on an if-block or a class definition."""
+
+    if control_start_regex.match(line):
+        return False
+
+    # Only a function has parentheses, so use them to tell a type definition
+    # apart from a function that returns that type.
+    if type_start_regex.match(line) and "(" not in line:
+        return False
+
+    return True
+
+
 class ParserCodeString(NamedTuple):
     text: str
     is_widechar: bool
@@ -141,11 +119,17 @@ def get_string_contents(line: str) -> ParserCodeString | None:
     python's ast.literal_eval. I'm sure there are many pitfalls to doing
     it this way, but hopefully the regex will ensure reasonably sane input."""
 
+    # Remove line continuation marks. These are not newlines.
+    line = line.replace("\\\n", "")
+
     try:
-        if (match := doubleQuoteRegex.search(line)) is not None:
-            is_widechar = match.group(1) is not None
-            text = literal_eval(match.group(2))
-            return ParserCodeString(text=text, is_widechar=is_widechar)
+        is_widechar = line[0] == "L"
+        if is_widechar:
+            text = literal_eval(line[1:])
+        else:
+            text = literal_eval(line)
+
+        return ParserCodeString(text=text, is_widechar=is_widechar)
     # pylint: disable=broad-exception-caught
     # No way to predict what kind of exception could occur.
     except Exception:

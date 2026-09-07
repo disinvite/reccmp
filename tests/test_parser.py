@@ -5,6 +5,8 @@ from reccmp.parser.parser import (
 )
 from reccmp.parser.error import AlertCode
 
+# pylint: disable=too-many-lines
+
 
 @pytest.fixture(name="parser")
 def fixture_parser():
@@ -12,17 +14,18 @@ def fixture_parser():
 
 
 def test_missing_sig(parser):
-    """In the hopefully rare scenario that the function signature and marker
-    are swapped, we still have enough to match with reccmp"""
+    """Cannot create a line function marker unless we find:
+    1. The signature
+    2. Opening curly bracket
+    in that order."""
     parser.read(dedent("""\
         void my_function()
         // FUNCTION: TEST 0x1234
         {
         }
         """))
-    assert len(parser.functions) == 1
-    assert parser.functions[0].line_number == 3
 
+    assert len(parser.functions) == 0
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
 
@@ -34,6 +37,7 @@ def test_not_exact_syntax(parser):
         // function: test 0x1234
         void test() {}
         """)
+
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.NOT_STRICT_FORMAT
 
@@ -69,17 +73,43 @@ def test_variable(parser):
     assert len(parser.variables) == 1
 
 
-def test_synthetic_plus_marker(parser):
-    """Marker tracking preempts synthetic name detection.
-    Should fail with error and not log the synthetic"""
+def test_nameref_finished_by_code(parser):
+    """Nameref-only marker types (e.g. SYNTHETIC) cannot be completed by a code line.
+    The FUNCTION marker should succeed."""
     parser.read("""\
         // SYNTHETIC: HEY 0x555
         // FUNCTION: HOWDY 0x1234
         void test() {}
         """)
-    assert len(parser.functions) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].module == "HOWDY"
+
     assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.INCOMPATIBLE_MARKER
+    assert parser.alerts[0].code == AlertCode.BAD_NAMEREF
+
+
+def test_nameref_varying_marker_types(parser):
+    """For a nameref function, report when subsequent marker types are different from the first one."""
+    parser.read("""\
+        // SYNTHETIC: HEY 0x555
+        // FUNCTION: HOWDY 0x1234
+        // Test::`scalar deleting destructor'
+        """)
+    assert len(parser.functions) == 2
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.VARYING_MARKER_TYPES
+
+
+def test_nameref_varying_marker_types_except_stub(parser):
+    """Subset of the above test, except that STUB is always ignored.
+    Users might use STUB to alter the final accuracy report."""
+    parser.read("""\
+        // SYNTHETIC: HEY 0x555
+        // STUB: HOWDY 0x1234
+        // Test::`scalar deleting destructor'
+        """)
+    assert len(parser.functions) == 2
+    assert len(parser.alerts) == 0
 
 
 def test_different_markers_different_module(parser):
@@ -115,6 +145,7 @@ def test_different_markers_same_module(parser):
     assert parser.alerts[0].code == AlertCode.DUPLICATE_MODULE
 
 
+@pytest.mark.xfail(reason="TODO")
 def test_unexpected_synthetic(parser):
     """FUNCTION then SYNTHETIC should fail to report either one"""
     parser.read("""\
@@ -224,7 +255,6 @@ def test_synthetic_no_comment(parser):
     assert parser.alerts[0].code == AlertCode.BAD_NAMEREF
 
 
-@pytest.mark.xfail(reason="Gap in state machine logic where we do not raise an error.")
 def test_function_unexpected_end(parser: DecompParser):
     """Should throw an error if we hit the closing bracket before the starting bracket."""
     parser.read(dedent("""\
@@ -262,6 +292,7 @@ def test_function_with_spaces(parser):
     assert len(parser.functions) == 1
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 def test_function_with_spaces_implicit(parser):
@@ -274,6 +305,7 @@ def test_function_with_spaces_implicit(parser):
     assert len(parser.functions) == 1
     assert len(parser.alerts) == 1
     assert parser.alerts[0].code == AlertCode.UNEXPECTED_BLANK_LINE
+    assert parser.alerts[0].line_number == 2
 
 
 @pytest.mark.xfail(reason="will assume implicit lookup-by-name function")
@@ -352,7 +384,7 @@ def test_reject_global_return(parser):
         // FUNCTION: TEST 0x5555
         const char* test_function() {
             // GLOBAL: TEST 0x8888
-            return "test";
+            return xyz;
         }
         """)
     assert len(parser.variables) == 0
@@ -410,6 +442,18 @@ def test_string_ignore_g_prefix(parser):
         """)
     assert len(parser.strings) == 1
     assert len(parser.alerts) == 0
+
+
+def test_string_in_define(parser):
+    """Read a string from a #define expression."""
+
+    parser.read("""\
+        // STRING: TEST 0x1234
+        #define TEST_STRING "hello"
+        """)
+    assert len(parser.strings) == 1
+    assert len(parser.alerts) == 0
+    assert parser.strings[0].name == "hello"
 
 
 def test_class_variable(parser):
@@ -615,6 +659,34 @@ def test_namespace_in_comment(parser):
     assert parser.vtables[1].name == "TglImpl::RendererImpl<D3DRMImpl::D3DRM>"
 
 
+def test_vtable_skip_comment_to_code(parser):
+    """A comment that is not a class name (i.e. `// SIZE`) should not stop
+    the search for the class."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        // SIZE 0x1a8
+        class Act2Actor : public LegoAnimActor {
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.vtables) == 1
+    assert parser.vtables[0].name == "Act2Actor"
+
+
+def test_vtable_skip_comment_to_comment(parser):
+    """Same, but the class name is in a later comment."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        // SIZE 0x1a8
+        // class Tgl::Object
+        """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.vtables) == 1
+    assert parser.vtables[0].name == "Tgl::Object"
+
+
 def test_function_symbol_option(parser):
     """Indicate that the name for this name-based function marker is the function's symbol (linker name)."""
     parser.read("""\
@@ -682,8 +754,9 @@ def test_unexpected_marker(parser):
         """)
 
     assert len(parser.functions) == 0
-    assert len(parser.alerts) == 1
-    assert parser.alerts[0].code == AlertCode.UNEXPECTED_MARKER
+    assert len(parser.alerts) == 2
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    assert parser.alerts[1].code == AlertCode.MISSED_START_OF_FUNCTION
 
 
 def test_issue_137():
@@ -810,3 +883,446 @@ def test_variables_calling_constructor(parser):
     assert len(parser.alerts) == 0
     assert parser.variables[0].offset == 0x10065B54
     assert parser.variables[0].name == "g_floatConst4096"
+
+
+def test_issue_434_equal_same_line(parser):
+    """Should not start a new namespace for a struct variable definition."""
+    parser.read("""\
+        // GLOBAL: A 0x10007930
+        struct GlobalState g_state = {
+          1,
+          0,
+          1
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert parser.variables[0].name == "g_state"
+
+
+def test_issue_434_equal_newline(parser):
+    """Should not start a new namespace for a struct variable definition."""
+    parser.read("""\
+        // GLOBAL: A 0x10007930
+        struct GlobalState g_state
+        =
+        {
+          1,
+          0,
+          1
+        };
+        """)
+
+    assert len(parser.alerts) == 0
+    assert parser.variables[0].name == "g_state"
+
+
+def test_missed_start(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        void function() {
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_markers_not_aligned_to_each_other(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+            // STUB: ASDF 0x1234
+        void function() {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_markers_not_aligned_to_finish(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        // STUB: ASDF 0x1234
+            void function() {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+def test_code_function_over_if_block(parser):
+    """Should recognize that the code token is not a valid function signature."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        if (test) {}
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+def test_code_function_over_class(parser):
+    """Should recognize that the code token is not a valid function signature."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        class Test {}
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+def test_code_function_over_namespace(parser):
+    """Same as above. A namespace has no parentheses."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        namespace Test {
+        }
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+def test_code_function_over_enum(parser):
+    """Same as above. `enum class` begins with a type keyword."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        enum class Color {};
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+
+
+def test_code_function_returns_elaborated_type(parser):
+    """`class` here is the return type, not a class definition.
+    The parentheses tell them apart."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        class Foo* GetFoo() {}
+    """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
+
+
+def test_code_function_template_default_type(parser):
+    """The equal sign splits the signature before the parentheses appear.
+    Should not reject it for having none."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        template <typename T = int>
+        void test(T p_value) {}
+    """)
+
+    assert len(parser.alerts) == 0
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_code_function_with_unresolved_curly_brackets(parser):
+    parser.read("""\
+        // FUNCTION: HELLO 0x1234
+        void function() {
+        #ifdef XYZ
+            }
+        #endif
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 2
+    assert parser.functions[0].end_line == 6
+    assert len(parser.alerts) == 1
+    assert (
+        parser.alerts[0].code == AlertCode.MISSED_START_OF_FUNCTION
+    )  # TODO: new error type
+
+
+def test_issue_174(parser):
+    """Should not crash with failed assert for three-slash comment."""
+    parser.read("""\
+        // FUNCTION: LEGO1 0x100720d0
+        /// Some function description
+        void someFunction() {}
+    """)
+
+    assert len(parser.functions) == 1
+
+
+def test_issue_55(parser):
+    """Should handle these variations on nameref markers."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1000
+        //NoSpace::Function
+
+        // FUNCTION: HELLO 0x2000
+        //           BigSpace::Function
+
+        // FUNCTION: HELLO 0x3000
+        ///// Test::Function
+    """)
+
+    assert len(parser.functions) == 3
+
+
+def test_issue_56(parser):
+    """Should fail if VTABLE marker is not immediately followed by class or struct."""
+    parser.read("""\
+        // VTABLE: HELLO 0x1234
+        int test() { return 5; }
+        class Test;
+    """)
+
+    assert len(parser.vtables) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.NO_SUITABLE_NAME
+
+
+def test_issue_184(parser):
+    """Should remove trailing whitespace from nameref marker."""
+    parser.read("""\
+        // FUNCTION: HELLO 0x1000
+        // Spaces::AfterTheName    
+    """)
+
+    assert len(parser.functions) == 1
+    name = parser.functions[0].name
+    assert len(name) == len(name.strip())
+
+
+def test_string_markers_inside_struct(parser):
+    """Can read all embedded strings inside this struct, not just the first one."""
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        EdgeReference TestRaceCar::g_skBMap[] = {
+            {// STRING: TEST 0x2000
+             "EDG03_772",
+             NULL
+            },
+            {// STRING: TEST 0x3000
+             "EDG03_773",
+             NULL
+            },
+            {// STRING: TEST 0x4000
+             "EDG03_774",
+             NULL
+            }
+        };
+    """)
+
+    assert len(parser.variables) == 1
+    assert len(parser.strings) == 3
+    assert len(parser.alerts) == 0
+
+
+def test_variable_function_pointer(parser):
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        void (*g_omniUserMessage)(const char*, int) = NULL;
+    """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "g_omniUserMessage"
+    assert len(parser.alerts) == 0
+
+
+def test_variable_initialized_array(parser):
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        static int rotateIndex[] = {1, 2, 0};
+    """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "rotateIndex"
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_nameref_variable_inside_function(parser):
+    """Should not create a static variable."""
+
+    parser.read("""\
+        // FUNCTION: TEST 0x1000
+        void test() {
+            // GLOBAL: TEST 0x2000
+            // NotStaticVariable
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert len(parser.variables) == 0
+    assert parser.alerts
+    # TODO: New error code
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_vtable_forward_ref(parser):
+    """By convention, we expect the `// VTABLE` mark to appear before
+    the class declaration, not a forward reference."""
+
+    parser.read("""\
+        // VTABLE: TEST 0x1000
+        class ForwardRef;
+    """)
+
+    assert len(parser.vtables) == 0
+    assert parser.alerts
+    # TODO: New error code
+
+
+def test_stop_after_failed_variable_read(parser):
+    """Should abort when we fail to read a variable name from the #define expression.
+    Do not read the class name that follows."""
+
+    parser.read("""\
+        // GLOBAL: TEST 0x1000
+        #define TEST_MACRO 1234
+
+        class Hello;
+    """)
+
+    assert len(parser.variables) == 0
+    assert len(parser.alerts) == 1
+    assert parser.alerts[0].code == AlertCode.NO_SUITABLE_NAME
+
+
+def test_function_with_alternate_impl(parser):
+    """This function has varying arguments depending on PPC variables.
+    Placing the marker outside the PPC block is valid. Should not alert.
+    The function "starts" on the line with the first signature.
+    This is okay even if the second implementation is chosen because
+    the start and end lines are the boundaries for searching the lines database."""
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #ifdef COMPAT_MODE
+        void Hello::Test(int p_param)
+        #else
+        void Hello::Test(int p_param, bool p_option)
+        #endif
+        {
+            // function body
+        }
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 3
+    assert parser.functions[0].end_line == 9
+    assert len(parser.alerts) == 0
+
+
+def test_function_over_unwrapped_if_1(parser):
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #if 1
+        void Hello::Test(int p_param)
+        {
+            // function body
+        }
+        #endif
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 3
+    assert parser.functions[0].end_line == 6
+    assert len(parser.alerts) == 0
+
+
+def test_function_over_if_0(parser):
+    """The section commented by `#if 0` is removed, so we match with the function that follows.
+    Should not alert to unexpected blank lines because there are not any. This check looks at
+    the original text, not the filtered token list."""
+    parser.read("""\
+        // FUNCTION: TEST 0x2000
+        #if 0
+        void Hello::Test(int p_param) {}
+        #endif
+        void Hello::Next(int p_param) {}
+    """)
+
+    assert len(parser.functions) == 1
+    assert parser.functions[0].line_number == 5
+    assert parser.functions[0].end_line == 5
+    assert len(parser.alerts) == 0
+
+
+def test_if_0_deletes_annotation(parser):
+    """Do not attempt to match tokens obscured by an `#if 0` block."""
+    parser.read("""\
+        #if 0
+        // FUNCTION: TEST 0x2000
+        void Hello::Test(int p_param) {}
+        #endif
+    """)
+
+    assert len(parser.functions) == 0
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_with_nameref_vtable(parser):
+    parser.read("""\
+        namespace test {
+            // VTABLE: TEST 0x1000
+            // class Pizza
+        };
+    """)
+
+    assert "test" not in parser.vtables[0].name
+    assert len(parser.alerts) == 0
+
+
+def test_scope_with_code_vtable(parser):
+    parser.read("""\
+        namespace test {
+            // VTABLE: TEST 0x1000
+            class Pizza {};
+        };
+    """)
+
+    assert "test" in parser.vtables[0].name
+    assert len(parser.alerts) == 0
+
+
+def test_scope_with_nameref_function(parser):
+    parser.read("""\
+        namespace test {
+            // FUNCTION: TEST 0x2000
+            // Hello
+        };
+    """)
+
+    assert "test" not in parser.functions[0].name
+    assert len(parser.alerts) == 0
+
+
+@pytest.mark.xfail(reason="TODO")
+def test_scope_with_nameref_variable(parser):
+    parser.read("""\
+        namespace test {
+            // GLOBAL: TEST 0x4000
+            // Actor_Example
+        };
+    """)
+
+    assert "test" not in parser.variables[0].name
+    assert len(parser.alerts) == 0

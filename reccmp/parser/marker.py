@@ -34,13 +34,13 @@ class MarkerType(Enum):
 
 
 markerRegex = re.compile(
-    r"\s*//\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
+    r"//+\s*(?P<type>\w+):\s*(?P<module>\w+)\s+(?P<offset>0x[a-f0-9]+) *(?P<extra>\S.+\S)?",
     flags=re.I,
 )
 
 
 markerExactRegex = re.compile(
-    r"\s*// (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?\n?$"
+    r"//+ (?P<type>[A-Z]+): (?P<module>[A-Z0-9]+) (?P<offset>0x[a-f0-9]+)(?: (?P<extra>\S.+\S))?(?:\n|$)"
 )
 
 
@@ -59,15 +59,11 @@ MARKER_CATEGORY_MAP = {
 
 
 class DecompMarker(NamedTuple):
+    pos: int
     type: MarkerType
     module: str
     offset: int
     extra: str | None = None
-
-    @property
-    def key(self) -> tuple[MarkerCategory, str, str | None]:
-        """For use with the MarkerDict. To detect/avoid marker collision."""
-        return (MARKER_CATEGORY_MAP[self.type], self.module, self.extra)
 
 
 def normalize_target_aliases(aliases: TargetAliases) -> TargetAliases:
@@ -114,16 +110,22 @@ def resolve_alias(marker_type: str, target_name: str, aliases: ProjectAliases) -
 
 
 def match_marker(
-    line: str, aliases: ProjectAliases | None = None
+    text: str, aliases: ProjectAliases | None = None
 ) -> DecompMarker | None:
-    if aliases is None:
+    match = markerRegex.search(text)
+    if match:
+        return new_match_marker(match.start(), match.groups(), aliases)
+
+    return None
+
+
+def new_match_marker(
+    pos: int, groups: tuple[str, ...], aliases: ProjectAliases | None = None
+) -> DecompMarker:
+    if not aliases:
         aliases = {}
 
-    match = markerRegex.match(line)
-    if match is None:
-        return None
-
-    marker_type, target_name, offset_str, extra = match.groups()
+    marker_type, target_name, offset_str, extra = groups
     marker_type = resolve_alias(marker_type, target_name, aliases)
 
     try:
@@ -132,6 +134,7 @@ def match_marker(
         enum_type = MarkerType.UNKNOWN
 
     return DecompMarker(
+        pos=pos,
         type=enum_type,
         # Convert to upper here. A lot of other analysis depends on this name
         # being consistent and predictable. If the name is _not_ capitalized
@@ -142,5 +145,5 @@ def match_marker(
     )
 
 
-def is_marker_exact(line: str) -> bool:
-    return markerExactRegex.match(line) is not None
+def is_marker_exact(text: str, pos: int = 0) -> bool:
+    return markerExactRegex.match(text, pos) is not None

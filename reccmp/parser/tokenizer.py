@@ -25,12 +25,14 @@ class TokenType(enum.IntEnum):
 
 r_newSplitter = re.compile(
     r"""
+[{}=;]|
 //[^\n]*|
 /\*.*?\*/|
-L?\"(?:[^\"\n\\]|\\.)*[\"\n]|
-L?\'(?:[^'\n\\]|\\.)*['\n]|
-\#\s*(\w+)(?:\\\n|[^\n])*|
-[{}=;]
+L\"[^\"\n\\]*(?:\\.[^\"\n\\]*)*[\"\n]|
+\"[^\"\n\\]*(?:\\.[^\"\n\\]*)*[\"\n]|
+L\'[^'\n\\]*(?:\\.[^'\n\\]*)*['\n]|
+\'[^'\n\\]*(?:\\.[^'\n\\]*)*['\n]|
+\#\s*(\w+)(?:[^\n\\]+|\\\n|\\)*
 """,
     flags=re.X | re.DOTALL,
 )
@@ -54,58 +56,66 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
     # digit separator case can overwrite it.
     matches = r_newSplitter.finditer(text)
 
-    while (match := next(matches, None)) is not None:
-        pos, stop = match.span()
-        first = text[pos]
+    # The inner loop runs to exhaustion unless the digit separator case replaces
+    # the iterator, which breaks out so the outer loop can pick up the new one.
+    while True:
+        for match in matches:
+            pos, stop = match.span()
+            first = text[pos]
 
-        if first == "{":
-            token_type = TokenType.CURLY_OPEN
-        elif first == "}":
-            token_type = TokenType.CURLY_CLOSE
-        elif first == "=":
-            token_type = TokenType.EQUAL
-        elif first == ";":
-            token_type = TokenType.SEMICOLON
-        elif first == '"':
-            token_type = TokenType.STRING
-        elif first == "'":
-            if pos and text[pos - 1] in string.hexdigits:
-                # Reset the iterator to skip the single quote.
-                # Do not skip delimiters inside this rejected CHAR token.
-                matches = r_newSplitter.finditer(text, pos + 1)
-                continue
+            if first == "{":
+                token_type = TokenType.CURLY_OPEN
+            elif first == "}":
+                token_type = TokenType.CURLY_CLOSE
+            elif first == "=":
+                token_type = TokenType.EQUAL
+            elif first == ";":
+                token_type = TokenType.SEMICOLON
+            elif first == '"':
+                token_type = TokenType.STRING
+            elif first == "'":
+                if pos and text[pos - 1] in string.hexdigits:
+                    # Reset the iterator to skip the single quote.
+                    # Do not skip delimiters inside this rejected CHAR token.
+                    matches = r_newSplitter.finditer(text, pos + 1)
+                    break
 
-            token_type = TokenType.CHAR
-        elif first == "#":
-            ppc_name = match.group(1).lower()
-            if ppc_name.startswith("if"):
-                token_type = TokenType.PPC_IF
-            elif ppc_name.startswith("elif"):
-                token_type = TokenType.PPC_ELIF
-            elif ppc_name == "else":
-                token_type = TokenType.PPC_ELSE
-            elif ppc_name == "endif":
-                token_type = TokenType.PPC_END
+                token_type = TokenType.CHAR
+            elif first == "#":
+                ppc_name = match.group(1).lower()
+                if ppc_name.startswith("if"):
+                    token_type = TokenType.PPC_IF
+                elif ppc_name.startswith("elif"):
+                    token_type = TokenType.PPC_ELIF
+                elif ppc_name == "else":
+                    token_type = TokenType.PPC_ELSE
+                elif ppc_name == "endif":
+                    token_type = TokenType.PPC_END
+                else:
+                    token_type = TokenType.PPC_OTHER
+
             else:
-                token_type = TokenType.PPC_OTHER
+                second = text[pos + 1]
+                if first == "L":
+                    token_type = TokenType.STRING if second == '"' else TokenType.CHAR
+                else:
+                    token_type = (
+                        TokenType.LINE_COMMENT
+                        if second == "/"
+                        else TokenType.BLOCK_COMMENT
+                    )
 
+            if start < pos:
+                # Skip if this is entirely whitespace
+                strip_match = r_firstChar.search(text, start, pos)
+                if strip_match:
+                    tokens.append((strip_match.start(), pos, TokenType.CODE))
+
+            tokens.append((pos, stop, token_type))
+            start = stop
         else:
-            second = text[pos + 1]
-            if first == "L":
-                token_type = TokenType.STRING if second == '"' else TokenType.CHAR
-            else:
-                token_type = (
-                    TokenType.LINE_COMMENT if second == "/" else TokenType.BLOCK_COMMENT
-                )
-
-        if start < pos:
-            # Skip if this is entirely whitespace
-            strip_match = r_firstChar.search(text, start, pos)
-            if strip_match:
-                tokens.append((strip_match.start(), pos, TokenType.CODE))
-
-        tokens.append((pos, stop, token_type))
-        start = stop
+            # No more tokens
+            break
 
     if start < len(text):
         tokens.append((start, len(text), TokenType.CODE))
@@ -173,20 +183,21 @@ def get_scopes_from_tokens(
     return names
 
 
+CURLY_TOKENS = {TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE}
+
+PPC_TOKENS = {
+    TokenType.PPC_IF,
+    TokenType.PPC_ELIF,
+    TokenType.PPC_ELSE,
+    TokenType.PPC_END,
+}
+
+
+SCOPE_TOKENS = CURLY_TOKENS | PPC_TOKENS
+
+
 def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
-    return [
-        x
-        for x in tokens
-        if x[2]
-        in {
-            TokenType.CURLY_OPEN,
-            TokenType.CURLY_CLOSE,
-            TokenType.PPC_IF,
-            TokenType.PPC_ELIF,
-            TokenType.PPC_ELSE,
-            TokenType.PPC_END,
-        }
-    ]
+    return [x for x in tokens if x[2] in SCOPE_TOKENS]
 
 
 def reduce_scopes(
@@ -214,12 +225,7 @@ def reduce_scopes(
                 output.append(x)
         elif x[2] == TokenType.CURLY_OPEN:
             stack.append(x)
-        elif enable_ppc and x[2] in {
-            TokenType.PPC_IF,
-            TokenType.PPC_ELIF,
-            TokenType.PPC_ELSE,
-            TokenType.PPC_END,
-        }:
+        elif enable_ppc and x[2] in PPC_TOKENS:
             output.extend(stack)
             output.append(x)
             stack.clear()
@@ -296,7 +302,7 @@ def reduced_tagger(remain: list[CodeToken]) -> set[int]:
 
 def all_curly_paired(tokens: list[CodeToken]) -> bool:
     for x in tokens:
-        if x[2] in {TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE}:
+        if x[2] in CURLY_TOKENS:
             return False
 
     return True

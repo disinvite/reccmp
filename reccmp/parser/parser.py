@@ -1,7 +1,7 @@
 # C++ file parser
 
-import io
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import PurePath
 from typing import Iterator
 from enum import Enum
@@ -12,8 +12,6 @@ from .util import (
     remove_trailing_comment,
     get_string_contents,
     ParserCodeString,
-    sanitize_code_line,
-    scopeDetectRegex,
 )
 from .marker import (
     DecompMarker,
@@ -32,6 +30,12 @@ from .node import (
     ParserString,
 )
 from .error import ParserAlert, AlertCode
+from .tokenizer import (
+    get_newlines_from_text,
+    get_scopes_from_tokens,
+    scope_detect_churn,
+    tokenize_code_file,
+)
 
 
 class ReaderState(Enum):
@@ -80,57 +84,6 @@ class MarkerDict:
         self.markers = {}
 
 
-class CurlyManager:
-    """Overly simplified scope manager"""
-
-    def __init__(self):
-        self._stack = []
-
-    def reset(self):
-        self._stack = []
-
-    def _pop(self):
-        """Pop stack safely"""
-        try:
-            self._stack.pop()
-        except IndexError:
-            pass
-
-    def get_prefix(self, name: str | None = None) -> str:
-        """Return the prefix for where we are."""
-
-        scopes = [t for t in self._stack if t != "{"]
-        if len(scopes) == 0:
-            return name if name is not None else ""
-
-        if name is not None and name not in scopes:
-            scopes.append(name)
-
-        return "::".join(scopes)
-
-    def read_line(self, raw_line: str):
-        """Read a line of code and update the stack."""
-        line = sanitize_code_line(raw_line)
-        if (match := scopeDetectRegex.match(line)) is not None:
-            if not line.endswith(";"):
-                self._stack.append(match.group("name"))
-
-        change = line.count("{") - line.count("}")
-        if change > 0:
-            for _ in range(change):
-                self._stack.append("{")
-        elif change < 0:
-            for _ in range(-change):
-                self._pop()
-
-            if len(self._stack) == 0:
-                return
-
-            last = self._stack[-1]
-            if last != "{":
-                self._pop()
-
-
 class DecompParser:
     # pylint: disable=too-many-instance-attributes
     # Could combine output lists into a single list to get under the limit,
@@ -145,7 +98,11 @@ class DecompParser:
 
         self.last_line: str = ""
 
-        self.curly = CurlyManager()
+        self.scopes: list[tuple[int, int, str]] = []
+        """Ranges and names of scopes in the current file, given as: (start, end, name)"""
+
+        self.line_pos: int = 0
+        """File offset of the current line we are reading."""
 
         # To allow for multiple markers where code is shared across different
         # modules, save lists of compatible markers that appear in sequence
@@ -180,6 +137,9 @@ class DecompParser:
 
         self.last_line = ""
 
+        self.scopes = []
+        self.line_pos = 0
+
         self.fun_markers.empty()
         self.var_markers.empty()
         self.tbl_markers.empty()
@@ -190,7 +150,18 @@ class DecompParser:
 
         self.filename = filename
 
-        self.curly.reset()
+    def _qualify(self, name: str | None) -> str:
+        """Qualify the provided name with the combined scope names for our current file position."""
+        scopes = [
+            name for start, stop, name in self.scopes if start < self.line_pos < stop
+        ]
+        if not scopes:
+            return name or ""
+
+        if name is not None and name not in scopes:
+            scopes.append(name)
+
+        return "::".join(scopes)
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -310,7 +281,7 @@ class DecompParser:
                     line_number=self.line_number,
                     module=marker.module,
                     offset=marker.offset,
-                    name=self.curly.get_prefix(class_name),
+                    name=self._qualify(class_name),
                     filename=self.filename,
                     base_class=None if is_folded else marker.extra,
                     is_folded=is_folded,
@@ -374,7 +345,7 @@ class DecompParser:
                         line_number=self.line_number,
                         module=marker.module,
                         offset=marker.offset,
-                        name=self.curly.get_prefix(variable_name),
+                        name=self._qualify(variable_name),
                         filename=self.filename,
                         is_static=is_static,
                         parent_function=parent_function,
@@ -494,8 +465,6 @@ class DecompParser:
             self._handle_marker(marker)
             return
 
-        self.curly.read_line(line)
-
         line_strip = line.strip()
         if self.state in (
             ReaderState.IN_SYNTHETIC,
@@ -607,8 +576,19 @@ class DecompParser:
                 self._vtable_done(class_name=vtable_class)
 
     def read(self, text: str):
-        for line in io.StringIO(text, newline=None):
-            self.read_line(line)
+        # Find the boundaries of all scopes now so we do not need to keep the stack
+        # up to date while reading.
+        enclosures, _ = scope_detect_churn(tokenize_code_file(text))
+        self.scopes = get_scopes_from_tokens(text, enclosures)
+
+        line_starts = [pos + 1 for pos in get_newlines_from_text(text)]
+        for start, stop in pairwise([*line_starts, len(text)]):
+            # Make sure we read the last line if it has tokens.
+            if start == stop:
+                break
+
+            self.line_pos = start
+            self.read_line(text[start:stop])
 
     def finish(self):
         if self.state != ReaderState.SEARCH:

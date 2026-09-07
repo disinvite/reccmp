@@ -474,6 +474,39 @@ def test_nested_namespace(parser):
     assert parser.variables[0].name == "Tgl::Renderer::g_count"
 
 
+def test_namespace_multiline_comment(parser):
+    """Should not end the namespace early if we read a curly bracket that is part of a comment."""
+
+    parser.read("""\
+        namespace Tgl {
+        /*
+        }
+        */
+        // GLOBAL: TEST 0x1234
+        int g_count = 0;
+        }
+        """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "Tgl::g_count"
+
+
+def test_namespace_multiline_string(parser):
+    """Should not end the namespace early if we read a curly bracket inside a multi-line string."""
+
+    parser.read("""\
+        namespace Tgl {
+        const char *g_text = "}\\
+        }";
+        // GLOBAL: TEST 0x1234
+        int g_count = 0;
+        }
+        """)
+
+    assert len(parser.variables) == 1
+    assert parser.variables[0].name == "Tgl::g_count"
+
+
 def test_match_qualified_variable(parser):
     """If a variable belongs to a scope and we use a fully qualified reference
     below a GLOBAL marker, make sure we capture the full name."""

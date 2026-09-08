@@ -32,8 +32,8 @@ from .node import (
 from .error import ParserAlert, AlertCode
 from .tokenizer import (
     get_newlines_from_text,
-    get_scopes_from_tokens,
-    scope_detect_churn,
+    get_namespaces_from_scopes,
+    resolve_scopes,
     tokenize_code_file,
 )
 
@@ -98,8 +98,8 @@ class DecompParser:
 
         self.last_line: str = ""
 
-        self.scopes: list[tuple[int, int, str]] = []
-        """Ranges and names of scopes in the current file, given as: (start, end, name)"""
+        self.namespaces: list[tuple[int, int, str]] = []
+        """Ranges and names of namespaces in the current file, given as: (start, end, name)"""
 
         self.line_pos: int = 0
         """File offset of the current line we are reading."""
@@ -137,7 +137,7 @@ class DecompParser:
 
         self.last_line = ""
 
-        self.scopes = []
+        self.namespaces = []
         self.line_pos = 0
 
         self.fun_markers.empty()
@@ -152,16 +152,18 @@ class DecompParser:
 
     def _qualify(self, name: str | None) -> str:
         """Qualify the provided name with the combined scope names for our current file position."""
-        scopes = [
-            name for start, stop, name in self.scopes if start < self.line_pos < stop
+        namespaces = [
+            name
+            for start, stop, name in self.namespaces
+            if start < self.line_pos < stop
         ]
-        if not scopes:
+        if not namespaces:
             return name or ""
 
-        if name is not None and name not in scopes:
-            scopes.append(name)
+        if name is not None and name not in namespaces:
+            namespaces.append(name)
 
-        return "::".join(scopes)
+        return "::".join(namespaces)
 
     @property
     def functions(self) -> list[ParserFunction]:
@@ -578,8 +580,8 @@ class DecompParser:
     def read(self, text: str):
         # Find the boundaries of all scopes now so we do not need to keep the stack
         # up to date while reading.
-        enclosures, _ = scope_detect_churn(tokenize_code_file(text))
-        self.scopes = get_scopes_from_tokens(text, enclosures)
+        scopes, _ = resolve_scopes(tokenize_code_file(text))
+        self.namespaces = get_namespaces_from_scopes(text, scopes)
 
         line_starts = [pos + 1 for pos in get_newlines_from_text(text)]
         for start, stop in pairwise([*line_starts, len(text)]):

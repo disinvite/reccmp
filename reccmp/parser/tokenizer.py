@@ -139,8 +139,8 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     return (i, offset - pos)
 
 
-def get_scopes_from_tokens(
-    text: str, enclosures: dict[int, int]
+def get_namespaces_from_scopes(
+    text: str, scopes: dict[int, int]
 ) -> list[tuple[int, int, str]]:
     """Using the known scope enclosures, find which ones are the start of a
     struct, class, or namespace. Return the name and range of positions where each
@@ -149,8 +149,8 @@ def get_scopes_from_tokens(
 
     for match in r_realClassStart.finditer(text):
         stop = match.end()
-        if stop in enclosures:
-            names.append((stop, enclosures[stop], match.group(1)))
+        if stop in scopes:
+            names.append((stop, scopes[stop], match.group(1)))
 
     return names
 
@@ -172,7 +172,7 @@ def scope_tokens_only(tokens: list[CodeToken]) -> list[CodeToken]:
     return [x for x in tokens if x[2] in SCOPE_TOKENS]
 
 
-def reduce_scopes(
+def pair_brackets(
     tokens: list[CodeToken],
     *,
     enable_ppc: bool,
@@ -206,21 +206,16 @@ def reduce_scopes(
     return (ranges, output)
 
 
-def reduced_tagger(remain: list[CodeToken]) -> set[int]:
-    """Group leftover ppc and curly brackets into groups.
-    If there is an uninterrupted group where all legs have the same curly offset
-    use any subgroup and discard the rest.
+def find_collapsible_ppc_branches(remain: list[CodeToken]) -> set[int]:
+    """Find PPC blocks where every option (branch) introduces the same sequence of curly brackets.
+    In other words, the net effect on bracket pairing is the same no matter how the preprocessor
+    expressions are evaluated.
 
-    Sample debug output: mxdsobject.cpp
-    REMAINING:
-      179,     1,  i:  357   pos: 3497 : {       (0, 0)
-      184,     1,  i:  365   pos: 3558 : #ifdef       (1, -1)
-      186,    40,  i:  377   pos: 3630 : {       (1, 0)
-      187,     1,  i:  379   pos: 3632 : #else       (1, -1)
-      188,    49,  i:  389   pos: 3686 : {       (1, 1)
-      189,     1,  i:  391   pos: 3688 : #endif       (1, -1)
-      199,     2,  i:  428   pos: 4004 : }       (0, 0)
-      206,     1,  i:  440   pos: 4073 : }       (0, 0)
+    If any blocks qualify, enable the curly brackets from the first branch (chosen arbitrarily)
+    and return a list of tokens (by their start position) to remove from the list, including any
+    `#if`, `#else`, or `#endif tokens that wrap the PPC blocks.
+
+    A single pass can only mask out PPC blocks that are not interrupted by nesting.
     """
     interrupted = False
     global_mask = set()
@@ -281,7 +276,7 @@ def all_curly_paired(tokens: list[CodeToken]) -> bool:
 
 
 def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) -> bool:
-    """Check the new bracket pairs from reduce_scopes(enable_ppc=False)
+    """Check the new bracket pairs from pair_brackets(enable_ppc=False)
     and determine whether any of them are:
     1. Impossible: the brackets are in the same PPC block, divided by #else,
     so both of them could not be active at the same time.
@@ -325,30 +320,38 @@ def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) 
     return True
 
 
-def scope_detect_churn(
+def resolve_scopes(
     tokens: list[CodeToken],
 ) -> tuple[dict[int, int], list[CodeToken]]:
+    """Pair up curly brackets in the entire file to the best of our ability.
+    Returns a map of (start -> stop) regions of the paired brackets.
+    We may not be able to pair all brackets because of invalid syntax
+    or preprocessor sequences that are not reducible.
+    If this occurs, we also return a list of brackets and PPC tokens that we
+    are unable to handle. The caller can decide how to alert the user."""
     remain = scope_tokens_only(tokens)
 
     out_ranges = []
 
+    # 10 iterations chosen arbitrarily simply to avoid an unexpected infinite loop.
     for _ in range(10):
         reduced_this_step = False
-        # Trivial match of curly brackets that are next to each other.
-        new_ranges, new_remain = reduce_scopes(remain, enable_ppc=True)
+        # Match any curly bracket pairs that are next to each other.
+        new_ranges, new_remain = pair_brackets(remain, enable_ppc=True)
         if new_ranges:
             out_ranges.extend(new_ranges)
-            remain = new_remain  # ?
+            remain = new_remain
             reduced_this_step = True
 
-        # End early if there are no PPC tokens left.
+        # If all curly brackets have been matched, we are done.
+        # There may still be PPC tokens in the list, but none can block a bracket match.
         if all_curly_paired(new_remain):
             break
 
         # Can we simply enable all PPC regions and match remaining brackets?
-        new_ranges, new_remain = reduce_scopes(remain, enable_ppc=False)
+        new_ranges, new_remain = pair_brackets(remain, enable_ppc=False)
         # This is only allowed if:
-        # 1. All remaining brackets are paired.
+        # 1. Doing this allows us to pair all remaining brackets.
         # 2. No pairing joins two regions separated by #else/#elif.
         # `new_remain` has had its PPC tokens removed, so use `remain`.
         if not new_remain and check_naive_folding(new_ranges, remain):
@@ -356,7 +359,7 @@ def scope_detect_churn(
             remain = new_remain
             break
 
-        mask = reduced_tagger(remain)
+        mask = find_collapsible_ppc_branches(remain)
         if mask:
             remain = [
                 (start, stop, token)

@@ -34,8 +34,14 @@ def test_chars():
     assert list(tokenize_code_file("'\"'")) == [(0, 3, TokenType.CHAR)]
 
 
+@pytest.mark.xfail(reason="Edge case")
+def test_raw_string():
+    """Quotes and brackets inside a raw string literal do not end the token."""
+    assert tokenize_code_file('R"(unmatched " and })"') == [(0, 22, TokenType.STRING)]
+
+
 def test_eof():
-    """Unfinished tokens are emitted as CODE."""
+    """Should emit unfinished tokens as CODE."""
     assert list(tokenize_code_file('"test')) == [(0, 5, TokenType.CODE)]
     assert list(tokenize_code_file("'x")) == [(0, 2, TokenType.CODE)]
     assert list(tokenize_code_file("/* test")) == [(0, 7, TokenType.CODE)]
@@ -45,8 +51,8 @@ def test_eof():
 
 
 def test_string_continuation():
-    # Newline is part of broken string.
-    # A second string token is not started.
+    """Should end a STRING or CHAR token if we see an unescaped newline
+    before the closing quote character."""
     assert list(tokenize_code_file('"xx\nyy"')) == [
         (0, 4, TokenType.STRING),
         (4, 7, TokenType.CODE),
@@ -58,6 +64,17 @@ def test_string_continuation():
     assert list(tokenize_code_file('"xx\\\nyy"')) == [(0, 8, TokenType.STRING)]
 
 
+@pytest.mark.xfail(reason="Edge case")
+def test_line_comment_continuation():
+    """Should allow line continuation for a line comment."""
+    code = dedent("""\
+        // First line\\
+        Second line""")
+    assert tokenize_code_file(code) == [
+        (0, 26, TokenType.LINE_COMMENT),
+    ]
+
+
 def test_ppc_tokens_consume_other_types():
     """Should not emit curly brackets if they are part of a PPC statement."""
     assert list(tokenize_code_file("#define XYZ = (while(0) { };)")) == [
@@ -66,7 +83,7 @@ def test_ppc_tokens_consume_other_types():
 
 
 def test_digit_separator():
-    """Should not try to start a new CHAR token if the single quote is between two valid digits."""
+    """Should identify a digit separator and not emit a CHAR token."""
     assert tokens_only(tokenize_code_file("int x = 1'000'000")) == [
         TokenType.CODE,
         TokenType.EQUAL,
@@ -75,7 +92,7 @@ def test_digit_separator():
 
 
 def test_digit_separator_naive_skip():
-    """When disqualifying a CHAR token, do not skip delimiters it contains."""
+    """Should not drop CODE tokens when a digit separator is detected."""
     assert tokenize_code_file("int x = 1'000; int y = 2'000;") == [
         (0, 6, TokenType.CODE),
         (6, 7, TokenType.EQUAL),
@@ -88,10 +105,30 @@ def test_digit_separator_naive_skip():
     ]
 
 
+@pytest.mark.xfail(reason="Edge case")
+def test_char_preceded_by_hex_letter():
+    """Should identify that the `e` in `case` does not indicate a hex digit."""
+    assert tokenize_code_file("case'}': break;") == [
+        (0, 4, TokenType.CODE),
+        (4, 7, TokenType.CHAR),
+        (7, 14, TokenType.CODE),
+        (14, 15, TokenType.SEMICOLON),
+    ]
+
+
 def test_hide_all_tokens_for_ppc():
-    """The main concern is to hide curly brackets inside a #define line."""
+    """Should include all tokens that are part of a PPC expression.
+    The main concern is to hide curly brackets inside a #define line."""
     assert list(tokenize_code_file("#define TEST {")) == [
         (0, 14, TokenType.PPC_OTHER),
+    ]
+
+
+@pytest.mark.xfail(reason="Edge case")
+def test_block_comment_after_directive():
+    """Should consider block comments as line continuations for PPC tokens."""
+    assert tokenize_code_file("#define A 1 /*\n*/ + 2") == [
+        (0, 21, TokenType.PPC_OTHER),
     ]
 
 
@@ -114,7 +151,7 @@ def test_struct_newline():
     """Tokens should have no gap, except for whitespace."""
     code = dedent("""\
         // SIZE 0x1a8
-        class Act2Actor : public LegoAnimActor {
+        class Act2Actor : public TestAnimActor {
         public:
             struct Location {
                 MxFloat m_position[3];  // 0x00
@@ -147,42 +184,43 @@ def test_line_col_conversion():
 
 
 def test_scope_detect_empty():
-    """Base case: no tokens to parse, no scopes returned."""
+    """Should not detect any scopes in an empty file."""
     scopes, remain = resolve_scopes(tokenize_code_file(""))
     assert not scopes
     assert not remain
 
 
 def test_scope_detect_single_pair():
-    """Return a single scope."""
+    """Should detect a single scope."""
     scopes, remain = resolve_scopes(tokenize_code_file("{}"))
     assert scopes == {0: 1}
     assert not remain
 
 
 def test_scope_detect_reverse_pair():
-    """Invalid input. Discarded tokens are returned in the `remain` list."""
+    """Should detect invalid input: curly brackets are in the wrong order.
+    The discarded tokens are returned in the `remain` list."""
     scopes, remain = resolve_scopes(tokenize_code_file("}{"))
     assert not scopes
     assert remain == [(0, 1, TokenType.CURLY_CLOSE), (1, 2, TokenType.CURLY_OPEN)]
 
 
 def test_scope_detect_nested():
-    """Can returned layered scopes."""
+    """Should detect nested scopes."""
     scopes, remain = resolve_scopes(tokenize_code_file("{{}}"))
     assert scopes == {0: 3, 1: 2}
     assert not remain
 
 
 def test_scope_detect_siblings():
-    """Two adjacent pairs at the same level."""
+    """Should detect two scopes next to each other."""
     scopes, remain = resolve_scopes(tokenize_code_file("{}{}"))
     assert scopes == {0: 1, 2: 3}
     assert not remain
 
 
 def test_scope_detect_nested_two_levels():
-    """Outer scope is paired on the second pass."""
+    """Should detect outer scope after pairing both inner scopes."""
     scopes, remain = resolve_scopes(tokenize_code_file("{{}{}}"))
     assert scopes == {0: 5, 1: 2, 3: 4}
     assert not remain
@@ -196,7 +234,7 @@ def test_scope_detect_unpaired_close():
 
 
 def test_scope_detect_unpaired_open():
-    """Unpaired opening brackets returned in the `remain` list."""
+    """Should return unpaired opening brackets in the `remain` list."""
     scopes, remain = resolve_scopes(tokenize_code_file("{{}"))
     assert scopes == {1: 2}
     assert remain == [(0, 1, TokenType.CURLY_OPEN)]
@@ -483,12 +521,12 @@ def test_scope_detect_reject_impossible_naive_pairing_2():
     assert remain == [(25, 26, TokenType.CURLY_CLOSE)]
 
 
-@pytest.mark.xfail(
-    reason="TODO: Could salvage the first pairing if we discard the empty PPC block"
-)
+@pytest.mark.xfail(reason="Returns nothing for this invalid input.")
 def test_scope_detect_salvage_valid_pairing():
-    """Our handling of this case rejects the second (questionable) pair but
-    we should return the first pair. The empty PPC can be removed easily."""
+    """Should return partial bracket pairing for invalid input.
+    In this case, it is the pair split by `#ifdef X`.
+    If we isolate the invalid input, we can remove the `#ifdef Y` block and create a second pair.
+    """
     code = dedent("""\
         {
         #ifdef X
@@ -517,8 +555,7 @@ def test_scopes_namespace():
 
 
 def test_scopes_class_with_base():
-    """The base class list is part of the declaration, so the scope still
-    begins at the curly bracket that follows it."""
+    """Should correctly extract the namespace name from a class with a list of base classes."""
     code = dedent("""\
         class Test : public Other {
         int m_test;
@@ -529,7 +566,7 @@ def test_scopes_class_with_base():
 
 
 def test_scopes_forward_reference():
-    """A declaration with no body does not open a scope."""
+    """Should not declare a namespace for a class or struct without curly brackets."""
     code = dedent("""\
         class Test;
         struct Other;
@@ -539,7 +576,8 @@ def test_scopes_forward_reference():
 
 
 def test_scopes_nested():
-    """Scopes are reported in source order, so the enclosing scope comes first."""
+    """Should report the list of scopes in the order they begin in the file.
+    (i.e. sorted by start position.)"""
     code = dedent("""\
         namespace Test {
         struct Inner {
@@ -555,7 +593,7 @@ def test_scopes_nested():
 
 
 def test_scopes_unmatched_brackets():
-    """A class whose curly bracket could not be paired has no scope."""
+    """Should not declare a scope for an unpaired curly bracket."""
     code = dedent("""\
         class Test {
     """)
@@ -564,7 +602,7 @@ def test_scopes_unmatched_brackets():
 
 
 def test_scopes_ignore_control_flow():
-    """Only a class, struct, or namespace opens a named scope."""
+    """Should not define a namespace for scopes that are not a class, struct, or namespace."""
     code = dedent("""\
         if (test) {
         }
@@ -573,3 +611,41 @@ def test_scopes_ignore_control_flow():
     """)
     scopes, _ = resolve_scopes(tokenize_code_file(code))
     assert not get_namespaces_from_scopes(code, scopes)
+
+
+@pytest.mark.xfail(reason="Namespace regex is too restrictive.")
+def test_scopes_no_space_before_curly():
+    """Should detect the scope name next to the curly bracket."""
+    code = dedent("""\
+        namespace Test{
+        int g_test;
+        }
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert get_namespaces_from_scopes(code, scopes) == [(14, 28, "Test")]
+
+
+@pytest.mark.xfail(reason="Namespace regex does not ignore commented tokens.")
+def test_scopes_keyword_in_comment():
+    """Should ignore a comment that resembles a class declaration."""
+    code = dedent("""\
+        // Helper for class Renderer
+        void test()
+        {
+        int g_test;
+        }
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert not get_namespaces_from_scopes(code, scopes)
+
+
+@pytest.mark.xfail(reason="Namespace regex is too restrictive.")
+def test_scopes_name_after_declspec():
+    """Should ignore prefixes like `__declspec` that are allowed in a class declaration."""
+    code = dedent("""\
+        class __declspec(dllexport) Test {
+        int m_test;
+        };
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert get_namespaces_from_scopes(code, scopes) == [(33, 47, "Test")]

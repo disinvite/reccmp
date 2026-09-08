@@ -506,47 +506,70 @@ def test_scope_detect_salvage_valid_pairing():
     assert scopes == {0: 18}
 
 
-def scopes_of(code: str) -> list[tuple[str, str]]:
-    """Report each named scope from get_namespaces_from_scopes() as the name paired
-    with the text it encloses, so the assertions do not depend on offsets."""
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    return [
-        (name, code[start : stop + 1])
-        for start, stop, name in get_namespaces_from_scopes(code, scopes)
-    ]
-
-
 def test_scopes_namespace():
-    code = "namespace Test {\nint g_test;\n}\n"
-    assert scopes_of(code) == [("Test", "{\nint g_test;\n}")]
+    code = dedent("""\
+        namespace Test {
+        int g_test;
+        }
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert get_namespaces_from_scopes(code, scopes) == [(15, 29, "Test")]
 
 
 def test_scopes_class_with_base():
-    """The base class list is part of the declaration, so the scope must still
-    begin at the curly bracket that follows it."""
-    code = "class Test : public Other {\nint m_test;\n};\n"
-    assert scopes_of(code) == [("Test", "{\nint m_test;\n}")]
+    """The base class list is part of the declaration, so the scope still
+    begins at the curly bracket that follows it."""
+    code = dedent("""\
+        class Test : public Other {
+        int m_test;
+        };
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert get_namespaces_from_scopes(code, scopes) == [(26, 40, "Test")]
 
 
 def test_scopes_forward_reference():
     """A declaration with no body does not open a scope."""
-    assert not scopes_of("class Test;\nstruct Other;\n")
+    code = dedent("""\
+        class Test;
+        struct Other;
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert not get_namespaces_from_scopes(code, scopes)
 
 
 def test_scopes_nested():
     """Scopes are reported in source order, so the enclosing scope comes first."""
-    code = "namespace Test {\nstruct Inner {\nint m_test;\n};\n}\n"
-    assert scopes_of(code) == [
-        ("Test", "{\nstruct Inner {\nint m_test;\n};\n}"),
-        ("Inner", "{\nint m_test;\n}"),
+    code = dedent("""\
+        namespace Test {
+        struct Inner {
+        int m_test;
+        };
+        }
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert get_namespaces_from_scopes(code, scopes) == [
+        (15, 47, "Test"),
+        (30, 44, "Inner"),
     ]
 
 
 def test_scopes_unmatched_brackets():
     """A class whose curly bracket could not be paired has no scope."""
-    assert not scopes_of("class Test {\n")
+    code = dedent("""\
+        class Test {
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert not get_namespaces_from_scopes(code, scopes)
 
 
 def test_scopes_ignore_control_flow():
     """Only a class, struct, or namespace opens a named scope."""
-    assert not scopes_of("if (test) {\n}\nfor (;;) {\n}\n")
+    code = dedent("""\
+        if (test) {
+        }
+        for (;;) {
+        }
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert not get_namespaces_from_scopes(code, scopes)

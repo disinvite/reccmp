@@ -332,8 +332,8 @@ def scope_detect_churn(
 
     out_ranges = []
 
-    reduced_this_step = False
     for _ in range(10):
+        reduced_this_step = False
         # Trivial match of curly brackets that are next to each other.
         new_ranges, new_remain = reduce_scopes(remain, enable_ppc=True)
         if new_ranges:

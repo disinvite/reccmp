@@ -17,26 +17,41 @@ def tokens_only(tokens: Iterable[CodeToken]) -> list[TokenType]:
     return [token for _, __, token in tokens]
 
 
-def test_strings():
+STRING_VARIANTS = [
+    pytest.param('"test"', id="regular string"),
+    pytest.param('L"test"', id="wide string"),
+    pytest.param('"\\""', id="escaped quote"),
+    pytest.param('"\\\\"', id="escaped backslash"),
+    pytest.param('"\'"', id="single quote inside"),
+    pytest.param('"two\\\nlines"', id="string continuation"),
+]
+
+
+@pytest.mark.parametrize("code", STRING_VARIANTS)
+def test_string(code: str):
     """Make sure we correctly parse escaped characters."""
-    assert list(tokenize_code_file('"test"')) == [(0, 6, TokenType.STRING)]
-    assert list(tokenize_code_file('"\\""')) == [(0, 4, TokenType.STRING)]
-    assert list(tokenize_code_file('"\\\\"')) == [(0, 4, TokenType.STRING)]
-    assert list(tokenize_code_file('"\'"')) == [(0, 3, TokenType.STRING)]
+    assert list(tokenize_code_file(code)) == [(0, len(code), TokenType.STRING)]
 
 
-def test_chars():
+CHAR_VARIANTS = [
+    pytest.param("'x'", id="regular char"),
+    pytest.param("L'x'", id="wide char"),
+    pytest.param("'\\''", id="escaped quote"),
+    pytest.param("'\\\\'", id="escaped backslash"),
+    pytest.param("'\"'", id="double quote inside"),
+]
+
+
+@pytest.mark.parametrize("code", CHAR_VARIANTS)
+def test_char(code: str):
     """Make sure we correctly parse escaped characters.
     Note: we don't care if the char is more than 1 character."""
-    assert list(tokenize_code_file("'x'")) == [(0, 3, TokenType.CHAR)]
-    assert list(tokenize_code_file("'\\''")) == [(0, 4, TokenType.CHAR)]
-    assert list(tokenize_code_file("'\\\\'")) == [(0, 4, TokenType.CHAR)]
-    assert list(tokenize_code_file("'\"'")) == [(0, 3, TokenType.CHAR)]
+    assert list(tokenize_code_file(code)) == [(0, len(code), TokenType.CHAR)]
 
 
 @pytest.mark.xfail(reason="Edge case")
 def test_raw_string():
-    """Quotes and brackets inside a raw string literal do not end the token."""
+    """Should parse the start and end marks of a C++11 raw string."""
     assert tokenize_code_file('R"(unmatched " and })"') == [(0, 22, TokenType.STRING)]
 
 
@@ -44,10 +59,29 @@ def test_eof():
     """Should emit unfinished tokens as CODE."""
     assert list(tokenize_code_file('"test')) == [(0, 5, TokenType.CODE)]
     assert list(tokenize_code_file("'x")) == [(0, 2, TokenType.CODE)]
+    assert list(tokenize_code_file('L"test')) == [(0, 6, TokenType.CODE)]
     assert list(tokenize_code_file("/* test")) == [(0, 7, TokenType.CODE)]
 
     # This one can be finished
     assert list(tokenize_code_file("// test")) == [(0, 7, TokenType.LINE_COMMENT)]
+
+
+TRAILING_WHITESPACE_VARIANTS = [
+    pytest.param("x;\n", id="newline"),
+    pytest.param("x;   ", id="spaces"),
+    pytest.param("x;\n\n  \n", id="blank lines"),
+]
+
+
+@pytest.mark.xfail(reason="Not critical to parsing")
+@pytest.mark.parametrize("code", TRAILING_WHITESPACE_VARIANTS)
+def test_trailing_whitespace_at_eof(code: str):
+    """Should not emit a CODE token for whitespace at the end of the file.
+    Tokens inside the file are stripped this way, but the last one is not."""
+    assert tokenize_code_file(code) == [
+        (0, 1, TokenType.CODE),
+        (1, 2, TokenType.SEMICOLON),
+    ]
 
 
 def test_string_continuation():
@@ -75,11 +109,113 @@ def test_line_comment_continuation():
     ]
 
 
-def test_ppc_tokens_consume_other_types():
-    """Should not emit curly brackets if they are part of a PPC statement."""
-    assert list(tokenize_code_file("#define XYZ = (while(0) { };)")) == [
-        (0, 29, TokenType.PPC_OTHER)
+BLOCK_COMMENT_VARIANTS = [
+    pytest.param("/* test */", id="base case"),
+    pytest.param("/**/", id="empty comment"),
+    pytest.param("/***/", id="three stars"),
+    pytest.param("/* multi \n line \n\n */", id="multi-line block"),
+    pytest.param("/* // test */", id="line comment inside"),
+    pytest.param('/* "unmatched" */', id="string inside"),
+]
+
+
+@pytest.mark.parametrize("code", BLOCK_COMMENT_VARIANTS)
+def test_block_comment(code: str):
+    """Should consume everything between the comment delimiters."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.BLOCK_COMMENT)]
+
+
+def test_adjacent_block_comments():
+    """Should not combine two block comments into a single token."""
+    assert tokenize_code_file("/* a */ /* b */") == [
+        (0, 7, TokenType.BLOCK_COMMENT),
+        (8, 15, TokenType.BLOCK_COMMENT),
     ]
+
+
+PPC_IF_VARIANTS = [
+    pytest.param("#if A", id="base case"),
+    pytest.param("#ifdef A", id="ifdef"),
+    pytest.param("#ifndef A", id="ifndef"),
+    pytest.param("#  if A", id="space after hash"),
+    pytest.param('#if A == "x"', id="string"),
+    pytest.param("#if A == 'x'", id="char"),
+    pytest.param("#if defined(A) && \\\n    defined(B)", id="line continuation"),
+]
+
+
+@pytest.mark.parametrize("code", PPC_IF_VARIANTS)
+def test_ppc_if(code: str):
+    """Should begin a PPC block on any spelling of the #if directive."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.PPC_IF)]
+
+
+PPC_ELIF_VARIANTS = [
+    pytest.param("#elif A", id="base case"),
+    pytest.param("# elif A", id="space after hash"),
+    pytest.param("#elif defined(A) || \\\n    defined(B)", id="line continuation"),
+]
+
+
+@pytest.mark.parametrize("code", PPC_ELIF_VARIANTS)
+def test_ppc_elif(code: str):
+    """Should begin a new branch of the PPC block."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.PPC_ELIF)]
+
+
+PPC_ELSE_VARIANTS = [
+    pytest.param("#else", id="base case"),
+    pytest.param("# else", id="space after hash"),
+    pytest.param("#else \\\nint x;", id="line continuation"),
+]
+
+
+@pytest.mark.parametrize("code", PPC_ELSE_VARIANTS)
+def test_ppc_else(code: str):
+    """Should begin the final branch of the PPC block."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.PPC_ELSE)]
+
+
+PPC_END_VARIANTS = [
+    pytest.param("#endif", id="base case"),
+    pytest.param("# endif", id="space after hash"),
+    pytest.param("#endif \\\nint x;", id="line continuation"),
+]
+
+
+@pytest.mark.parametrize("code", PPC_END_VARIANTS)
+def test_ppc_end(code: str):
+    """Should end the PPC block."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.PPC_END)]
+
+
+PPC_OTHER_VARIANTS = [
+    pytest.param("#define A 1", id="define"),
+    pytest.param('#include "a.h"', id="include"),
+    pytest.param("#include <a.h>", id="include with angle brackets"),
+    pytest.param("#pragma once", id="pragma"),
+    pytest.param("#undef A", id="undef"),
+    pytest.param("#error nope", id="error"),
+    pytest.param("#define TEST {", id="curly bracket"),
+    pytest.param("#define XYZ = (while(0) { };)", id="statement"),
+    pytest.param('#define A "test"', id="string"),
+    pytest.param("#define A 'x'", id="char"),
+    pytest.param('#define A "{"', id="curly bracket inside string"),
+    pytest.param("#define A '{'", id="curly bracket inside char"),
+    pytest.param('#define A "//"', id="line comment inside string"),
+    pytest.param("#error don't do this", id="unmatched single quote"),
+    pytest.param('#error "nope', id="unmatched double quote"),
+    pytest.param("#define A(x) \\\n    do { x; } while (0)", id="line continuation"),
+]
+
+
+@pytest.mark.parametrize("code", PPC_OTHER_VARIANTS)
+def test_ppc_other(code: str):
+    """Should consume the entire directive, including any tokens we would
+    otherwise report. The main concern is to hide curly brackets inside a
+    #define line. We do not distinguish between directives that cannot
+    change the scope."""
+    assert tokenize_code_file(code) == [(0, len(code), TokenType.PPC_OTHER)]
 
 
 def test_digit_separator():
@@ -113,14 +249,6 @@ def test_char_preceded_by_hex_letter():
         (4, 7, TokenType.CHAR),
         (7, 14, TokenType.CODE),
         (14, 15, TokenType.SEMICOLON),
-    ]
-
-
-def test_hide_all_tokens_for_ppc():
-    """Should include all tokens that are part of a PPC expression.
-    The main concern is to hide curly brackets inside a #define line."""
-    assert list(tokenize_code_file("#define TEST {")) == [
-        (0, 14, TokenType.PPC_OTHER),
     ]
 
 
@@ -181,6 +309,11 @@ def test_line_col_conversion():
     assert get_line_column_pos(newlines, 15) == (1, 16)
     assert get_line_column_pos(newlines, 16) == (2, 1)
     assert get_line_column_pos(newlines, 17) == (3, 1)
+    assert get_line_column_pos(newlines, 23) == (3, 7)
+    assert get_line_column_pos(newlines, 24) == (3, 8)
+
+    # One past the end of the text.
+    assert get_line_column_pos(newlines, 25) == (4, 1)
 
 
 def test_scope_detect_empty():

@@ -6,10 +6,11 @@ from reccmp.analysis.crt_startup import (
     read_crt_functions,
     fingerprint_crt_functions,
     CrtStartupArray,
+    FunctionSet,
     create_crt_matches,
     UsedAddressCollector,
     UsedHow,
-    unwrap_jump,
+    read_function_set,
 )
 from reccmp.compare.db import EntityDb
 from reccmp.formats import PEImage
@@ -155,10 +156,17 @@ def test_xca_fingerprints_empty(binfile: PEImage):
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
 
-    assert set(array.functions.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
-    assert all(not v for v in array.functions.values())
+    assert set(array.fingerprints.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
+    assert all(not v for v in array.fingerprints.values())
 
-    assert tuple(array.thunks.items()) == XCA_THUNK_MAPPING
+
+def test_xca_functions(binfile: PEImage):
+    """Every entry in this array is a JMP thunk to a constructor.
+    None of them set an atexit handler."""
+    array = read_crt_functions(binfile, XCA_XCZ_RANGE)
+    assert array.functions == [
+        FunctionSet(addr, thunk=thunk) for addr, thunk in XCA_THUNK_MAPPING
+    ]
 
 
 def test_xca_fingerprints_not_variable(binfile: PEImage):
@@ -171,7 +179,7 @@ def test_xca_fingerprints_not_variable(binfile: PEImage):
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert not array.functions[0x1001A6D0]
+    assert not array.fingerprints[0x1001A6D0]
 
 
 def test_xca_fingerprints_matched_variable(binfile: PEImage):
@@ -186,7 +194,7 @@ def test_xca_fingerprints_matched_variable(binfile: PEImage):
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert array.functions[0x1001A6D0] == ((0x10102B28, UsedHow.READ),)
+    assert array.fingerprints[0x1001A6D0] == ((0x10102B28, UsedHow.READ),)
 
 
 def test_xca_fingerprints_avoid_crash(binfile: PEImage):
@@ -201,55 +209,80 @@ def test_xca_fingerprints_avoid_crash(binfile: PEImage):
 
 def test_create_match_baseline():
     """No errors or exceptions for empty CRT arrays."""
-    x_array = CrtStartupArray(functions={}, thunks={})
-    y_array = CrtStartupArray(functions={}, thunks={})
+    x_array = CrtStartupArray()
+    y_array = CrtStartupArray()
     assert not create_crt_matches(x_array, y_array)
 
 
 def test_create_match_single():
     """Should create match for unique fingerprint."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(functions={100: (write_sample,)}, thunks={})
-    y_array = CrtStartupArray(functions={200: (write_sample,)}, thunks={})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100)], fingerprints={100: (write_sample,)}
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200)], fingerprints={200: (write_sample,)}
+    )
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_single_call():
     """Should create match for a unique function call."""
     call_sample = (1234, UsedHow.CALL)
-    x_array = CrtStartupArray(functions={100: (call_sample,)}, thunks={})
-    y_array = CrtStartupArray(functions={200: (call_sample,)}, thunks={})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100)], fingerprints={100: (call_sample,)}
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200)], fingerprints={200: (call_sample,)}
+    )
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_call_is_not_a_read():
     """Should not match a function that calls the address with one that
     only reads it. e.g. passing the function pointer as an argument."""
-    x_array = CrtStartupArray(functions={100: ((1234, UsedHow.READ),)}, thunks={})
-    y_array = CrtStartupArray(functions={200: ((1234, UsedHow.CALL),)}, thunks={})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100)],
+        fingerprints={100: ((1234, UsedHow.READ),)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200)],
+        fingerprints={200: ((1234, UsedHow.CALL),)},
+    )
     assert not create_crt_matches(x_array, y_array)
 
 
 def test_create_match_single_with_thunks_one_sided():
     """Should not add thunk match unless it exists in both arrays."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(functions={100: (write_sample,)}, thunks={100: 500})
-    y_array = CrtStartupArray(functions={200: (write_sample,)}, thunks={})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, thunk=500)],
+        fingerprints={100: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200)], fingerprints={200: (write_sample,)}
+    )
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_single_with_thunks_two_sided():
     """Should match function and thunk."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(functions={100: (write_sample,)}, thunks={100: 500})
-    y_array = CrtStartupArray(functions={200: (write_sample,)}, thunks={200: 600})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, thunk=500)],
+        fingerprints={100: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, thunk=600)],
+        fingerprints={200: (write_sample,)},
+    )
     assert create_crt_matches(x_array, y_array) == [(100, 200), (500, 600)]
 
 
 def test_create_match_blank_fingerprint():
     """Should not match functions if their fingerprint has no addresses."""
-    x_array = CrtStartupArray(functions={100: ()}, thunks={})
-    y_array = CrtStartupArray(functions={200: ()}, thunks={})
+    x_array = CrtStartupArray(functions=[FunctionSet(100)])
+    y_array = CrtStartupArray(functions=[FunctionSet(200)])
     assert not create_crt_matches(x_array, y_array)
 
 
@@ -257,8 +290,14 @@ def test_create_match_blank_fingerprint():
 def test_create_match_non_unique_fingerprint(used_how: UsedHow):
     """Should not match functions if their fingerprint is not unique."""
     sample = (1234, used_how)
-    x_array = CrtStartupArray(functions={100: (sample,), 200: (sample,)}, thunks={})
-    y_array = CrtStartupArray(functions={200: (sample,), 300: (sample,)}, thunks={})
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100), FunctionSet(200)],
+        fingerprints={100: (sample,), 200: (sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200), FunctionSet(300)],
+        fingerprints={200: (sample,), 300: (sample,)},
+    )
     assert not create_crt_matches(x_array, y_array)
 
 
@@ -269,17 +308,110 @@ def test_create_match_with_elimination():
     # `write_sample` can be used to match uniquely on the first pass.
     # `read_sample` will provide a unique match after deleting the functions that contain `write_sample`.
     x_array = CrtStartupArray(
-        functions={100: (read_sample,), 200: (write_sample, read_sample)},
-        thunks={},
+        functions=[FunctionSet(100), FunctionSet(200)],
+        fingerprints={100: (read_sample,), 200: (write_sample, read_sample)},
     )
     y_array = CrtStartupArray(
-        functions={200: (read_sample,), 300: (write_sample, read_sample)},
-        thunks={},
+        functions=[FunctionSet(200), FunctionSet(300)],
+        fingerprints={200: (read_sample,), 300: (write_sample, read_sample)},
     )
     # Must be this order:
     assert create_crt_matches(x_array, y_array) == [
         (200, 300),
         (100, 200),
+    ]
+
+
+def test_create_match_group_by_constructor():
+    """A unique match on the constructor also matches the atexit setter
+    that came from the same array entry."""
+    write_sample = (1234, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, 101)], fingerprints={100: (write_sample,)}
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, 201)], fingerprints={200: (write_sample,)}
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
+
+
+def test_create_match_group_by_atexit_setter():
+    """A unique match on the atexit setter also matches the constructor,
+    which has no fingerprint of its own."""
+    write_sample = (1234, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, 101)], fingerprints={101: (write_sample,)}
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, 201)], fingerprints={201: (write_sample,)}
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
+
+
+def test_create_match_group_shares_fingerprint():
+    """Two functions from the same array entry may use the same address.
+    This is not the ambiguity that blocks a match between two different entries."""
+    write_sample = (1234, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, 101)],
+        fingerprints={100: (write_sample,), 101: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, 201)],
+        fingerprints={200: (write_sample,), 201: (write_sample,)},
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
+
+
+def test_create_match_group_with_thunk():
+    """Should match the thunk once, not once per function in the group."""
+    write_sample = (1234, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, 101, thunk=500)],
+        fingerprints={100: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, 201, thunk=600)],
+        fingerprints={200: (write_sample,)},
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201), (500, 600)]
+
+
+def test_create_match_group_size_mismatch():
+    """Should match only the constructors if the thunk in one binary
+    sets an atexit handler and the other does not."""
+    write_sample = (1234, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100, 101, thunk=500)],
+        fingerprints={100: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(200, thunk=600)],
+        fingerprints={200: (write_sample,)},
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200), (500, 600)]
+
+
+def test_create_match_group_with_elimination():
+    """Can create a unique match for a constructor by eliminating the group
+    of another constructor whose atexit setter matched first."""
+    write_sample = (1234, UsedHow.WRITE)
+    read_sample = (5000, UsedHow.READ)
+    # Both constructors use `read_sample`, so neither can match on the first pass.
+    # `write_sample` matches the atexit setters and takes their constructors with them.
+    x_array = CrtStartupArray(
+        functions=[FunctionSet(100), FunctionSet(200, 201)],
+        fingerprints={100: (read_sample,), 200: (read_sample,), 201: (write_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet(300), FunctionSet(400, 401)],
+        fingerprints={300: (read_sample,), 400: (read_sample,), 401: (write_sample,)},
+    )
+    # Must be this order:
+    assert create_crt_matches(x_array, y_array) == [
+        (200, 400),
+        (201, 401),
+        (100, 300),
     ]
 
 
@@ -376,37 +508,61 @@ def test_collector_calls_and_jumps():
 
 
 CRT_CALL_JMP_PATTERNS = (
-    b"\xe8\x0b\x00\x00\x00\xe9\x16\x00\x00\x00",  # call 0x10, jmp 0x20
-    b"\xe8\x0b\x00\x00\x00\xe9\x36\x00\x00\x00",  # call 0x10, jmp 0x40
+    (b"\xe8\x0b\x00\x00\x00\xe9\x16\x00\x00\x00", 0x20),  # call 0x10, jmp 0x20
+    (b"\xe8\x0b\x00\x00\x00\xe9\x36\x00\x00\x00", 0x40),  # call 0x10, jmp 0x40
 )
 
 
-@pytest.mark.parametrize("code", CRT_CALL_JMP_PATTERNS)
-def test_unwrap_jump_call_and_jmp(code: bytes):
-    """Follows the two-instruction thunk to the function at the next 16-byte boundary.
-    The called function can be larger than 16 bytes, so the jmp displacement varies."""
+@pytest.mark.parametrize("code, atexit_setter", CRT_CALL_JMP_PATTERNS)
+def test_read_function_set_call_and_jmp(code: bytes, atexit_setter: int):
+    """Follows the two-instruction thunk to the function at the next 16-byte boundary
+    and to the atexit setter. The called function can be larger than 16 bytes,
+    so the jmp displacement varies."""
     memory = bytearray(128)
     memory[0 : len(code)] = code
     memory[0x10] = 0xC3  # RET
 
     binfile = RawImage.from_memory(bytes(memory))
-    assert unwrap_jump(binfile, 0) == (True, 0x10)
-    assert unwrap_jump(binfile, 0x10) == (False, 0x10)
+    assert read_function_set(binfile, 0) == FunctionSet(0x10, atexit_setter, thunk=0)
+    assert read_function_set(binfile, 0x10) == FunctionSet(0x10)
 
 
-def test_unwrap_jump_jmp_only():
+def test_read_function_set_call_next_function_and_jmp():
+    """Follows the two-instruction thunk when the called function begins
+    immediately after the thunk instead of at the next 16-byte boundary."""
+    memory = bytearray(128)
+    memory[0:10] = b"\xe8\x05\x00\x00\x00\xe9\x16\x00\x00\x00"  # call 0xa, jmp 0x20
+    memory[0xA] = 0xC3  # RET
+
+    binfile = RawImage.from_memory(bytes(memory))
+    assert read_function_set(binfile, 0) == FunctionSet(0xA, 0x20, thunk=0)
+
+
+def test_read_function_set_jmp_only():
     """Follows the single-instruction thunk to the function at the next 16-byte boundary."""
     memory = bytearray(128)
     memory[0:5] = b"\xe9\x0b\x00\x00\x00"  # jmp 0x10
     memory[0x10] = 0xC3  # RET
 
     binfile = RawImage.from_memory(bytes(memory))
-    assert unwrap_jump(binfile, 0) == (True, 0x10)
-    assert unwrap_jump(binfile, 0x10) == (False, 0x10)
+    assert read_function_set(binfile, 0) == FunctionSet(0x10, thunk=0)
+    assert read_function_set(binfile, 0x10) == FunctionSet(0x10)
+
+
+def test_read_function_set_jmp_to_next_function():
+    """Follows the single-instruction thunk when the function begins
+    immediately after the thunk instead of at the next 16-byte boundary."""
+    memory = bytearray(128)
+    memory[0:5] = b"\xe9\x00\x00\x00\x00"  # jmp 0x5
+    memory[0x5] = 0xC3  # RET
+
+    binfile = RawImage.from_memory(bytes(memory))
+    assert read_function_set(binfile, 0) == FunctionSet(0x5, thunk=0)
 
 
 CRT_NOT_THUNK_PATTERNS = (
     b"\xe8\x0b\x00\x00\x00\xc3",  # call +0x10 with no jmp to follow it
+    b"\xe8\x05\x00\x00\x00\xc3",  # call +0xa with no jmp to follow it
     b"\xe8\x3b\x00\x00\x00\xc3",  # call +0x40
     b"\xe9\x3b\x00\x00\x00",  # jmp +0x40
     b"\xe9\xdb\xff\xff\xff",  # jmp -0x20
@@ -414,11 +570,22 @@ CRT_NOT_THUNK_PATTERNS = (
 
 
 @pytest.mark.parametrize("code", CRT_NOT_THUNK_PATTERNS)
-def test_unwrap_jump_not_a_thunk(code: bytes):
-    """The function may begin with a call or jmp. It is not a thunk
-    unless the displacements match a thunk pattern exactly."""
+def test_read_function_set_not_a_thunk(code: bytes):
+    """The function may begin with a call or jmp. It is not a thunk unless the
+    instructions match a thunk pattern exactly. Only the displacement of the jmp
+    to the atexit setter is allowed to vary."""
     memory = bytearray(128)
     memory[0x40 : 0x40 + len(code)] = code
 
     binfile = RawImage.from_memory(bytes(memory))
-    assert unwrap_jump(binfile, 0x40) == (False, 0x40)
+    assert read_function_set(binfile, 0x40) == FunctionSet(0x40)
+
+
+def test_read_function_set_atexit_setter_must_be_ahead():
+    """The jmp to the atexit setter never goes backwards."""
+    memory = bytearray(128)
+    # call 0x50, jmp 0x40
+    memory[0x40:0x4A] = b"\xe8\x0b\x00\x00\x00\xe9\xf6\xff\xff\xff"
+
+    binfile = RawImage.from_memory(bytes(memory))
+    assert read_function_set(binfile, 0x40) == FunctionSet(0x40)

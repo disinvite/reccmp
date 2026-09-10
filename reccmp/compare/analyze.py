@@ -53,13 +53,15 @@ def create_crt_functions(db: EntityDb, image_id: ImageId, binfile: PEImage):
             # We could use more specific names when we have more confidence in the format.
             # e.g. "atexit_setter"
             base_name = get_crt_function_name(array_type)
-            for addr in [*array.functions, *array.thunks.values()]:
-                batch.set(
-                    image_id,
-                    addr,
-                    type=EntityType.FUNCTION,
-                    name=base_name,
-                )
+            for group in array.functions:
+                for addr in group:
+                    if addr is not None:
+                        batch.set(
+                            image_id,
+                            addr,
+                            type=EntityType.FUNCTION,
+                            name=base_name,
+                        )
 
 
 def create_analysis_strings(

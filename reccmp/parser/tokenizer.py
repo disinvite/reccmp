@@ -344,8 +344,10 @@ def resolve_scopes(
             reduced_this_step = True
 
         # If all curly brackets have been matched, we are done.
-        # There may still be PPC tokens in the list, but none can block a bracket match.
+        # There may still be PPC tokens in the list, but none can block a bracket match,
+        # so they are not returned.
         if all_curly_paired(new_remain):
+            remain = []
             break
 
         # Can we simply enable all PPC regions and match remaining brackets?

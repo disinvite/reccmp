@@ -41,7 +41,7 @@ CHAR_VARIANTS = [
 
 @pytest.mark.parametrize("code", CHAR_VARIANTS)
 def test_char(code: str):
-    """Should parse a CHAR token and ignore escaped sinlge quotes.
+    """Should parse a CHAR token and ignore escaped single quotes.
     Note: we don't care if the char is more than 1 character."""
     assert list(tokenize_code_file(code)) == [(0, len(code), TokenType.CHAR)]
 

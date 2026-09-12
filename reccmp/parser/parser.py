@@ -587,7 +587,7 @@ class DecompParser:
         # up to date while reading.
         tokens = tokenize_code_file(text)
         scopes, _ = resolve_scopes(tokens)
-        self.namespaces = get_namespaces_from_scopes(text, scopes)
+        self.namespaces = get_namespaces_from_scopes(text, tokens, scopes)
 
         line_starts = [pos + 1 for pos in get_newlines_from_text(text)]
         for start, stop in pairwise([*line_starts, len(text)]):

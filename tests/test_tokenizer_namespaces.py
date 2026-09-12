@@ -22,8 +22,11 @@ def test_namespace_prefix(prefix: str):
     start_pos = code.index("{")
     end_pos = code.index("}")
 
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert get_namespaces_from_scopes(code, scopes) == [(start_pos, end_pos, "Test")]
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [
+        (start_pos, end_pos, "Test")
+    ]
 
 
 def test_class_with_base():
@@ -33,8 +36,9 @@ def test_class_with_base():
         int m_test;
         };
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert get_namespaces_from_scopes(code, scopes) == [(26, 40, "Test")]
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(26, 40, "Test")]
 
 
 def test_forward_reference():
@@ -43,8 +47,9 @@ def test_forward_reference():
         class Test;
         struct Other;
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert not get_namespaces_from_scopes(code, scopes)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
 
 
 def test_nested_scopes():
@@ -57,8 +62,9 @@ def test_nested_scopes():
         };
         }
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert get_namespaces_from_scopes(code, scopes) == [
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [
         (15, 47, "Test"),
         (30, 44, "Inner"),
     ]
@@ -69,8 +75,9 @@ def test_unmatched_brackets():
     code = dedent("""\
         class Test {
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert not get_namespaces_from_scopes(code, scopes)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
 
 
 def test_ignore_control_flow():
@@ -81,11 +88,11 @@ def test_ignore_control_flow():
         for (;;) {
         }
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert not get_namespaces_from_scopes(code, scopes)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
 
 
-@pytest.mark.xfail(reason="Namespace regex is too restrictive.")
 def test_no_space_before_curly():
     """Should detect the scope name next to the curly bracket."""
     code = dedent("""\
@@ -93,11 +100,11 @@ def test_no_space_before_curly():
         int g_test;
         }
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert get_namespaces_from_scopes(code, scopes) == [(14, 28, "Test")]
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(14, 28, "Test")]
 
 
-@pytest.mark.xfail(reason="Namespace regex does not ignore commented tokens.")
 def test_keyword_in_comment():
     """Should ignore a comment that resembles a class declaration."""
     code = dedent("""\
@@ -107,11 +114,73 @@ def test_keyword_in_comment():
         int g_test;
         }
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert not get_namespaces_from_scopes(code, scopes)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
 
 
-@pytest.mark.xfail(reason="Namespace regex is too restrictive.")
+def test_declaration_after_comment_keyword():
+    """Should use the declaration nearest to the scope, not the one in the comment."""
+    code = dedent("""\
+        /* class Renderer */ class Test {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(32, 46, "Test")]
+
+
+def test_comment_inside_declaration():
+    """Should read the name from the declaration and not from a comment
+    between the name and the curly bracket."""
+    code = dedent("""\
+        class Test /* : public Other */ {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(32, 46, "Test")]
+
+
+def test_template_class():
+    """Should report the scope once with the name nearest to the curly bracket
+    when the template parameters use the `class` keyword."""
+    code = dedent("""\
+        template <class T> class Test {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(30, 44, "Test")]
+
+
+def test_keyword_inside_word():
+    """Should not detect a scope where the keyword is the tail of a longer word."""
+    code = dedent("""\
+        subclass Test {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
+
+
+def test_anonymous_struct():
+    """Should not declare a namespace for a struct with no name."""
+    code = dedent("""\
+        struct {
+        int x;
+        } g_anon;
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
+
+
 def test_class_name_after_declspec():
     """Should ignore prefixes like `__declspec` that are allowed in a class declaration."""
     code = dedent("""\
@@ -119,5 +188,6 @@ def test_class_name_after_declspec():
         int m_test;
         };
     """)
-    scopes, _ = resolve_scopes(tokenize_code_file(code))
-    assert get_namespaces_from_scopes(code, scopes) == [(33, 47, "Test")]
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(33, 47, "Test")]

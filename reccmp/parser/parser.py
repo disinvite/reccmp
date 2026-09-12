@@ -1,5 +1,6 @@
 # C++ file parser
 
+import io
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import PurePath
@@ -577,10 +578,15 @@ class DecompParser:
             if vtable_class is not None:
                 self._vtable_done(class_name=vtable_class)
 
-    def read(self, text: str):
+    def read(self, raw_text: str):
+        # The tokenizer expects that newlines are a single char: `\n`.
+        # Make sure that's what we have.
+        text = io.StringIO(raw_text, newline=None).read()
+
         # Find the boundaries of all scopes now so we do not need to keep the stack
         # up to date while reading.
-        scopes, _ = resolve_scopes(tokenize_code_file(text))
+        tokens = tokenize_code_file(text)
+        scopes, _ = resolve_scopes(tokens)
         self.namespaces = get_namespaces_from_scopes(text, scopes)
 
         line_starts = [pos + 1 for pos in get_newlines_from_text(text)]

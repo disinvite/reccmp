@@ -21,7 +21,6 @@ from reccmp.parser.marker import MarkerType
 from .parser_helpers import (
     AnnotationType,
     VALID_ANNOTATIONS,
-    xfail_param,
     completion_token,
     symbol_tuples,
 )
@@ -107,7 +106,7 @@ def test_function_end_curly_in_multiline_string(parser: DecompParser):
             hello(msg);
         }
         """))
-    
+
     # Captured the function range accurately.
     (function,) = parser.functions
     assert (function.line_number, function.end_line) == (2, 7)
@@ -125,7 +124,7 @@ def test_string_completion_token_line_continuation(parser: DecompParser):
         const char* g_msg = "Hello \\
         World";
         """))
-    
+
     # Captured the correct string text.
     (string,) = parser.strings
     assert string.name == "Hello World"
@@ -142,7 +141,7 @@ def test_variable_on_multiple_lines(parser: DecompParser):
         x
         ;
         """))
-    
+
     # Captured the marker.
     (symbol,) = parser.iter_symbols()
     assert symbol.type == MarkerType.GLOBAL
@@ -169,7 +168,7 @@ def test_splayed_line_completion_tokens(parser: DecompParser, marker_type: Marke
         // {marker_type.name}: TEST 0x1234
         {token}
         """))
-    
+
     # Captured the marker.
     assert symbol_tuples(parser) == [
         (marker_type, "TEST", 0x1234),
@@ -182,7 +181,7 @@ def test_splayed_line_completion_tokens(parser: DecompParser, marker_type: Marke
 def test_struct_keyword_in_variable_type_is_not_scope(parser: DecompParser):
     """Should not add a struct's name to the variable's qualified name
     if the `struct` keyword is part of the variable type.(GH #434)"""
-    code = f"""\
+    code = """\
         // GLOBAL: TEST 0x1234
         struct Hello g_test = {{
           1,

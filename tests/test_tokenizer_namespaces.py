@@ -70,6 +70,24 @@ def test_nested_scopes():
     ]
 
 
+def test_access_specifier_before_declaration():
+    """Should read the name after the keyword and not the access specifier
+    on the same line."""
+    code = dedent("""\
+        class Test {
+        public: struct Inner {
+        int m_test;
+        };
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [
+        (11, 51, "Test"),
+        (34, 48, "Inner"),
+    ]
+
+
 def test_unmatched_brackets():
     """Should not declare a scope for an unpaired curly bracket."""
     code = dedent("""\

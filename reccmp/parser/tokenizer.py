@@ -25,7 +25,7 @@ class TokenType(enum.IntEnum):
 
 r_newSplitter = re.compile(
     r"""
-[{}=;]|
+\{|\}|=|;|
 //[^\n]*|
 /\*.*?\*/|
 L\"[^\"\n\\]*(?:\\.[^\"\n\\]*)*[\"\n]|

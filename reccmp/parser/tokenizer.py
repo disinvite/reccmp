@@ -37,9 +37,6 @@ L\'[^'\n\\]*(?:\\.[^'\n\\]*)*['\n]|
     flags=re.X | re.DOTALL,
 )
 
-r_firstChar = re.compile(r"\S")
-
-
 CodeToken = tuple[int, int, TokenType]
 
 
@@ -104,9 +101,12 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
 
             if start < pos:
                 # Skip if this is entirely whitespace
-                strip_match = r_firstChar.search(text, start, pos)
-                if strip_match:
-                    tokens.append((strip_match.start(), pos, TokenType.CODE))
+                code = text[start:pos].lstrip()
+                if code:
+                    code_start = pos - len(code)
+                    tokens.append(
+                        (code_start, code_start + len(code.rstrip()), TokenType.CODE)
+                    )
 
             tokens.append((pos, stop, token_type))
             start = stop
@@ -115,7 +115,10 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
             break
 
     if start < len(text):
-        tokens.append((start, len(text), TokenType.CODE))
+        code = text[start:].lstrip()
+        if code:
+            code_start = len(text) - len(code)
+            tokens.append((code_start, code_start + len(code.rstrip()), TokenType.CODE))
 
     return tokens
 

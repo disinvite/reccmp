@@ -41,11 +41,9 @@ TRAILING_WHITESPACE_VARIANTS = [
 ]
 
 
-@pytest.mark.xfail(reason="Not critical to parsing")
 @pytest.mark.parametrize("code", TRAILING_WHITESPACE_VARIANTS)
 def test_trailing_whitespace_at_eof(code: str):
-    """Should not emit a CODE token for whitespace at the end of the file.
-    Other CODE tokens have (some) whitespace removed, but not this one."""
+    """Should not emit a CODE token for whitespace at the end of the file."""
     assert tokenize_code_file(code) == [
         (0, 1, TokenType.CODE),
         (1, 2, TokenType.SEMICOLON),
@@ -62,11 +60,11 @@ def test_digit_separator():
 def test_digit_separator_naive_skip():
     """Should not drop CODE tokens when a digit separator is detected."""
     assert tokenize_code_file("int x = 1'000; int y = 2'000;") == [
-        (0, 6, TokenType.CODE),
+        (0, 5, TokenType.CODE),
         (6, 7, TokenType.EQUAL),
         (8, 13, TokenType.CODE),
         (13, 14, TokenType.SEMICOLON),
-        (15, 21, TokenType.CODE),
+        (15, 20, TokenType.CODE),
         (21, 22, TokenType.EQUAL),
         (23, 28, TokenType.CODE),
         (28, 29, TokenType.SEMICOLON),

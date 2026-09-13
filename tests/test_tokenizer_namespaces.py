@@ -93,6 +93,19 @@ def test_ignore_control_flow():
     assert not get_namespaces_from_scopes(code, tokens, scopes)
 
 
+def test_elaborated_type_in_function_argument():
+    """Should not define a namespace for a function body when an argument
+    uses the `struct` keyword."""
+    code = dedent("""\
+        void Test(struct Other* p) {
+        int m_test;
+        }
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert not get_namespaces_from_scopes(code, tokens, scopes)
+
+
 def test_no_space_before_curly():
     """Should detect the scope name next to the curly bracket."""
     code = dedent("""\
@@ -131,6 +144,24 @@ def test_declaration_after_comment_keyword():
     assert get_namespaces_from_scopes(code, tokens, scopes) == [(32, 46, "Test")]
 
 
+def test_base_class_declaration_splayed():
+    """Should properly distinguish the class name from its parent classes
+    when each component of the declaration is on its own line."""
+    code = dedent("""\
+        class
+        Test
+        :
+        public
+        Other
+        {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(26, 40, "Test")]
+
+
 def test_comment_inside_declaration():
     """Should read the name from the declaration and not from a comment
     between the name and the curly bracket."""
@@ -144,6 +175,31 @@ def test_comment_inside_declaration():
     assert get_namespaces_from_scopes(code, tokens, scopes) == [(32, 46, "Test")]
 
 
+def test_comment_before_base_class():
+    """Should read the class name and not the base class name
+    when a comment separates them."""
+    code = dedent("""\
+        class Test /* comment */ : public Other {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(40, 54, "Test")]
+
+
+def test_interrupted_declaration():
+    """Should ignore the block comment that interrupts the class declaration"""
+    code = dedent("""\
+        class /* ignore */ Test {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(24, 38, "Test")]
+
+
 def test_template_class():
     """Should report the scope once with the name nearest to the curly bracket
     when the template parameters use the `class` keyword."""
@@ -155,6 +211,21 @@ def test_template_class():
     tokens = tokenize_code_file(code)
     scopes, _ = resolve_scopes(tokens)
     assert get_namespaces_from_scopes(code, tokens, scopes) == [(30, 44, "Test")]
+
+
+def test_template_class_comment_before_declaration():
+    """Should report the scope once with the name nearest to the curly bracket
+    when a comment separates the template parameters from the class declaration."""
+    code = dedent("""\
+        template <class T>
+        // Comment
+        class Test {
+        int m_test;
+        };
+    """)
+    tokens = tokenize_code_file(code)
+    scopes, _ = resolve_scopes(tokens)
+    assert get_namespaces_from_scopes(code, tokens, scopes) == [(41, 55, "Test")]
 
 
 def test_keyword_inside_word():

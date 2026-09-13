@@ -2,6 +2,7 @@ import bisect
 import re
 import string
 import enum
+from sys import maxsize as MAX_INT
 
 
 class TokenType(enum.IntEnum):
@@ -39,12 +40,12 @@ L\'[^'\n\\]*(?:\\.[^'\n\\]*)*['\n]|
 r_firstChar = re.compile(r"\S")
 
 
-# Keywords that begin a scope declaration. The name (if any) follows the keyword.
-SCOPE_KEYWORDS = ("struct", "namespace", "class")
-
 # The scope name is the last identifier before the end of the declaration
 # or the start of a base class list.
 r_scopeName = re.compile(r"(?P<name>\w+)\s*(?::(?!:).*)?$", flags=re.DOTALL)
+
+# Matches through the last scope keyword in a code token. The name begins after it.
+r_lastScopeKeyword = re.compile(r".*\b(?:struct|namespace|class)\s", flags=re.DOTALL)
 
 
 CodeToken = tuple[int, int, TokenType]
@@ -144,38 +145,115 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
     return (i, offset - pos)
 
 
-DECLARATION_END_TOKENS = {
-    TokenType.CURLY_OPEN,
-    TokenType.CURLY_CLOSE,
-    TokenType.SEMICOLON,
-    TokenType.EQUAL,
-}
+def get_token_index(tokens: list[CodeToken], pos: int) -> int:
+    """Returns the first index of `tokens` where the token start position is at or before `pos`.
+    Whitespace between tokens may be deleted. If `pos` points to whitespace not contained in a
+    token, we return the index of the previous token."""
+    return bisect.bisect_right(tokens, (pos, MAX_INT)) - 1
 
 
-def find_scope_keywords(text: str) -> list[tuple[int, int]]:
-    """Positions of each `struct`, `namespace`, or `class` keyword in the text,
-    sorted by start position. str.find is much faster than a regex alternation,
-    which has to test every character of the file. There are few enough hits
-    that we can reject the ones that are part of a longer word here."""
+def find_scope_keywords(text: str) -> list[int]:
+    """Returns start positions of the strings "struct", "namespace", and "class" in the code file."""
     hits = []
 
-    for keyword in SCOPE_KEYWORDS:
-        size = len(keyword)
+    scope_keywords = {"struct", "namespace", "class"}
+
+    for keyword in scope_keywords:
         pos = text.find(keyword)
         while pos != -1:
-            stop = pos + size
-            # The chars on either side decide whether this is the keyword:
-            # a space must separate it from the name, and it must not be the
-            # tail of a longer word. (i.e. `subclass`)
-            before = text[pos - 1 : pos]
-            after = text[stop : stop + 1]
-            if after.isspace() and not (before.isalnum() or before == "_"):
-                hits.append((pos, stop))
+            hits.append(pos)
+            pos = text.find(keyword, pos + len(keyword))
 
-            pos = text.find(keyword, stop)
-
-    hits.sort()
     return hits
+
+
+def find_code_keywords(text: str, tokens: list[CodeToken]) -> list[int]:
+    """Returns indices into `tokens` where a CODE token contains "struct", "namespace", or "class"
+    and is the potential start of a named scope declaration."""
+
+    # Use a set because a CODE token could contain the keyword twice.
+    # We will filter these out in a further step.
+    code_keywords = set()
+    for pos in find_scope_keywords(text):
+        # Which token contains this position?
+        index = get_token_index(tokens, pos)
+
+        # CODE tokens only. Reject matches that are inside a comment or string token.
+        if tokens[index][2] == TokenType.CODE:
+            code_keywords.add(index)
+
+    return sorted(code_keywords)
+
+
+def find_declaration_chains(
+    text: str, tokens: list[CodeToken]
+) -> list[tuple[int, int]]:
+    """(first keyword token index, index of the token that ends the declaration)
+    for each declaration that contains a keyword token."""
+    code_keywords = find_code_keywords(text, tokens)
+    n_tokens = len(tokens)
+
+    declaration_end_tokens = {
+        TokenType.CURLY_OPEN,
+        TokenType.CURLY_CLOSE,
+        TokenType.SEMICOLON,
+        TokenType.EQUAL,
+    }
+
+    # The declaration ends at the first curly bracket, semicolon, or equal sign.
+    declarations = []
+    prev_end = -1
+    for index in code_keywords:
+        # A keyword token before the previous end is part of the same declaration.
+        # (i.e. a comment between `template <class T>` and `class Test {`)
+        if index < prev_end:
+            continue
+
+        end = index
+        while end < n_tokens and tokens[end][2] not in declaration_end_tokens:
+            end += 1
+
+        if end == n_tokens:
+            # Every keyword that follows ends here too.
+            break
+
+        declarations.append((index, end))
+        prev_end = end
+
+    return declarations
+
+
+def find_declaration_name(
+    text: str, tokens: list[CodeToken], index: int, end: int
+) -> str | None:
+    """The name after the last scope keyword in the CODE tokens of the declaration."""
+    if end == index + 1:
+        # Only one token: read it in place.
+        code = text
+        code_start, code_stop, _ = tokens[index]
+    else:
+        # Comments and directives are left out, so neither the keyword nor the name
+        # can come from them. Join with a space because a comment can be the only
+        # separator. (i.e. `class/* ignore */Test {`)
+        code = " ".join(
+            text[start:stop]
+            for start, stop, token_type in tokens[index:end]
+            if token_type == TokenType.CODE
+        )
+        code_start, code_stop = 0, len(code)
+
+    # The hit in the keyword token can be part of a longer word (i.e. `subclass`),
+    # so make sure there is a real keyword before reading a name.
+    # CODE tokens do not split on a colon, so the keyword token can begin with an
+    # access specifier. (i.e. `public: struct Inner {`) Start after the keyword.
+    keyword = r_lastScopeKeyword.match(code, code_start, code_stop)
+    if keyword is None:
+        return None
+
+    if match := r_scopeName.search(code, keyword.end(), code_stop):
+        return match.group(1)
+
+    return None
 
 
 def get_namespaces_from_scopes(
@@ -186,51 +264,21 @@ def get_namespaces_from_scopes(
     """Using the known scope enclosures, find which ones are the start of a
     struct, class, or namespace. Return the name and range of positions where each
     named scope is active."""
-    # Keyed on scope start: more than one keyword can point at the same scope.
-    # (e.g. a template) The last one is the nearest to the start of the scope.
-    names: dict[int, tuple[int, int, str]] = {}
-    n_tokens = len(tokens)
-    index = 0
+    declarations = find_declaration_chains(text, tokens)
 
-    for start, keyword_stop in find_scope_keywords(text):
-        # Find the token where the keyword begins. The tokens and the keywords both
-        # move forward, so we never have to search from the start of the list.
-        while index < n_tokens and tokens[index][1] <= start:
-            index += 1
-
-        if index == n_tokens:
-            break
-
-        if tokens[index][2] != TokenType.CODE:
-            # The keyword is inside a comment, string, or preprocessor directive.
-            continue
-
-        # The declaration ends at the first curly bracket, semicolon, or equal sign.
-        end = index
-        while end < n_tokens and tokens[end][2] not in DECLARATION_END_TOKENS:
-            end += 1
-
-        if end == n_tokens:
-            # Every keyword that follows ends here too.
-            break
-
+    names: list[tuple[int, int, str]] = []
+    for index, end in declarations:
         # `scopes` is keyed on the position of a paired curly bracket, and no other
         # token can begin there. A forward reference (i.e. `class Test;`) and an
         # unpaired bracket both miss for the same reason: they are not a scope.
         scope_start = tokens[end][0]
-        scope_stop = scopes.get(scope_start)
-        if scope_stop is None:
+        if scope_start not in scopes:
             continue
 
-        # Search for the name in the code token with the keyword so it cannot come
-        # from a comment or macro that interrupts the declaration.
-        match = r_scopeName.search(text, keyword_stop, tokens[index][1])
-        if match is None:
-            continue
+        if (name := find_declaration_name(text, tokens, index, end)) is not None:
+            names.append((scope_start, scopes[scope_start], name))
 
-        names[scope_start] = (scope_start, scope_stop, match.group(1))
-
-    return list(names.values())
+    return names
 
 
 CURLY_TOKENS = {TokenType.CURLY_OPEN, TokenType.CURLY_CLOSE}

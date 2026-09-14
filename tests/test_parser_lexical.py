@@ -31,7 +31,6 @@ def fixture_parser() -> DecompParser:
     return DecompParser()
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 @pytest.mark.parametrize("marker_type, annotation_type", VALID_ANNOTATIONS)
 def test_marker_inside_block_comment(
     parser: DecompParser, marker_type: MarkerType, annotation_type: AnnotationType
@@ -51,7 +50,6 @@ def test_marker_inside_block_comment(
     assert not parser.alerts
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 @pytest.mark.parametrize("marker_type, annotation_type", VALID_ANNOTATIONS)
 def test_marker_with_code_before_the_comment(
     parser: DecompParser, marker_type: MarkerType, annotation_type: AnnotationType
@@ -70,7 +68,6 @@ def test_marker_with_code_before_the_comment(
     # May want to warn here using a new AlertCode.
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 def test_function_end_curly_in_block_comment(parser: DecompParser):
     """Should ignore commented curly brackets when detecting the end of a function."""
     parser.read(dedent("""\
@@ -92,7 +89,6 @@ def test_function_end_curly_in_block_comment(parser: DecompParser):
     assert not parser.alerts
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 def test_function_end_curly_in_multiline_string(parser: DecompParser):
     """Should ignore curly brackets inside of strings.
     (This and other examples exploit the fact that curly-bracket matching
@@ -176,7 +172,6 @@ SPLAYED_TYPES = [
 ]
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 @pytest.mark.parametrize("marker_type", SPLAYED_TYPES)
 def test_splayed_line_completion_tokens(parser: DecompParser, marker_type: MarkerType):
     """Should match even when each component of the code completion token is on its own line."""

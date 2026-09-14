@@ -15,6 +15,7 @@ import bisect
 import re
 import string
 import enum
+from itertools import pairwise
 from sys import maxsize as MAX_INT
 
 
@@ -136,6 +137,20 @@ def tokenize_code_file(text: str) -> list[CodeToken]:
     return tokens
 
 
+def get_string_from_ppc(text: str, start: int, stop: int) -> CodeToken | None:
+    """For PPC tokens like `#define MESSAGE "Test"`, extract the inner string.
+    The boundaries of the PPC token are given in [start, stop)."""
+    # Skip the first character so we do not match the PPC token again.
+    offset = start + 1
+
+    for i, j, token_type in tokenize_code_file(text[offset:stop]):
+        if token_type == TokenType.STRING:
+            # Correct the returned offsets so they match the ones from `text`.
+            return (offset + i, offset + j, token_type)
+
+    return None
+
+
 def get_newlines_from_text(text: str) -> list[int]:
     return [-1] + [m.start() for m in re.finditer(r"\n", text)]
 
@@ -151,6 +166,19 @@ def get_line_column_pos(newlines: list[int], offset: int) -> tuple[int, int]:
 
     pos = newlines[i - 1]
     return (i, offset - pos)
+
+
+def report_blank_lines(
+    newlines: list[int], text: str, start: int, end: int
+) -> list[int]:
+    i = bisect.bisect_left(newlines, start)
+    j = bisect.bisect_left(newlines, end)
+
+    return [
+        newlines[x] + 1  # First column of the blank line
+        for x, y in pairwise(range(i, j))
+        if not text[newlines[x] : newlines[y]].strip()
+    ]
 
 
 def get_token_index(tokens: list[CodeToken], pos: int) -> int:
@@ -233,7 +261,7 @@ def find_declaration_chains(
     return chains
 
 
-r_lastScopeKeyword = re.compile(r".*\b(?:struct|namespace|class)\s", flags=re.DOTALL)
+r_lastScopeKeyword = re.compile(r".*\b(struct|namespace|class)\s", flags=re.DOTALL)
 """More precise match for a keyword that begins a scope: it must not be asubstring in larger identifier."""
 
 
@@ -244,10 +272,11 @@ or the last before a single ':' character demarcates the base class list."""
 
 def find_declaration_name(
     text: str, tokens: list[CodeToken], start: int, end: int
-) -> str | None:
+) -> tuple[str, str] | None:
     """Find the name for the named scope that begins somewhere between the CODE token at index `start`
     and then CURLY_OPEN token at index `end`. If there are multiple keywords that could be the start
     of the scope, choose the one closest to the end.
+    Returns (keyword, name) where keyword is "struct", "namespace", or "class".
     """
     if start + 1 == end:
         # If the scope declaration is entirely within one CODE token, save a split.
@@ -272,7 +301,7 @@ def find_declaration_name(
 
     # Find the scope name between
     if match := r_scopeName.search(code, keyword.end(), code_stop):
-        return match.group(1)
+        return (keyword.group(1), match.group(1))
 
     return None
 
@@ -281,13 +310,13 @@ def get_namespaces_from_scopes(
     text: str,
     tokens: list[CodeToken],
     scopes: dict[int, int],
-) -> list[tuple[int, int, str]]:
+) -> list[tuple[int, int, str, str]]:
     """Using the known scope enclosures, find which ones are the start of a
-    struct, class, or namespace. Return the name and range of positions where each
-    named scope is active."""
+    struct, class, or namespace. Return the range of positions where each
+    named scope is active, its keyword, and its name: (start, end, keyword, name)"""
     declarations = find_declaration_chains(text, tokens)
 
-    names: list[tuple[int, int, str]] = []
+    names: list[tuple[int, int, str, str]] = []
     for index, end in declarations:
         # Does this chain of tokens end on a CURLY_OPEN token that is the start of a bracket pair?
         # If not, skip. We did not detect a scope starting here, and so there could not be a name for it.
@@ -295,8 +324,9 @@ def get_namespaces_from_scopes(
         if scope_start not in scopes:
             continue
 
-        if (name := find_declaration_name(text, tokens, index, end)) is not None:
-            names.append((scope_start, scopes[scope_start], name))
+        if (found := find_declaration_name(text, tokens, index, end)) is not None:
+            keyword, name = found
+            names.append((scope_start, scopes[scope_start], keyword, name))
 
     return names
 

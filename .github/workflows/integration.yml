@@ -81,22 +81,23 @@ jobs:
         nproc
         taskset -c 1 reccmp-reccmp --target LEGO1 --silent
 
-    - name: Run reccmp 10 times
+    - name: Run reccmp 25 times
       shell: bash
       working-directory: ./companion/source
       run: |
-        for i in $(seq 1 10); do
+        out=$(printf 'times-%02d.txt' ${{ matrix.run }})
+        for i in $(seq 1 25); do
           start=$(date +%s%N)
           taskset -c 1 reccmp-reccmp --target LEGO1 --silent
           end=$(date +%s%N)
-          echo $((end - start)) >> times.txt
+          echo $((end - start)) >> "$out"
         done
 
     - name: Upload runtime
       uses: actions/upload-artifact@v7
       with:
         name: times-${{ matrix.run }}
-        path: ./companion/source/times.txt
+        path: ./companion/source/times-*.txt
 
   performance-report:
     name: Benchmark report
@@ -115,13 +116,14 @@ jobs:
       with:
         pattern: times-*
         path: times
+        merge-multiple: true
 
     - name: Report runtime
       shell: bash
       run: |
         {
           echo '```'
-          python .github/scripts/benchmark_report.py times/*/times.txt | tee /dev/stderr
+          python .github/scripts/benchmark_report.py times/times-*.txt | tee /dev/stderr
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
 

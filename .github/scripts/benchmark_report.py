@@ -65,6 +65,10 @@ def main():
     print(f"minimum:  {min(keep):.3f}s")
     print(f"maximum:  {max(keep):.3f}s")
     print()
+    for i, path in enumerate(args.files, 1):
+        samples = read_times([path])
+        print(f"{i:3d}: {len(samples)} samples, {min(samples):.3f}s - {max(samples):.3f}s")
+    print()
     print("\n".join(histogram(keep)))
 
 

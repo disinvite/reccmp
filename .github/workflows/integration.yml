@@ -2,9 +2,6 @@ name: Integration
 
 on: [push, pull_request]
 
-env:
-  WINEDEBUG: -all
-
 jobs:
   download:
     name: Download binaries
@@ -43,7 +40,7 @@ jobs:
 
   reccmp:
     name: Compare
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: download
     steps:
 
@@ -62,7 +59,7 @@ jobs:
 
   performance:
     name: Benchmark
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: download
     steps:
 
@@ -95,7 +92,7 @@ jobs:
 
   tools:
     name: ${{ matrix.tool }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: download
     strategy:
       fail-fast: false
@@ -116,7 +113,7 @@ jobs:
 
   stackcmp:
     name: stackcmp
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: download
     steps:
 
@@ -134,7 +131,7 @@ jobs:
 
   cvdump:
     name: cvdump
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: download
     steps:
 

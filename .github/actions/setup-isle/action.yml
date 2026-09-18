@@ -1,5 +1,5 @@
 name: Setup isle
-description: Install reccmp and wine, restore the sample binaries, and detect the isle project
+description: Install reccmp, restore the sample binaries, and detect the isle project
 
 inputs:
   project:
@@ -18,13 +18,6 @@ runs:
     shell: bash
     run: |
       pip install .
-
-  - name: Install wine
-    shell: bash
-    run: |
-      sudo dpkg --add-architecture i386
-      sudo apt-get update
-      sudo apt-get install -y --no-install-recommends wine wine32:i386
 
   - name: Restore binaries
     uses: actions/download-artifact@v7

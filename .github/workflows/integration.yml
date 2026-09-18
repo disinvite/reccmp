@@ -78,7 +78,8 @@ jobs:
       shell: bash
       working-directory: ./companion/source
       run: |
-        reccmp-reccmp --target LEGO1 --silent
+        nproc
+        taskset -c 1 reccmp-reccmp --target LEGO1 --silent
 
     - name: Run reccmp 10 times
       shell: bash
@@ -86,7 +87,7 @@ jobs:
       run: |
         for i in $(seq 1 10); do
           start=$(date +%s%N)
-          reccmp-reccmp --target LEGO1 --silent
+          taskset -c 1 reccmp-reccmp --target LEGO1 --silent
           end=$(date +%s%N)
           echo $((end - start)) >> times.txt
         done

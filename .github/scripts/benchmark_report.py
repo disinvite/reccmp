@@ -59,7 +59,7 @@ def main():
     keep, drop = split_outliers(times)
 
     print(f"samples:  {len(times)}")
-    print(f"outliers: {len(drop)}")
+    print(f"outliers: {', '.join(f'{t:.3f}s' for t in sorted(drop)) or 'none'}")
     print(f"average:  {statistics.fmean(keep):.3f}s")
     print(f"median:   {statistics.median(keep):.3f}s")
     print(f"minimum:  {min(keep):.3f}s")

@@ -79,19 +79,15 @@ jobs:
       working-directory: ./companion/source
       run: |
         nproc
-        taskset -c 1 reccmp-reccmp --target LEGO1 --silent
+        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 1 --output warmup
 
     - name: Run reccmp 25 times
       shell: bash
       working-directory: ./companion/source
       run: |
-        out=$(printf 'times-%02d.txt' ${{ matrix.run }})
-        for i in $(seq 1 25); do
-          start=$(date +%s%N)
-          taskset -c 1 reccmp-reccmp --target LEGO1 --silent
-          end=$(date +%s%N)
-          echo $((end - start)) >> "$out"
-        done
+        out=$(printf 'times-%02d' ${{ matrix.run }})
+        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 25 --output "$out"
+        cat "$out"-*.txt
 
     - name: Upload runtime
       uses: actions/upload-artifact@v7
@@ -123,7 +119,10 @@ jobs:
       run: |
         {
           echo '```'
-          python .github/scripts/benchmark_report.py times/times-*.txt | tee /dev/stderr
+          echo '=== from_target ==='
+          python .github/scripts/benchmark_report.py times/times-*-from_target.txt | tee /dev/stderr
+          echo '=== to_report ==='
+          python .github/scripts/benchmark_report.py times/times-*-to_report.txt | tee /dev/stderr
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
 

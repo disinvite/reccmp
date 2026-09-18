@@ -41,8 +41,8 @@ def histogram(times: list[float]) -> list[str]:
     tallest = max(counts)
     lines = []
     for i, count in enumerate(counts):
-        bar = "#" * round(count * WIDTH / tallest)
-        lines.append(f"{low + i * BIN_WIDTH:7.3f}s |{bar:<{WIDTH}}| {count}")
+        bar_chars = "#" * round(count * WIDTH / tallest)
+        lines.append(f"{low + i * BIN_WIDTH:7.3f}s |{bar_chars:<{WIDTH}}| {count}")
 
     return lines
 
@@ -67,7 +67,9 @@ def main():
     print()
     for i, path in enumerate(args.files, 1):
         samples = read_times([path])
-        print(f"{i:3d}: {len(samples)} samples, {min(samples):.3f}s - {max(samples):.3f}s")
+        print(
+            f"{i:3d}: {len(samples)} samples, {min(samples):.3f}s - {max(samples):.3f}s"
+        )
     print()
     print("\n".join(histogram(keep)))
 

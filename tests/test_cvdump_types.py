@@ -679,11 +679,53 @@ def test_enum(parser: CvdumpTypesParser):
 def test_lf_pointer(parser: CvdumpTypesParser):
     """LF_POINTER is just a wrapper for scalar pointer type"""
     assert parser.get(TK(0x3FAB)).size == 4
-    # assert parser.get(TK(0x3fab)).is_pointer is True  # TODO: ?
+    assert parser.get(TK(0x3FAB)).is_pointer() is True
 
     assert simplify_scalars(parser.get_scalars(TK(0x3FAB))) == [
         (0, None, CVInfoTypeEnum.T_32PVOID)
     ]
+
+
+def test_lf_pointer_pointee_type(parser: CvdumpTypesParser):
+    """The type key decays to a void pointer, but we retain the type pointed at."""
+    pointer = parser.get(TK(0x3FAB))
+    assert pointer.key == CVInfoTypeEnum.T_32PVOID
+    assert pointer.pointee_type == TK(0x3FAA)
+
+
+def test_scalar_pointee_type(parser: CvdumpTypesParser):
+    """Primitive pointer types report the primitive they point at."""
+    assert parser.get(CVInfoTypeEnum.T_32PRCHAR).pointee_type == CVInfoTypeEnum.T_RCHAR
+    assert parser.get(CVInfoTypeEnum.T_32PVOID).pointee_type == CVInfoTypeEnum.T_VOID
+
+    assert parser.get(CVInfoTypeEnum.T_INT4).is_pointer() is False
+    assert parser.get(TK(0x4060)).is_pointer() is False
+
+
+def test_get_pointer_offsets_struct(parser: CvdumpTypesParser):
+    """MxVariable: its own vftable, then the vftable and m_data of each MxString."""
+    assert parser.get_pointer_offsets(TK(0x22D5)) == [
+        (0, CVInfoTypeEnum.T_VOID),
+        (4, CVInfoTypeEnum.T_VOID),
+        (12, CVInfoTypeEnum.T_RCHAR),
+        (20, CVInfoTypeEnum.T_VOID),
+        (28, CVInfoTypeEnum.T_RCHAR),
+    ]
+
+
+def test_get_pointer_offsets_array(parser: CvdumpTypesParser):
+    """ROIColorAlias[22]: the m_name pointer of each 20 byte element."""
+    offsets = parser.get_pointer_offsets(TK(0x19B1))
+    assert len(offsets) == 22
+    assert offsets[0] == (0, CVInfoTypeEnum.T_RCHAR)
+    assert offsets[1] == (20, CVInfoTypeEnum.T_RCHAR)
+    assert offsets[-1] == (420, CVInfoTypeEnum.T_RCHAR)
+
+
+def test_get_pointer_offsets_without_pointers(parser: CvdumpTypesParser):
+    """float[4] and MxRect32 (four ints) have no pointers to report."""
+    assert parser.get_pointer_offsets(TK(0x103B)) == []
+    assert parser.get_pointer_offsets(TK(0x1214)) == []
 
 
 def test_lf_pointer_type(parser: CvdumpTypesParser):
@@ -1266,3 +1308,94 @@ def test_bitfields(empty_parser: CvdumpTypesParser):
     assert empty_parser.from_key(TK(0x1003))["bit_start"] == 6
     assert empty_parser.from_key(TK(0x1003))["bit_count"] == 3
     assert empty_parser.from_key(TK(0x1003))["bit_type"] == CVInfoTypeEnum.T_UINT4
+
+
+QUALIFIED_POINTER_MEMBERS = """
+0x104b : Length = 34, Leaf = 0x1505 LF_STRUCTURE
+	# members = 0,  field list type 0x0000, FORWARD REF,
+	Derivation list type 0x0000, VT shape type 0x0000
+	Size = 0, class name = Foo, unique name = .?AUFoo@@, UDT(0x00001055)
+
+0x104c : Length = 10, Leaf = 0x1002 LF_POINTER
+	Pointer (NEAR32), Size: 4
+	Element type : 0x104B
+
+0x104d : Length = 10, Leaf = 0x1002 LF_POINTER
+	const Pointer (NEAR32), Size: 4
+	Element type : 0x104B
+
+0x104e : Length = 10, Leaf = 0x1002 LF_POINTER
+	volatile Pointer (NEAR32), Size: 4
+	Element type : 0x104B
+
+0x104f : Length = 10, Leaf = 0x1002 LF_POINTER
+	volatile const Pointer (NEAR32), Size: 4
+	Element type : 0x104B
+
+0x1050 : Length = 10, Leaf = 0x1001 LF_MODIFIER
+	const, modifies type 0x104B
+
+0x1051 : Length = 10, Leaf = 0x1002 LF_POINTER
+	Pointer (NEAR32), Size: 4
+	Element type : 0x1050
+
+0x1052 : Length = 118, Leaf = 0x1203 LF_FIELDLIST
+	list[0] = LF_MEMBER, public, type = 0x104C, offset = 0
+		member name = 'm_ptr'
+	list[1] = LF_MEMBER, public, type = 0x104D, offset = 4
+		member name = 'm_const_ptr'
+	list[2] = LF_MEMBER, public, type = 0x104E, offset = 8
+		member name = 'm_volatile_ptr'
+	list[3] = LF_MEMBER, public, type = 0x104F, offset = 12
+		member name = 'm_cv_ptr'
+	list[4] = LF_MEMBER, public, type = 0x1051, offset = 16
+		member name = 'm_ptr_to_const'
+
+0x1053 : Length = 42, Leaf = 0x1505 LF_STRUCTURE
+	# members = 5,  field list type 0x1052,
+	Derivation list type 0x0000, VT shape type 0x0000
+	Size = 20, class name = Holder, unique name = .?AUHolder@@, UDT(0x00001053)
+
+0x1054 : Length = 14, Leaf = 0x1203 LF_FIELDLIST
+	list[0] = LF_MEMBER, public, type = T_INT4(0074), offset = 0
+		member name = 'x'
+
+0x1055 : Length = 34, Leaf = 0x1505 LF_STRUCTURE
+	# members = 1,  field list type 0x1054,
+	Derivation list type 0x0000, VT shape type 0x0000
+	Size = 4, class name = Foo, unique name = .?AUFoo@@, UDT(0x00001055)
+"""
+
+
+def test_qualified_pointer_pointee(empty_parser: CvdumpTypesParser):
+    """cv-qualifiers on the pointer itself are part of the LF_POINTER leaf.
+    Each spelling still points at the same type."""
+    empty_parser.read_all(QUALIFIED_POINTER_MEMBERS)
+
+    assert empty_parser.get(TK(0x104C)).pointee_type == TK(0x104B)
+    assert empty_parser.get(TK(0x104D)).pointee_type == TK(0x104B)
+    assert empty_parser.get(TK(0x104E)).pointee_type == TK(0x104B)
+    assert empty_parser.get(TK(0x104F)).pointee_type == TK(0x104B)
+
+
+def test_pointer_to_modified_type(empty_parser: CvdumpTypesParser):
+    """A pointer to a const type points at the LF_MODIFIER, which resolves
+    to the type being modified."""
+    empty_parser.read_all(QUALIFIED_POINTER_MEMBERS)
+
+    assert empty_parser.get(TK(0x1051)).pointee_type == TK(0x1050)
+    assert empty_parser.get(TK(0x1050)).name == "Foo"
+    assert empty_parser.get(TK(0x1050)).size == 4
+
+
+def test_get_pointer_offsets_qualified_pointers(empty_parser: CvdumpTypesParser):
+    """Holder: five pointer members, one for each way to qualify a Foo pointer."""
+    empty_parser.read_all(QUALIFIED_POINTER_MEMBERS)
+
+    assert empty_parser.get_pointer_offsets(TK(0x1053)) == [
+        (0, TK(0x104B)),
+        (4, TK(0x104B)),
+        (8, TK(0x104B)),
+        (12, TK(0x104B)),
+        (16, TK(0x1050)),
+    ]

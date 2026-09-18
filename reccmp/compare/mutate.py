@@ -11,9 +11,16 @@ from reccmp.analysis.crt_startup import (
 from reccmp.cvdump.demangler import (
     get_function_arg_string,
 )
-from reccmp.formats import PEImage
+from reccmp.cvdump.types import (
+    CvdumpIntegrityError,
+    CvdumpKeyError,
+    CvdumpTypeKey,
+    CvdumpTypesParser,
+)
+from reccmp.formats import Image, PEImage
 from reccmp.types import EntityType, ImageId
 from .db import EntityDb
+from .functions import create_bin_lookup
 from .queries import get_overloaded_functions, get_named_thunks
 
 logger = logging.getLogger(__name__)
@@ -113,3 +120,77 @@ def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
     with db.batch() as batch:
         for orig_addr, recomp_addr in matches:
             batch.match(orig_addr, recomp_addr)
+
+
+def match_pointers_recursive(
+    db: EntityDb,
+    types: CvdumpTypesParser,
+    orig_bin: Image,
+    recomp_bin: Image,
+):
+    """Match the pointer members of each variable entity with the 'recurse' option set.
+    The pointers read from each binary become a new match, and we do the same for
+    the entity created by that match until we run out of pointers to follow."""
+    read_orig = create_bin_lookup(orig_bin)
+    read_recomp = create_bin_lookup(recomp_bin)
+
+    queue: list[tuple[int, int, CvdumpTypeKey]] = []
+    completed: set[tuple[ImageId, int]] = set()
+    matched_orig: set[int] = set()
+    matched_recomp: set[int] = set()
+
+    for ent in db.get_matches():
+        matched_orig.add(ent.orig_addr)
+        matched_recomp.add(ent.recomp_addr)
+
+        if ent.get("type") != EntityType.DATA or not ent.get("recurse"):
+            continue
+
+        type_key = ent.get("data_type")
+        if type_key is None:
+            continue
+
+        completed.update(
+            ((ImageId.ORIG, ent.orig_addr), (ImageId.RECOMP, ent.recomp_addr))
+        )
+        queue.append((ent.orig_addr, ent.recomp_addr, CvdumpTypeKey(type_key)))
+
+    with db.batch() as batch:
+        while queue:
+            orig_addr, recomp_addr, type_key = queue.pop()
+
+            try:
+                pointers = types.get_pointer_offsets(type_key)
+            except (CvdumpKeyError, CvdumpIntegrityError):
+                logger.error(
+                    "Could not read pointers of type '0x%x' for match (0x%x, 0x%x)",
+                    type_key,
+                    orig_addr,
+                    recomp_addr,
+                )
+                continue
+
+            for offset, pointee in pointers:
+                orig_ptr = read_orig(orig_addr + offset)
+                recomp_ptr = read_recomp(recomp_addr + offset)
+
+                # Ignore null pointers and addresses we could not read.
+                if not orig_ptr or not recomp_ptr:
+                    continue
+
+                orig_key = (ImageId.ORIG, orig_ptr)
+                recomp_key = (ImageId.RECOMP, recomp_ptr)
+
+                if orig_key in completed or recomp_key in completed:
+                    continue
+
+                if (
+                    orig_ptr in matched_orig or recomp_ptr in matched_recomp
+                ) and not db.is_match(orig_ptr, recomp_ptr):
+                    continue
+
+                completed.update((orig_key, recomp_key))
+                batch.match(orig_ptr, recomp_ptr)
+                batch.set(ImageId.ORIG, orig_ptr, recurse=True)
+                batch.set(ImageId.RECOMP, recomp_ptr, recurse=True)
+                queue.append((orig_ptr, recomp_ptr, pointee))

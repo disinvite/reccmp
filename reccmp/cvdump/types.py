@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 from dataclasses import dataclass
 import bisect
 import re
@@ -118,6 +119,8 @@ class TypeInfo(NamedTuple):
     """Array only: Count of elements in the array."""
     array_element_size: int | None = None
     """Array only: Size in bytes of each array element."""
+    pointee_type: CvdumpTypeKey | None = None
+    """Pointer only: Type of the value at the address this points to."""
 
     def is_struct(self) -> bool:
         return self.members is not None
@@ -128,6 +131,9 @@ class TypeInfo(NamedTuple):
     def is_scalar(self) -> bool:
         # TODO: distinction between a class with zero members and no vtable?
         return self.members is None and self.array_type is None
+
+    def is_pointer(self) -> bool:
+        return self.pointee_type is not None
 
 
 def member_list_to_struct_string(members: list[ScalarType]) -> str:
@@ -220,6 +226,8 @@ class CvdumpParsedType(TypedDict):
 class CvdumpTypesParser:
     """Parser for cvdump output, TYPES section.
     Tricky enough that it demands its own parser."""
+
+    # pylint: disable=too-many-public-methods
 
     # Marks the start of a new type
     INDEX_RE = re.compile(r"(?P<key>0x\w+) : .* (?P<type>LF_\w+)")
@@ -381,6 +389,7 @@ class CvdumpTypesParser:
             return TypeInfo(
                 key=type_key,
                 size=cvinfo.size,
+                pointee_type=cvinfo.pointer,
             )
 
         # Go to our dictionary to find it.
@@ -388,7 +397,15 @@ class CvdumpTypesParser:
         obj_type = obj.get("type")
 
         if obj_type == "LF_POINTER":
-            return self.get(CVInfoTypeEnum.T_32PVOID)
+            # Decays to a void pointer, but we know the type it points to.
+            # TODO: The key decays so get_scalars() can read the size and format
+            # char from the primitive table. Now that is_pointer() can tell the
+            # caller to do that, we could keep the LF_POINTER key here instead.
+            # This changes the data_type we record for pointer variables, so it
+            # also changes the type we import into Ghidra for those entities.
+            return self.get(CVInfoTypeEnum.T_32PVOID)._replace(
+                pointee_type=obj["element_type"]
+            )
 
         if obj.get("is_forward_ref", False):
             # Get the forward reference to follow.
@@ -551,6 +568,56 @@ class CvdumpTypesParser:
             last_extent = scalar.offset
 
         return output
+
+    def get_pointer_offsets(
+        self, type_key: CvdumpTypeKey
+    ) -> list[tuple[int, CvdumpTypeKey]]:
+        return self._get_pointer_offsets(type_key, {})
+
+    def _get_pointer_offsets(
+        self,
+        type_key: CvdumpTypeKey,
+        cache: dict[CvdumpTypeKey, list[tuple[int, CvdumpTypeKey]]],
+    ) -> list[tuple[int, CvdumpTypeKey]]:
+        cached = cache.get(type_key)
+        if cached is not None:
+            return cached
+
+        obj = self.get(type_key)
+        offsets: list[tuple[int, CvdumpTypeKey]] = []
+
+        if obj.is_scalar():
+            if obj.pointee_type is not None:
+                offsets = [(0, obj.pointee_type)]
+
+        elif obj.is_array():
+            assert obj.array_type is not None
+            assert obj.array_length is not None
+            assert obj.array_element_size is not None
+
+            element_offsets = self._get_pointer_offsets(obj.array_type, cache)
+            if element_offsets:
+                element_size = obj.array_element_size
+                offsets = [
+                    (base + offset, pointee)
+                    for base in range(0, obj.array_length * element_size, element_size)
+                    for offset, pointee in element_offsets
+                ]
+
+        else:
+            assert obj.members is not None
+
+            unique_members = {m.offset: m.type for m in obj.members}
+            for member_offset, member_type in unique_members.items():
+                member_offsets = self._get_pointer_offsets(member_type, cache)
+                if member_offsets:
+                    offsets += [
+                        (member_offset + offset, pointee)
+                        for offset, pointee in member_offsets
+                    ]
+
+        cache[type_key] = offsets
+        return offsets
 
     def get_name_for_offset(self, type_key: CvdumpTypeKey, offset: int) -> str:
         """Limited to arrays for now. Enable to close GH #462."""

@@ -80,14 +80,16 @@ jobs:
       run: |
         reccmp-reccmp --target LEGO1 --silent
 
-    - name: Run reccmp
+    - name: Run reccmp 10 times
       shell: bash
       working-directory: ./companion/source
       run: |
-        start=$(date +%s%N)
-        reccmp-reccmp --target LEGO1 --silent
-        end=$(date +%s%N)
-        echo $((end - start)) > times.txt
+        for i in $(seq 1 10); do
+          start=$(date +%s%N)
+          reccmp-reccmp --target LEGO1 --silent
+          end=$(date +%s%N)
+          echo $((end - start)) >> times.txt
+        done
 
     - name: Upload runtime
       uses: actions/upload-artifact@v7

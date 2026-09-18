@@ -64,6 +64,10 @@ jobs:
     name: Benchmark
     runs-on: ubuntu-latest
     needs: download
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
 
     - uses: actions/checkout@v7
@@ -76,21 +80,37 @@ jobs:
       run: |
         reccmp-reccmp --target LEGO1 --silent
 
-    - name: Run reccmp 10 times
+    - name: Run reccmp
       shell: bash
       working-directory: ./companion/source
       run: |
-        for i in $(seq 1 10); do
-          start=$(date +%s%N)
-          reccmp-reccmp --target LEGO1 --silent
-          end=$(date +%s%N)
-          echo $((end - start)) >> times.txt
-        done
+        start=$(date +%s%N)
+        reccmp-reccmp --target LEGO1 --silent
+        end=$(date +%s%N)
+        echo $((end - start)) > times.txt
+
+    - name: Upload runtime
+      uses: actions/upload-artifact@v7
+      with:
+        name: times-${{ matrix.run }}
+        path: ./companion/source/times.txt
+
+  performance-report:
+    name: Benchmark report
+    runs-on: ubuntu-latest
+    needs: performance
+    steps:
+
+    - name: Download runtimes
+      uses: actions/download-artifact@v7
+      with:
+        pattern: times-*
+        path: times
 
     - name: Report runtime
       shell: bash
-      working-directory: ./companion/source
       run: |
+        cat times/*/times.txt > times.txt
         awk '{ t = $1 / 1000000000; sum += t; if (min == "" || t < min) min = t; if (t > max) max = t } END { printf "runs: %d\naverage: %.3fs\nminimum: %.3fs\nmaximum: %.3fs\n", NR, sum / NR, min, max }' times.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
   tools:

@@ -70,6 +70,12 @@ jobs:
 
     - uses: ./.github/actions/setup-isle
 
+    - name: Warm up
+      shell: bash
+      working-directory: ./companion/source
+      run: |
+        reccmp-reccmp --target LEGO1 --silent
+
     - name: Run reccmp 10 times
       shell: bash
       working-directory: ./companion/source
@@ -80,6 +86,11 @@ jobs:
           end=$(date +%s%N)
           echo $((end - start)) >> times.txt
         done
+
+    - name: Report runtime
+      shell: bash
+      working-directory: ./companion/source
+      run: |
         awk '{ t = $1 / 1000000000; sum += t; if (min == "" || t < min) min = t; if (t > max) max = t } END { printf "runs: %d\naverage: %.3fs\nminimum: %.3fs\nmaximum: %.3fs\n", NR, sum / NR, min, max }' times.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
   tools:
@@ -89,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool: [verexp, vtable, datacmp]
+        tool: [verexp, vtable, datacmp, decomplint, roadmap]
     steps:
 
     - uses: actions/checkout@v7
@@ -102,6 +113,24 @@ jobs:
       run: |
         reccmp-${{ matrix.tool }} --target LEGO1 2>&1 | tee output.txt || true
         ! grep -q 'Traceback (most recent call last)' output.txt
+
+  stackcmp:
+    name: stackcmp
+    runs-on: ubuntu-latest
+    needs: download
+    steps:
+
+    - uses: actions/checkout@v7
+
+    - uses: ./.github/actions/setup-isle
+
+    - name: Run stackcmp
+      shell: bash
+      working-directory: ./companion/source
+      run: |
+        reccmp-stackcmp --target LEGO1 0x100ae350 2>&1 | tee output.txt || true
+        ! grep -q 'Traceback (most recent call last)' output.txt
+        ! grep -q 'Failed to find a match' output.txt
 
   cvdump:
     name: cvdump

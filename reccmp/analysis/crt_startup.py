@@ -280,22 +280,30 @@ def detect_crt_startup_arrays(
 def create_crt_matches(
     orig_array: CrtStartupArray, recomp_array: CrtStartupArray
 ) -> list[tuple[int, int]]:
-    """Match CRT startup functions from one array to other based on which addresses they use.
-    Functions from the same array entry match as a unit, so a constructor can be
-    matched by its atexit setter and vice versa."""
+    """Return a list of matched pairs for functions from the CRT startup array.
+    Matches are created using the combination of sampled addresses and how they
+    are used (fingerprint). We can create a match if the sample is used only once
+    in each array, eliminating matched functions from the pool until no new matches
+    can be created.
 
+    If the address in the CRT startup array points to a thunk, the samples for all
+    thunked functions are pooled together. In the case of the C++ init functions,
+    the only case where we have observed a thunk so far, the thunked functions serve
+    different purposes, so it seems unlikely that pooling the samples could cause a
+    mismatch."""
+
+    # FunctionSet must be hashable to use in both sets.
     combined_map: dict[UsedAddress, set[tuple[ImageId, FunctionSet]]] = {}
+    # Entries to be deleted on each pass
+    # (because we cannot modify ___ while iterating over it)
     eliminated: set[tuple[ImageId, FunctionSet]] = set()
     matches: list[tuple[int, int]] = []
     thunks: list[tuple[int, int]] = []
 
-    # Each array contains the list of startup functions with attached list of sampled addresses.
     # Sampled addresses are already normalized to the original binary address space.
-    # Use this as our key to connect startup functions in both orig and recomp based on which
-    # addresses are used, and how (reads or writes).
     for image_id, array in ((ImageId.ORIG, orig_array), (ImageId.RECOMP, recomp_array)):
         for group in array.functions:
-            # Combine samples from _____
+            # Samples from all functions in the set are combined here.
             for func_addr in group.addrs:
                 for sample in array.fingerprints.get(func_addr, ()):
                     combined_map.setdefault(sample, set()).add((image_id, group))
@@ -307,11 +315,9 @@ def create_crt_matches(
         for value in combined_map.values():
             value -= eliminated
 
-        # Sampled address are separated by whether the function reads or writes to them.
-        # Read is not a superset for write, meaning: if the function only writes
-        # to the address, the function address will only be in the `is_write=True` bucket.
-        # With that separation, match any addresses where the bucket has
-        # exactly one sample from orig and exactly one sample from recomp.
+        # Match function sets that contributed a sample used exactly once in each array.
+        # The samples are distinguished by how they are used. A READ is different from
+        # a WRITE to the same address.
         for _, func_groups in combined_map.items():
             if len(func_groups) == 2:
                 [(img_x, group_x), (img_y, group_y)] = func_groups

@@ -1,0 +1,82 @@
+name: Benchmark
+
+on: [push, pull_request, workflow_dispatch]
+
+env:
+  WINEDEBUG: -all
+
+jobs:
+  download:
+    name: Download binaries
+    runs-on: ubuntu-latest
+    steps:
+
+    - uses: actions/checkout@v7
+
+    - uses: ./.github/actions/download-binaries
+
+  performance:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    needs: download
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+
+    - uses: actions/checkout@v7
+
+    - uses: ./.github/actions/setup-isle
+
+    - name: Warm up
+      shell: bash
+      working-directory: ./companion/source
+      run: |
+        nproc
+        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 1 --output warmup
+
+    - name: Run reccmp 25 times
+      shell: bash
+      working-directory: ./companion/source
+      run: |
+        out=$(printf 'times-%02d' ${{ matrix.run }})
+        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 25 --output "$out"
+        cat "$out"-*.txt
+
+    - name: Upload runtime
+      uses: actions/upload-artifact@v7
+      with:
+        name: times-${{ matrix.run }}
+        path: ./companion/source/times-*.txt
+
+  performance-report:
+    name: Benchmark report
+    runs-on: ubuntu-latest
+    needs: performance
+    steps:
+
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+
+    - name: Download runtimes
+      uses: actions/download-artifact@v7
+      with:
+        pattern: times-*
+        path: times
+        merge-multiple: true
+
+    - name: Report runtime
+      shell: bash
+      run: |
+        {
+          echo '```'
+          echo '=== from_target ==='
+          python .github/scripts/benchmark_report.py times/times-*-from_target.txt | tee /dev/stderr
+          echo '=== to_report ==='
+          python .github/scripts/benchmark_report.py times/times-*-to_report.txt | tee /dev/stderr
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

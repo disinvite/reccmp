@@ -11,35 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Restore original binary
-      id: cache
-      uses: actions/cache@v6
-      with:
-        path: binfiles
-        key: legobin-lego1
+    - uses: actions/checkout@v7
 
-    - name: Download original binary
-      if: ${{ !steps.cache.outputs.cache-hit }}
-      run: |
-        wget https://legoisland.org/download/LEGO1.DLL --directory-prefix=binfiles
-
-    - name: Verify original binary
-      run: |
-        echo "14645225bbe81212e9bc1919cd8a692b81b8622abb6561280d99b0fc4151ce17 binfiles/LEGO1.DLL" | sha256sum --check
-
-    - name: Download recompiled binaries
-      run: |
-        wget https://github.com/isledecomp/isle/releases/download/continuous/ReproBit-Debug-Companion.zip
-        unzip -q ReproBit-Debug-Companion.zip -d companion
-        mv companion/LEGO1.PDB companion/LEGO1.pdb
-
-    - name: Upload binaries
-      uses: actions/upload-artifact@v7
-      with:
-        name: binaries
-        path: |
-          binfiles
-          companion
+    - uses: ./.github/actions/download-binaries
 
   reccmp:
     name: Compare
@@ -59,72 +33,6 @@ jobs:
         grep -qE '^Implemented: +[0-9.]+% +\([1-9][0-9]*' result.txt
         grep -qE '^Accuracy: +[0-9.]+%' result.txt
         grep -E '^(Implemented|Accuracy|Progress):' result.txt >> "$GITHUB_STEP_SUMMARY"
-
-  performance:
-    name: Benchmark
-    runs-on: ubuntu-latest
-    needs: download
-    strategy:
-      fail-fast: false
-      matrix:
-        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    steps:
-
-    - uses: actions/checkout@v7
-
-    - uses: ./.github/actions/setup-isle
-
-    - name: Warm up
-      shell: bash
-      working-directory: ./companion/source
-      run: |
-        nproc
-        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 1 --output warmup
-
-    - name: Run reccmp 25 times
-      shell: bash
-      working-directory: ./companion/source
-      run: |
-        out=$(printf 'times-%02d' ${{ matrix.run }})
-        taskset -c 1 python $GITHUB_WORKSPACE/.github/scripts/benchmark_compare.py --target LEGO1 --runs 25 --output "$out"
-        cat "$out"-*.txt
-
-    - name: Upload runtime
-      uses: actions/upload-artifact@v7
-      with:
-        name: times-${{ matrix.run }}
-        path: ./companion/source/times-*.txt
-
-  performance-report:
-    name: Benchmark report
-    runs-on: ubuntu-latest
-    needs: performance
-    steps:
-
-    - uses: actions/checkout@v7
-
-    - uses: actions/setup-python@v7
-      with:
-        python-version: '3.14'
-
-    - name: Download runtimes
-      uses: actions/download-artifact@v7
-      with:
-        pattern: times-*
-        path: times
-        merge-multiple: true
-
-    - name: Report runtime
-      shell: bash
-      run: |
-        {
-          echo '```'
-          echo '=== from_target ==='
-          python .github/scripts/benchmark_report.py times/times-*-from_target.txt | tee /dev/stderr
-          echo '=== to_report ==='
-          python .github/scripts/benchmark_report.py times/times-*-to_report.txt | tee /dev/stderr
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
 
   tools:
     name: ${{ matrix.tool }}

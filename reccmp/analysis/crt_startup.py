@@ -3,7 +3,7 @@ import re
 import struct
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Callable, Iterator, NamedTuple
+from typing import Callable, Iterator
 from typing_extensions import Buffer
 from reccmp.compare.asm.const import JUMP_MNEMONICS
 from reccmp.compare.asm.instgen import (
@@ -55,27 +55,17 @@ class UsedHow(enum.Enum):
 UsedAddress = tuple[int, UsedHow]
 
 
-class FunctionSet(NamedTuple):
+@dataclass(frozen=True)
+class FunctionSet:
     """The functions connected to a single entry in a CRT startup array.
     They match as a unit, so any one of them can match the others."""
 
-    constructor: int
-    """Sets the variable or calls the C++ constructor."""
-
-    atexit_setter: int | None = None
-    """Registers the destructor with atexit(). Only in a CALL/JMP thunk."""
+    addrs: tuple[int, ...]
+    """The functions we match by fingerprint, in the order we detected them.
+    The thunk is excluded: it matches only after its group has matched."""
 
     thunk: int | None = None
     """The address that actually appeared in the array, if it is a thunk."""
-
-    @property
-    def matchable(self) -> tuple[int, ...]:
-        """The functions we match by fingerprint. The thunk is excluded:
-        it matches only after its group has matched."""
-        if self.atexit_setter is None:
-            return (self.constructor,)
-
-        return (self.constructor, self.atexit_setter)
 
 
 @dataclass
@@ -215,32 +205,32 @@ def find_crt_startup_labels(db: EntityDb, image_id: ImageId) -> dict[str, int]:
 
 
 JMP_THUNKS = {b"\xe9\x00\x00\x00\x00", b"\xe9\x0b\x00\x00\x00"}
-"""Observed thunk patterns for CRT init: jump to the function that sets the variable,
+"""Observed thunk patterns for CRT init: jump to a single function, located
 either directly after the thunk or at the next 16-byte boundary."""
 
 CALL_JMP_THUNKS = {b"\xe8\x05\x00\x00\x00\xe9", b"\xe8\x0b\x00\x00\x00\xe9"}
-"""Observed thunk patterns for CRT init: call the function that sets the variable,
-then jump to the function that sets the atexit handler. The position of the atexit
-setter depends on the size of the called function, so its displacement is not part
-of the pattern."""
+"""Observed thunk patterns for CRT init: call the first function, then jump to
+the second. The position of the second function depends on the size of the first,
+so its displacement is not part of the pattern."""
 
 
 def read_function_set(binfile: Image, addr: int) -> FunctionSet:
-    """The address in the CRT array may not be the function that sets the variable
-    or calls the constructor. Detect thunk patterns we have observed in MSVC binaries.
-    A CALL/JMP thunk points at two functions: the one that sets the variable,
-    then the one that sets the atexit handler."""
+    """Read enough of the CRT startup function at `addr` to tell if it is a thunk.
+    In MSVC binaries, we have observed C++ initializer functions acting as thunks for
+    one or two other functions. If there are two (CALL + JMP pattern), the second
+    function sets the destructor using atexit(). If a similar pattern appears in
+    other kinds of startup functions, we will detect it here."""
     data = binfile.read(addr, 10)
     first, second = struct.unpack("<xixi", data)
 
     if data[:5] in JMP_THUNKS:
-        return FunctionSet(addr + 5 + first, thunk=addr)
+        return FunctionSet((addr + 5 + first,), thunk=addr)
 
-    # The jmp to the atexit setter is the only displacement that varies. It always goes forward.
+    # The jmp to the second function is the only displacement that varies. It always goes forward.
     if data[:6] in CALL_JMP_THUNKS and second >= 0:
-        return FunctionSet(addr + 5 + first, addr + 10 + second, thunk=addr)
+        return FunctionSet((addr + 5 + first, addr + 10 + second), thunk=addr)
 
-    return FunctionSet(addr)
+    return FunctionSet((addr,))
 
 
 def read_crt_functions(binfile: PEImage, span: range) -> CrtStartupArray:
@@ -260,7 +250,7 @@ def fingerprint_crt_functions(
     """Update the CRT array structure so that the detected functions have a characteristic
     set of addresses (the "fingerprint") read or written to by their instructions."""
     for group in array.functions:
-        for addr in group.matchable:
+        for addr in group.addrs:
             array.fingerprints[addr] = get_function_fingerprint(
                 db, image_id, binfile, addr
             )
@@ -305,7 +295,8 @@ def create_crt_matches(
     # addresses are used, and how (reads or writes).
     for image_id, array in ((ImageId.ORIG, orig_array), (ImageId.RECOMP, recomp_array)):
         for group in array.functions:
-            for func_addr in group.matchable:
+            # Combine samples from _____
+            for func_addr in group.addrs:
                 for sample in array.fingerprints.get(func_addr, ()):
                     combined_map.setdefault(sample, set()).add((image_id, group))
 
@@ -329,9 +320,9 @@ def create_crt_matches(
                     # Figure out which group is orig and which is recomp.
                     orig_group = group_x if img_x == ImageId.ORIG else group_y
                     recomp_group = group_y if img_y == ImageId.RECOMP else group_x
-                    # Match the constructors, then the atexit setters if both sides
-                    # have one. zip stops at the shorter group.
-                    matches.extend(zip(orig_group.matchable, recomp_group.matchable))
+                    # Match the functions in the order we detected them.
+                    # zip stops at the shorter group.
+                    matches.extend(zip(orig_group.addrs, recomp_group.addrs))
                     # Add the thunks last, after all functions are matched.
                     if orig_group.thunk is not None and recomp_group.thunk is not None:
                         thunks.append((orig_group.thunk, recomp_group.thunk))

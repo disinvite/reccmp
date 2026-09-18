@@ -54,7 +54,7 @@ def create_crt_functions(db: EntityDb, image_id: ImageId, binfile: PEImage):
             # e.g. "atexit_setter"
             base_name = get_crt_function_name(array_type)
             for group in array.functions:
-                for addr in group:
+                for addr in (*group.addrs, group.thunk):
                     if addr is not None:
                         batch.set(
                             image_id,

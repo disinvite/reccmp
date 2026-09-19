@@ -1,27 +1,10 @@
 name: Download binaries
-description: Download the original and recompiled binaries and upload them as the 'binaries' artifact
 
 runs:
   using: composite
   steps:
 
-  - name: Restore original binary
-    id: cache
-    uses: actions/cache@v6
-    with:
-      path: binfiles
-      key: legobin-lego1
-
-  - name: Download original binary
-    if: ${{ !steps.cache.outputs.cache-hit }}
-    shell: bash
-    run: |
-      wget https://legoisland.org/download/LEGO1.DLL --directory-prefix=binfiles
-
-  - name: Verify original binary
-    shell: bash
-    run: |
-      echo "14645225bbe81212e9bc1919cd8a692b81b8622abb6561280d99b0fc4151ce17 binfiles/LEGO1.DLL" | sha256sum --check
+  - uses: ./.github/actions/download-lego
 
   - name: Download recompiled binaries
     shell: bash

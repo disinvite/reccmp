@@ -146,7 +146,6 @@ def test_string_with_line_continuation_and_escaped_quote(parser: DecompParser):
     assert not parser.alerts
 
 
-@pytest.mark.xfail(reason="TODO: #509")
 def test_variable_on_multiple_lines(parser: DecompParser):
     parser.read(dedent("""\
         // GLOBAL: TEST 0x1234

@@ -407,3 +407,18 @@ def test_option_to_salvage_valid_pairing():
     """)
     scopes, _ = resolve_scopes(tokenize_code_file(code))
     assert scopes == {0: 18}
+
+
+@pytest.mark.xfail(reason="Single-leg PPC block is never reduced.")
+def test_single_leg_block_inside_branch():
+    code = dedent("""\
+        #ifdef A
+        {
+        #ifdef B
+        #endif
+        }
+        #else
+        #endif
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert scopes == {9: 27}

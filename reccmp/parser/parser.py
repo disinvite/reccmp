@@ -31,6 +31,7 @@ from .node import (
 from .error import ParserAlert, AlertCode
 from .tokenizer import (
     CodeToken,
+    eliminate_impossible_paths,
     get_line_column_pos,
     get_newlines_from_text,
     get_namespaces_from_scopes,
@@ -586,7 +587,8 @@ class DecompParser:
         if not self.found_markers:
             return
 
-        tokens = tokenize_code_file(text)
+        raw_tokens = tokenize_code_file(text)
+        tokens = eliminate_impossible_paths(raw_tokens, text)
         self.newlines = get_newlines_from_text(text)
         self.enclosures, _ = resolve_scopes(tokens)
         # TODO: error if any unpaired curly brackets remain.

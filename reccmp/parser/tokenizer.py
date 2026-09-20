@@ -455,6 +455,145 @@ def all_curly_paired(tokens: list[CodeToken]) -> bool:
     return True
 
 
+# A constant preprocessor condition: `#if 0/1` or `#elif 0/1`. The condition must
+# run to the end of the line so a real expression like `#if 0 || FOO` is left
+# alone. An optional trailing line comment is permitted.
+r_ppc_const = re.compile(r"#\s*(?:el)?if\s+([01])\s*(?://.*)?$", flags=re.M)
+
+
+class LegStatus(enum.Enum):
+    """Whether a leg of a preprocessor conditional can be taken."""
+
+    NEVER = enum.auto()  # constant-0, or shadowed by an earlier ALWAYS leg
+    SOMETIMES = enum.auto()  # non-constant: decided at compile time, not here
+    ALWAYS = enum.auto()  # constant-1, or the #else every dead leg falls through to
+
+
+def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeToken]:
+    """Remove tokens on preprocessor branches that are dead because of a constant
+    `#if 0` / `#if 1` condition.
+    `#if 0`: the #if branch is impossible. Drop it and its body. If an #else
+    follows, keep that branch as ordinary (unconditional) code and drop the block's
+    PPC tokens. If an #elif follows instead, rewrite that #elif into an #if so the
+    remaining legs are still a valid conditional.
+    `#if 1`: the #if branch always wins. Keep its body and drop every other leg
+    along with the block's own PPC tokens.
+    A non-constant `#if` passes through untouched, except that any dead `#elif 0`
+    leg inside it is removed. Constant blocks nested inside a surviving branch are
+    resolved the same way; those inside a dead branch are dropped wholesale."""
+    # Find every constant condition in one sweep, keyed on the position of its `#`.
+    # That is where the matching PPC token starts, so the block scan below is a
+    # dict lookup instead of a regex match per directive. A hit inside a comment or
+    # string is inert: nothing queries that position.
+    constants = {m.start(): m.group(1) for m in r_ppc_const.finditer(text)}
+
+    # Bail immediately if there is no constant condition anywhere.
+    if not constants:
+        return tokens
+
+    # Collect each complete conditional block: the token index of every
+    # #if/#elif/#else leg (with its constant value, if any) and its #endif.
+    # Each leg is (token index, leg token type, "0"/"1" constant or None).
+    Leg = tuple[int, TokenType, str | None]
+    stack: list[list[Leg]] = []
+    blocks: list[tuple[list[Leg], int]] = []
+
+    # Conditional directives are a few percent of the stream, so pull them out in
+    # one pass and let the block scan walk that short list instead of every token.
+    directives = [
+        (i, tok[0], tok[2]) for i, tok in enumerate(tokens) if tok[2] in PPC_TOKENS
+    ]
+
+    for i, start, token_type in directives:
+        if token_type == TokenType.PPC_IF:
+            stack.append([(i, token_type, constants.get(start))])
+        elif stack:
+            # Nothing but #elif, #else and #endif reaches here. An #else never
+            # carries a condition, so the lookup misses and it picks up a None
+            # const the same way a non-constant #elif does.
+            if token_type == TokenType.PPC_END:
+                blocks.append((stack.pop(), i))
+            else:
+                stack[-1].append((i, token_type, constants.get(start)))
+
+    # Decide which token indices to delete and which #elif to promote to #if.
+    # Dead legs are always contiguous runs of indices, so record them as half-open
+    # intervals: the rebuild below can then copy the survivors in slices instead of
+    # testing every token against a set.
+    cuts: list[tuple[int, int]] = []
+    promote: set[int] = set()
+
+    for legs, endif in blocks:
+        # Boundary token index of each leg, plus the #endif. Leg n covers the
+        # tokens in range(bounds[n] + 1, bounds[n + 1]).
+        bounds = [idx for idx, _, _ in legs] + [endif]
+
+        # Classify every leg left to right.
+        #   `decided`: an ALWAYS leg was already seen, so the rest are shadowed.
+        #   `all_dead`: every leg so far is NEVER, so a const-1/#else here is the
+        #   first that must be taken. After any SOMETIMES leg it no longer holds:
+        #   a later const-1/#else might be skipped for that earlier condition.
+        statuses: list[LegStatus] = []
+        decided = False
+        all_dead = True
+        for _, kind, const in legs:
+            if decided or const == "0":
+                statuses.append(LegStatus.NEVER)
+            elif all_dead and (const == "1" or kind is TokenType.PPC_ELSE):
+                statuses.append(LegStatus.ALWAYS)
+                decided = True
+            else:
+                statuses.append(LegStatus.SOMETIMES)
+                all_dead = False
+
+        # Delete every dead leg wholesale (directive and body).
+        for n, status in enumerate(statuses):
+            if status is LegStatus.NEVER:
+                cuts.append((bounds[n], bounds[n + 1]))
+
+        if LegStatus.SOMETIMES in statuses:
+            # A conditional survives. Promote the first surviving leg to #if if it
+            # began as an #elif, so the remaining legs are still a valid block.
+            first = statuses.index(LegStatus.SOMETIMES)
+            if first > 0:
+                promote.add(bounds[first])
+        else:
+            # The block collapses. Drop its #endif, and if a leg is always taken,
+            # drop that leg's directive too so its body becomes unconditional.
+            # (With no ALWAYS leg, every leg was dead and the block vanishes.)
+            cuts.append((endif, endif + 1))
+            if LegStatus.ALWAYS in statuses:
+                always = bounds[statuses.index(LegStatus.ALWAYS)]
+                cuts.append((always, always + 1))
+
+    if not cuts and not promote:
+        return tokens
+
+    # A promoted #elif is never inside a cut, so rewriting it up front keeps the
+    # slicing below to whole runs of untouched tokens.
+    if promote:
+        tokens = list(tokens)
+        for idx in promote:
+            start, stop, _ = tokens[idx]
+            tokens[idx] = (start, stop, TokenType.PPC_IF)
+
+    # Blocks close inner-first, so cuts arrive unsorted and a cut for a nested
+    # block can fall inside the cut for the leg that encloses it. Sort, then merge
+    # as we go: `prev` is the next index that still needs copying.
+    cuts.sort()
+    output: list[CodeToken] = []
+    prev = 0
+    for lo, hi in cuts:
+        if lo > prev:
+            output.extend(tokens[prev:lo])
+            prev = hi
+        elif hi > prev:
+            prev = hi
+
+    output.extend(tokens[prev:])
+    return output
+
+
 def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) -> bool:
     """Check the new bracket pairs from pair_brackets(enable_ppc=False)
     and determine whether any of them are:

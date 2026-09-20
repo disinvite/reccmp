@@ -266,7 +266,7 @@ def find_declaration_chains(
 
 
 r_lastScopeKeyword = re.compile(r".*\b(struct|namespace|class)\s", flags=re.DOTALL)
-"""More precise match for a keyword that begins a scope: it must not be asubstring in larger identifier."""
+"""More precise match for a keyword that begins a scope: it must not be a substring in a larger identifier."""
 
 
 r_scopeName = re.compile(r"(?P<name>\w+)\s*(?::(?!:).*)?$", flags=re.DOTALL)

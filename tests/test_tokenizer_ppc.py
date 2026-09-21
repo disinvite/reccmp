@@ -196,9 +196,32 @@ def test_if_expr_elif_1():
     assert eliminate_impossible_paths(tokens, code) == tokens
 
 
+def test_if_expr_elif_1_else():
+    """`#elif 1` followed by `#else`: drop the redundant `#else`, keep the rest."""
+    code = source("""\
+        #if X
+        A
+        #elif 1
+        B
+        #else
+        C
+        #endif
+    """)
+    tokens = tokenize_code_file(code)
+    # tokens: [PPC_IF(X), CODE(A), PPC_ELIF(1), CODE(B), PPC_ELSE, CODE(C), PPC_END]
+    assert eliminate_impossible_paths(tokens, code) == [
+        tokens[0],
+        tokens[1],
+        tokens[2],
+        tokens[3],
+        tokens[6],
+    ]
+
+
 def test_if_expr_elif_expr_elif_1():
-    """Expanded version of `test_if_expr_elif_1` with more options. Do not modify
-    because we cannot evaluate the expressions that precede the `1` option."""
+    """Expanded version of `test_if_expr_elif_1` with more options.
+    The final `#else` branch is made redundant by the preceding `#elif 1`.
+    No other modifications are possible."""
     code = source("""\
         #if X
         A
@@ -211,7 +234,21 @@ def test_if_expr_elif_expr_elif_1():
         #endif
     """)
     tokens = tokenize_code_file(code)
-    assert eliminate_impossible_paths(tokens, code) == tokens
+    # tokens: [PPC_IF(X), CODE(A), PPC_ELIF(Y), CODE(B), PPC_ELIF(1), CODE(C), PPC_ELSE, CODE(D), PPC_END]
+    assert eliminate_impossible_paths(tokens, code) == [*tokens[:6], tokens[8]]
+
+
+def test_if_0_elif_0():
+    """`#if 0` followed by `#elif 0`: no tokens remain."""
+    code = source("""\
+        #if 0
+        A
+        #elif 0
+        B
+        #endif
+    """)
+    tokens = tokenize_code_file(code)
+    assert not eliminate_impossible_paths(tokens, code)
 
 
 def test_if_0_elif_0_elif_expr():

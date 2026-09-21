@@ -461,60 +461,70 @@ def all_curly_paired(tokens: list[CodeToken]) -> bool:
 r_ppc_const = re.compile(r"#\s*(?:el)?if\s+([01])\s*(?://.*)?$", flags=re.M)
 
 
-class Condition(enum.Enum):
+class ExpressionResult(enum.Enum):
     NEVER = enum.auto()
     """Branch is disabled by constant False expression."""
     ALWAYS = enum.auto()
     """Branch is enabled by constant True expression, or it is an `#else` that follows disabled branches."""
     SOMETIMES = enum.auto()
     """Branch is toggled by an expression we did not evaluate."""
+    ENDIF = enum.auto()
+    """Sentinel that ends the block."""
+
+
+PreprocessorBlock = list[tuple[int, ExpressionResult]]
+"""Index (to `tokens` list) and partially-evaluated result of each participant in a preprocessor sequence."""
 
 
 def reduce_conditional_block(
-    bounds: list[int], conditions: list[Condition]
+    block: PreprocessorBlock,
 ) -> tuple[list[tuple[int, int]], int | None]:
     """Test each branch from the PPC block and return the list of token indices to drop
     and (optionally) the index of the `#elif` token to promote to `#if` when this is required.
-    `bounds` has the list of indices from `tokens`.
-    `conditions` is the reduction of the given preprocessor expressions."""
+    """
 
     # Record token indices for the boundaries of this preprocessor block.
     # We need these for creating the list of index ranges to cut.
-    if_idx, endif = bounds[0], bounds[-1]
+    if_idx, endif = block[0][0], block[-1][0]
 
     # Find the first branch that is not definitively disabled.
-    for first, condition in enumerate(conditions):
-        if condition is not Condition.NEVER:
+    for first, (start, condition) in enumerate(block):
+        if condition is not ExpressionResult.NEVER:
             break
     else:
+        # This is here to suppress pylint `undefined-loop-variable` error.
+        # If we are here, the block has no ENDIF, so take no action.
+        return [], None
+
+    if condition is ExpressionResult.ENDIF:
         # All branches are disabled. Remove all tokens in the block.
         return [(if_idx, endif + 1)], None
 
     # Did we encounter a branch that is always enabled (i.e. `#if 1` or `#elif 1`)
     # after reading 0-N disabled branches?
-    if condition is Condition.ALWAYS:
+    if condition is ExpressionResult.ALWAYS:
         # This branch is definitively enabled. Remove tokens from all other branches
         # and remove the preprocessor tokens that wrap this branch.
-        return [(if_idx, bounds[first] + 1), (bounds[first + 1], endif + 1)], None
+        return [(if_idx, start + 1), (block[first + 1][0], endif + 1)], None
 
     # If we are here, we can remove 0-N branches.
-    cuts = []
-    for k, condition in enumerate(conditions):
-        if condition is Condition.NEVER:
+    cuts: list[tuple[int, int]] = []
+    for (start, condition), (stop, _) in pairwise(block):
+        if condition is ExpressionResult.NEVER:
             # Remove branches that are definitively disabled.
-            cuts.append((bounds[k], bounds[k + 1]))
-        elif condition is Condition.ALWAYS:
+            cuts.append((start, stop))
+        elif condition is ExpressionResult.ALWAYS:
             # If this branch is definitively enabled, any branches that follow
             # are definitively _disabled_, so remove their tokens.
-            if k + 1 < len(conditions):
-                cuts.append((bounds[k + 1], endif))
+            if stop != endif:
+                cuts.append((stop, endif))
 
             break
 
     # If the first remaining preprocessor token is not the first overall
     # (i.e. it is an `#elif`) we must promote it to `#if` to create a proper
     # preprocessor token sequence after the cuts.
-    return cuts, (bounds[first] if first > 0 else None)
+    return cuts, (block[first][0] if first > 0 else None)
 
 
 def delete_ranges(
@@ -529,6 +539,46 @@ def delete_ranges(
 
     output.extend(tokens[prev:])
     return output
+
+
+def collect_conditional_blocks(
+    tokens: list[CodeToken], text: str
+) -> list[PreprocessorBlock]:
+    stack: list[PreprocessorBlock] = []
+    blocks: list[PreprocessorBlock] = []
+
+    # Conditional directives are a few percent of the stream, so pull them out in
+    # one pass and let the block scan walk that short list instead of every token.
+    directives = [
+        (i, tok[0], tok[2]) for i, tok in enumerate(tokens) if tok[2] in PPC_TOKENS
+    ]
+
+    for i, start, token_type in directives:
+        if token_type == TokenType.PPC_END:
+            if stack:
+                stack[-1].append((i, ExpressionResult.ENDIF))
+                blocks.append(stack.pop())
+            continue
+
+        if token_type == TokenType.PPC_ELSE:
+            # `#else` is logically the same as `#elif 1`.
+            # This branch is enabled if no previous branch is enabled.
+            result = ExpressionResult.ALWAYS
+        else:
+            match = r_ppc_const.match(text, start)
+            result = ExpressionResult.SOMETIMES
+            if match is not None:
+                if match.group(1) == "0":
+                    result = ExpressionResult.NEVER
+                elif match.group(1) == "1":
+                    result = ExpressionResult.ALWAYS
+
+        if token_type == TokenType.PPC_IF:
+            stack.append([(i, result)])
+        elif stack:
+            stack[-1].append((i, result))
+
+    return blocks
 
 
 def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeToken]:
@@ -551,44 +601,9 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
     if r_ppc_const.search(text) is None:
         return tokens
 
-    # Collect each complete conditional block as the `bounds` and `conditions`
+    # Collect each complete conditional block as the list of directives
     # that reduce_conditional_block takes.
-    Block = tuple[list[int], list[Condition]]
-    stack: list[Block] = []
-    blocks: list[Block] = []
-
-    # Conditional directives are a few percent of the stream, so pull them out in
-    # one pass and let the block scan walk that short list instead of every token.
-    directives = [
-        (i, tok[0], tok[2]) for i, tok in enumerate(tokens) if tok[2] in PPC_TOKENS
-    ]
-
-    for i, start, token_type in directives:
-        if token_type == TokenType.PPC_END:
-            if stack:
-                stack[-1][0].append(i)
-                blocks.append(stack.pop())
-            continue
-
-        if token_type == TokenType.PPC_ELSE:
-            # `#else` is logically the same as `#elif 1`.
-            # This branch is enabled if no previous branch is enabled.
-            condition = Condition.ALWAYS
-        else:
-            constant = r_ppc_const.match(text, start)
-            condition = Condition.SOMETIMES
-            if constant is not None:
-                if constant.group(1) == "0":
-                    condition = Condition.NEVER
-                elif constant.group(1) == "1":
-                    condition = Condition.ALWAYS
-
-        if token_type == TokenType.PPC_IF:
-            stack.append(([i], [condition]))
-        elif stack:
-            bounds, conditions = stack[-1]
-            bounds.append(i)
-            conditions.append(condition)
+    blocks = collect_conditional_blocks(tokens, text)
 
     # Decide which token indices to delete and which #elif to promote to #if.
     # Dead legs are always contiguous runs of indices, so record each one as a
@@ -598,8 +613,8 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
     cuts: list[tuple[int, int]] = []
     promote: list[int] = []
 
-    for bounds, conditions in blocks:
-        block_cuts, block_promote = reduce_conditional_block(bounds, conditions)
+    for block in blocks:
+        block_cuts, block_promote = reduce_conditional_block(block)
         cuts.extend(block_cuts)
         if block_promote is not None:
             promote.append(block_promote)

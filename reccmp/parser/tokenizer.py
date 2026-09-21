@@ -485,11 +485,12 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
         return tokens
 
     # Collect each complete conditional block: the token index of every
-    # #if/#elif/#else leg (with its constant value, if any) and its #endif.
-    # Each leg is (token index, leg token type, "0"/"1" constant or None).
-    Leg = tuple[int, TokenType, str | None]
+    # #if/#elif/#else leg (with its constant value, if any), closed by the #endif
+    # as a boundary sentinel. Each leg is (token index, "0"/"1" constant or None),
+    # and it covers the tokens up to the next entry in the list.
+    Leg = tuple[int, str | None]
     stack: list[list[Leg]] = []
-    blocks: list[tuple[list[Leg], int]] = []
+    blocks: list[list[Leg]] = []
 
     # Conditional directives are a few percent of the stream, so pull them out in
     # one pass and let the block scan walk that short list instead of every token.
@@ -500,13 +501,18 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
     for i, start, token_type in directives:
         if token_type == TokenType.PPC_END:
             if stack:
-                blocks.append((stack.pop(), i))
+                stack[-1].append((i, None))
+                blocks.append(stack.pop())
             continue
 
-        # An #else never carries a condition, so the match simply fails for it and
-        # it picks up a None const the same way a non-constant #elif does.
-        condition = r_ppc_const.match(text, start)
-        leg = (i, token_type, condition.group(1) if condition else None)
+        if token_type == TokenType.PPC_ELSE:
+            # An #else is taken exactly when every leg above it is false, which is
+            # what a constant-1 condition means here.
+            leg: Leg = (i, "1")
+        else:
+            condition = r_ppc_const.match(text, start)
+            leg = (i, condition.group(1) if condition else None)
+
         if token_type == TokenType.PPC_IF:
             stack.append([leg])
         elif stack:
@@ -519,46 +525,44 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
     cuts: list[tuple[int, int]] = []
     promote: list[int] = []
 
-    for legs, endif in blocks:
-        # Boundary token index of each leg, plus the #endif. Leg n covers the
-        # tokens in range(bounds[n] + 1, bounds[n + 1]).
-        bounds = [idx for idx, _, _ in legs] + [endif]
+    for legs in blocks:
+        endif = legs[-1][0]
 
         # Classify every leg left to right, deleting each dead one wholesale
-        # (directive and body). `taken` is the first leg that is not NEVER, and it
-        # alone decides the block: every leg before it is dead, and if it is ALWAYS
-        # then every leg after it is shadowed.
+        # (directive and body). `taken` is the token index of the first leg that is
+        # not NEVER, and it alone decides the block: every leg before it is dead,
+        # and if it is ALWAYS then every leg after it is shadowed.
         taken: int | None = None
         taken_status = LegStatus.NEVER
-        for n, (_, kind, const) in enumerate(legs):
+        for (idx, const), (nxt, _) in pairwise(legs):
             if taken_status is LegStatus.ALWAYS or const == "0":
                 # Constant-0, or shadowed by a leg that is always taken.
                 status = LegStatus.NEVER
-            elif taken is None and (const == "1" or kind is TokenType.PPC_ELSE):
-                # Constant-1, or the #else that every dead leg above falls through
-                # to. Only provable while no earlier leg might be taken instead.
+            elif taken is None and const == "1":
+                # Constant-1, or an #else recorded as one. Only provable while no
+                # earlier leg might be taken instead.
                 status = LegStatus.ALWAYS
             else:
                 # Non-constant: decided at compile time, not here.
                 status = LegStatus.SOMETIMES
 
             if status is LegStatus.NEVER:
-                cuts.append((bounds[n], bounds[n + 1]))
+                cuts.append((idx, nxt))
             elif taken is None:
-                taken, taken_status = n, status
+                taken, taken_status = idx, status
 
         if taken is not None and taken_status is LegStatus.SOMETIMES:
             # A conditional survives. Promote the first surviving leg to #if if it
             # began as an #elif, so the remaining legs are still a valid block.
-            if taken > 0:
-                promote.append(bounds[taken])
+            if taken != legs[0][0]:
+                promote.append(taken)
         else:
             # The block collapses. Drop its #endif, and if a leg is always taken,
             # drop that leg's directive too so its body becomes unconditional.
             # (With no ALWAYS leg, every leg was dead and the block vanishes.)
             cuts.append((endif, endif + 1))
             if taken is not None:
-                cuts.append((bounds[taken], bounds[taken] + 1))
+                cuts.append((taken, taken + 1))
 
     if not cuts and not promote:
         return tokens

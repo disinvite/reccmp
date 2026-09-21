@@ -425,6 +425,7 @@ def find_collapsible_ppc_branches(remain: list[CodeToken]) -> set[int]:
         elif token == TokenType.PPC_END:
             # `not interrupted`: branches are all at the same PPC level
             # `len(legs) > 1`: there is more than one option
+            # `not signature`: or the block has no brackets, so it cannot affect pairing
             # signature match: every branch has the same bracket sequence
             # (same count AND same open/close direction). Folding one branch in
             # for another is only valid if they are structurally identical.
@@ -432,7 +433,7 @@ def find_collapsible_ppc_branches(remain: list[CodeToken]) -> set[int]:
             signature = [token for _, token in legs[0]]
             if (
                 not interrupted
-                and len(legs) > 1
+                and (len(legs) > 1 or not signature)
                 and all([t for _, t in leg] == signature for leg in legs)
             ):
                 # Retain only the curly brackets from the first branch.
@@ -678,8 +679,13 @@ def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) 
         # `boundaries` has the position of each #if/#else/.../#endif
         # component of the PPC block.
         for boundaries in blocks:
-            # Check whether the entire PPC block is between the brackets.
-            if not all(open_pos < b < close_pos for b in boundaries):
+            if_pos, endif_pos = boundaries[0], boundaries[-1]
+            # Ignore a PPC block that is entirely outside the brackets.
+            if close_pos < if_pos or endif_pos < open_pos:
+                continue
+
+            # Otherwise the entire PPC block must be between the brackets.
+            if not (open_pos < if_pos and endif_pos < close_pos):
                 return False
 
     return True

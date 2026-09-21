@@ -386,7 +386,6 @@ def test_equal_bracket_sequence_without_global_balance_2():
     assert remain == [(25, 26, TokenType.CURLY_CLOSE)]
 
 
-@pytest.mark.xfail(reason="Returns nothing for this invalid input.")
 def test_option_to_salvage_valid_pairing():
     """Should return partial bracket pairing for invalid input.
     In this case, it is the pair split by `#ifdef X`.
@@ -409,7 +408,40 @@ def test_option_to_salvage_valid_pairing():
     assert scopes == {0: 18}
 
 
-@pytest.mark.xfail(reason="Single-leg PPC block is never reduced.")
+def test_naive_pairing_ignores_unrelated_else_block():
+    """Should pair brackets across a PPC block without `#else`.
+    A block with `#else` that is entirely outside the pair should not prevent this."""
+    code = dedent("""\
+        {
+        #ifdef X
+        #endif
+        }
+        #ifdef Y
+        #ifdef Z
+        #endif
+        #else
+        #endif
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert scopes == {0: 18}
+
+
+def test_extern_c_inside_branch():
+    """Should not pair brackets split by a PPC block without `#else`
+    inside one branch of a block with `#else`."""
+    code = dedent("""\
+        #ifdef Y
+        {
+        #ifdef Z
+        }
+        #endif
+        #else
+        #endif
+    """)
+    scopes, _ = resolve_scopes(tokenize_code_file(code))
+    assert not scopes
+
+
 def test_single_leg_block_inside_branch():
     code = dedent("""\
         #ifdef A

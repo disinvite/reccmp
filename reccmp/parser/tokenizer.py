@@ -541,19 +541,23 @@ def delete_ranges(
     return output
 
 
-def collect_conditional_blocks(
+def create_preprocessor_blocks(
     tokens: list[CodeToken], text: str
 ) -> list[PreprocessorBlock]:
+    """Collect sequences of preprocessor tokens into blocks.
+    Nested blocks are returned as they are found."""
     stack: list[PreprocessorBlock] = []
     blocks: list[PreprocessorBlock] = []
 
-    # Conditional directives are a few percent of the stream, so pull them out in
-    # one pass and let the block scan walk that short list instead of every token.
-    directives = [
-        (i, tok[0], tok[2]) for i, tok in enumerate(tokens) if tok[2] in PPC_TOKENS
+    # Retain the index from `tokens` because we need it to modify the starting list.
+    # Build the list this way so we create new tuples only when necessary.
+    filtered_tokens = [
+        (i, token[0], token[2])
+        for i, token in enumerate(tokens)
+        if token[2] in PPC_TOKENS
     ]
 
-    for i, start, token_type in directives:
+    for i, start, token_type in filtered_tokens:
         if token_type == TokenType.PPC_END:
             if stack:
                 stack[-1].append((i, ExpressionResult.ENDIF))
@@ -565,6 +569,8 @@ def collect_conditional_blocks(
             # This branch is enabled if no previous branch is enabled.
             result = ExpressionResult.ALWAYS
         else:
+            # If we decide to recognize other constant expressions here
+            # then we need to change the regex.
             match = r_ppc_const.match(text, start)
             result = ExpressionResult.SOMETIMES
             if match is not None:
@@ -603,7 +609,7 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
 
     # Collect each complete conditional block as the list of directives
     # that reduce_conditional_block takes.
-    blocks = collect_conditional_blocks(tokens, text)
+    blocks = create_preprocessor_blocks(tokens, text)
 
     # Decide which token indices to delete and which #elif to promote to #if.
     # Dead legs are always contiguous runs of indices, so record each one as a

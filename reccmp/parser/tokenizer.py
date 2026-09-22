@@ -489,35 +489,34 @@ def reduce_conditional_block(
     if_idx, endif = block[0][0], block[-1][0]
 
     # Find the first branch that is not definitively disabled.
-    for first, (start, condition) in enumerate(block):
-        if condition is not ExpressionResult.NEVER:
+    for first, (start, expression) in enumerate(block):
+        if (
+            expression is ExpressionResult.SOMETIMES
+            or expression is ExpressionResult.ALWAYS
+        ):
             break
     else:
-        # This is here to suppress pylint `undefined-loop-variable` error.
-        # If we are here, the block has no ENDIF, so take no action.
-        return [], None
-
-    if condition is ExpressionResult.ENDIF:
         # All branches are disabled. Remove all tokens in the block.
         return [(if_idx, endif + 1)], None
 
     # Did we encounter a branch that is always enabled (i.e. `#if 1` or `#elif 1`)
     # after reading 0-N disabled branches?
-    if condition is ExpressionResult.ALWAYS:
+    if expression is ExpressionResult.ALWAYS:
         # This branch is definitively enabled. Remove tokens from all other branches
         # and remove the preprocessor tokens that wrap this branch.
         return [(if_idx, start + 1), (block[first + 1][0], endif + 1)], None
 
     # If we are here, we can remove 0-N branches.
     cuts: list[tuple[int, int]] = []
-    for (start, condition), (stop, _) in pairwise(block):
-        if condition is ExpressionResult.NEVER:
+    for (start, expression), (stop, _) in pairwise(block):
+        if expression is ExpressionResult.NEVER:
             # Remove branches that are definitively disabled.
             cuts.append((start, stop))
-        elif condition is ExpressionResult.ALWAYS:
+        elif expression is ExpressionResult.ALWAYS:
             # If this branch is definitively enabled, any branches that follow
             # are definitively _disabled_, so remove their tokens.
             if stop != endif:
+                # Stop short of deleting the `#endif` token.
                 cuts.append((stop, endif))
 
             break
@@ -612,12 +611,12 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
     # that reduce_conditional_block takes.
     blocks = create_preprocessor_blocks(tokens, text)
 
-    # Decide which token indices to delete and which #elif to promote to #if.
-    # Dead legs are always contiguous runs of indices, so record each one as a
-    # `(start, stop)` pair that works like a slice: `tokens[start:stop]` is the run
-    # to delete. The rebuild below can then copy the survivors in slices instead of
-    # testing every token against a set.
+    # A list of [start : stop] ranges to delete from `tokens`.
     cuts: list[tuple[int, int]] = []
+
+    # If any block contains an `#elif` that will become the first surviving branch
+    # after applying `cuts`, the token type must be "promoted" to `#if` so downstream
+    # processing can see a valid preprocessor sequence.
     promote: list[int] = []
 
     for block in blocks:
@@ -626,22 +625,24 @@ def eliminate_impossible_paths(tokens: list[CodeToken], text: str) -> list[CodeT
         if block_promote is not None:
             promote.append(block_promote)
 
+    # Avoid a list copy if we can.
     if not cuts and not promote:
         return tokens
 
-    # A promoted #elif is never inside a cut, so rewriting it up front keeps the
-    # slicing below to whole runs of untouched tokens.
-    kept = tokens
+    # The `promote` list does not overlap with `cuts`, so apply this first.
+    modified = tokens
     if promote:
-        kept = list(tokens)
-        for idx in promote:
-            start, stop, _ = kept[idx]
-            kept[idx] = (start, stop, TokenType.PPC_IF)
+        modified = list(tokens)
+        for i in promote:
+            start, stop, _ = modified[i]
+            modified[i] = (start, stop, TokenType.PPC_IF)
 
-    return delete_ranges(kept, cuts)
+    return delete_ranges(modified, cuts)
 
 
-def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) -> bool:
+def check_naive_folding(
+    bracket_pairs: list[tuple[int, int]], tokens: list[CodeToken]
+) -> bool:
     """Check the new bracket pairs from pair_brackets(enable_ppc=False)
     and determine whether any of them are:
     1. Impossible: the brackets are in the same PPC block, divided by #else,
@@ -660,26 +661,27 @@ def check_naive_folding(ranges: list[tuple[int, int]], tokens: list[CodeToken]) 
     are also part of the bracket sequence.
     (i.e. don't check only for an #else token)."""
     # Start by collecting each the boundaries of each PPC block and its legs.
-    stack: list[tuple[int, list[int]]] = []
-    blocks: list[list[int]] = []  # (if_pos, separators, endif_pos)
+    stack: list[list[int]] = []
+    blocks: list[list[int]] = []
+
     for start, _, token in tokens:
         if token == TokenType.PPC_IF:
-            stack.append((start, []))
+            stack.append([start])
         elif token in (TokenType.PPC_ELSE, TokenType.PPC_ELIF):
             if stack:
-                stack[-1][1].append(start)
+                stack[-1].append(start)
         elif token == TokenType.PPC_END:
             if stack:
-                if_pos, separators = stack.pop()
-                if separators:
-                    blocks.append([if_pos, *separators, start])
+                stack[-1].append(start)
+                block = stack.pop()
+                # We are only interested in blocks with multiple branches.
+                if len(block) > 2:
+                    blocks.append(block)
 
-    # Test each pairing against every PPC block with an #else/#elif.
-    for open_pos, close_pos in ranges:
-        # `boundaries` has the position of each #if/#else/.../#endif
-        # component of the PPC block.
-        for boundaries in blocks:
-            if_pos, endif_pos = boundaries[0], boundaries[-1]
+    # Test each pairing against every PPC block with multiple branches.
+    for open_pos, close_pos in bracket_pairs:
+        for block in blocks:
+            if_pos, endif_pos = block[0], block[-1]
             # Ignore a PPC block that is entirely outside the brackets.
             if close_pos < if_pos or endif_pos < open_pos:
                 continue

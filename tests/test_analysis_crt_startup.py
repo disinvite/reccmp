@@ -314,10 +314,9 @@ def test_create_match_with_elimination():
         functions=[FunctionSet((200,)), FunctionSet((300,))],
         fingerprints={200: (read_sample,), 300: (write_sample, read_sample)},
     )
-    # Must be this order:
-    assert create_crt_matches(x_array, y_array) == [
-        (200, 300),
+    assert sorted(create_crt_matches(x_array, y_array)) == [
         (100, 200),
+        (200, 300),
     ]
 
 
@@ -405,11 +404,10 @@ def test_create_match_group_with_elimination():
         functions=[FunctionSet((300,)), FunctionSet((400, 401))],
         fingerprints={300: (read_sample,), 400: (read_sample,), 401: (write_sample,)},
     )
-    # Must be this order:
-    assert create_crt_matches(x_array, y_array) == [
+    assert sorted(create_crt_matches(x_array, y_array)) == [
+        (100, 300),
         (200, 400),
         (201, 401),
-        (100, 300),
     ]
 
 
@@ -425,6 +423,42 @@ def test_create_match_no_match_within_one_array():
         fingerprints={400: (write_sample, read_sample)},
     )
     assert create_crt_matches(x_array, y_array) == [(100, 400)]
+
+
+def test_create_match_unique_pairs_removed_together():
+    read_sample = (1000, UsedHow.READ)
+    write_sample_a = (2000, UsedHow.WRITE)
+    write_sample_b = (3000, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet((100,)), FunctionSet((300,))],
+        fingerprints={
+            100: (read_sample, write_sample_a),
+            300: (read_sample, write_sample_b),
+        },
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet((200,)), FunctionSet((400,)), FunctionSet((500,))],
+        fingerprints={
+            200: (write_sample_a,),
+            400: (read_sample,),
+            500: (write_sample_b,),
+        },
+    )
+    assert sorted(create_crt_matches(x_array, y_array)) == [(100, 200), (300, 500)]
+
+
+def test_create_match_ambiguous_partner():
+    write_sample_a = (2000, UsedHow.WRITE)
+    write_sample_b = (3000, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet((100,))],
+        fingerprints={100: (write_sample_a, write_sample_b)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet((200,)), FunctionSet((400,))],
+        fingerprints={200: (write_sample_a,), 400: (write_sample_b,)},
+    )
+    assert not create_crt_matches(x_array, y_array)
 
 
 def test_collector_small_addrs_ignored():

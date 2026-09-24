@@ -1,9 +1,10 @@
 import enum
 import re
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Callable, Iterator
+from typing import Callable, Iterator, NamedTuple
 from typing_extensions import Buffer
 from reccmp.compare.asm.const import JUMP_MNEMONICS
 from reccmp.compare.asm.instgen import (
@@ -55,8 +56,7 @@ class UsedHow(enum.Enum):
 UsedAddress = tuple[int, UsedHow]
 
 
-@dataclass(frozen=True)
-class FunctionSet:
+class FunctionSet(NamedTuple):
     """The functions connected to a single entry in a CRT startup array.
     They match as a unit, so any one of them can match the others."""
 
@@ -277,37 +277,70 @@ def detect_crt_startup_arrays(
     }
 
 
-FunctionSetIndex = dict[UsedAddress, set[tuple[ImageId, FunctionSet]]]
-"""FunctionSet must be hashable to use in the set."""
+class FunctionSetIndex:
+    """Maps each sample to the function sets that use it, from both arrays.
+    Finds pairs of orig and recomp function sets that share a sample used
+    exactly once in each array. The samples are distinguished by how they
+    are used: a READ is different from a WRITE to the same address."""
 
+    def __init__(self) -> None:
+        self._arrays: dict[ImageId, CrtStartupArray] = {}
+        # FunctionSet must be hashable to use in these sets.
+        self._groups: dict[ImageId, dict[UsedAddress, set[FunctionSet]]] = {
+            ImageId.ORIG: {},
+            ImageId.RECOMP: {},
+        }
+        # Samples that may pair an orig and recomp set.
+        # They can go stale when a set is removed, so they are checked before use.
+        self._candidates: set[UsedAddress] = set()
 
-def _add_to_function_set_index(
-    function_set_index: FunctionSetIndex, image_id: ImageId, array: CrtStartupArray
-):
-    """Add each sample from the array to the index, mapped to the function sets that use it.
-    Sampled addresses are already normalized to the original binary address space."""
-    for group in array.functions:
-        # Samples from all functions in the set are combined here.
+    def add(self, image_id: ImageId, array: CrtStartupArray):
+        """Add each sample from the array, mapped to the function sets that use it.
+        Call once for each image. Sampled addresses are already normalized to the
+        original binary address space."""
+        self._arrays[image_id] = array
+        groups = self._groups[image_id]
+        for group in array.functions:
+            # Samples from all functions in the set are combined here.
+            for func_addr in group.addrs:
+                for sample in array.fingerprints.get(func_addr, ()):
+                    groups.setdefault(sample, set()).add(group)
+                    self._candidates.add(sample)
+
+    def find_unique_pairs(self) -> list[tuple[FunctionSet, FunctionSet]]:
+        """Return each (orig, recomp) pair of function sets that share a sample used
+        exactly once in each array. A function set that would pair with more than
+        one partner is ambiguous and left out."""
+        orig_groups = self._groups[ImageId.ORIG]
+        recomp_groups = self._groups[ImageId.RECOMP]
+        pairs = set()
+        # Replace the set instead of discarding from it: a set does not shrink,
+        # and iterating it costs as much as its largest size.
+        candidates, self._candidates = self._candidates, set()
+        for sample in candidates:
+            orig = orig_groups.get(sample, ())
+            recomp = recomp_groups.get(sample, ())
+            if len(orig) == 1 and len(recomp) == 1:
+                pairs.add((next(iter(orig)), next(iter(recomp))))
+                self._candidates.add(sample)
+
+        orig_counts = Counter(orig_group for orig_group, _ in pairs)
+        recomp_counts = Counter(recomp_group for _, recomp_group in pairs)
+        return [
+            (orig_group, recomp_group)
+            for orig_group, recomp_group in pairs
+            if orig_counts[orig_group] == 1 and recomp_counts[recomp_group] == 1
+        ]
+
+    def remove(self, image_id: ImageId, group: FunctionSet):
+        """Remove a matched set so its samples can't match again."""
+        groups = self._groups[image_id]
+        fingerprints = self._arrays[image_id].fingerprints
         for func_addr in group.addrs:
-            for sample in array.fingerprints.get(func_addr, ()):
-                function_set_index.setdefault(sample, set()).add((image_id, group))
-
-
-def _find_unique_pair(
-    function_set_index: FunctionSetIndex,
-) -> tuple[FunctionSet, FunctionSet] | None:
-    """Return the (orig, recomp) function sets that share a sample used exactly
-    once in each array, or None if there are none. The samples are distinguished
-    by how they are used: a READ is different from a WRITE to the same address."""
-    for func_groups in function_set_index.values():
-        if len(func_groups) == 2:
-            [(img_x, group_x), (img_y, group_y)] = func_groups
-            if img_x != img_y:
-                # These are sets, so order is not guaranteed.
-                if img_x == ImageId.ORIG:
-                    return (group_x, group_y)
-                return (group_y, group_x)
-    return None
+            for sample in fingerprints.get(func_addr, ()):
+                groups[sample].discard(group)
+                # Removing a set may leave exactly one orig and one recomp set.
+                self._candidates.add(sample)
 
 
 def create_crt_matches(
@@ -325,26 +358,21 @@ def create_crt_matches(
     different purposes, so it seems unlikely that pooling the samples could cause a
     mismatch."""
 
-    function_set_index: FunctionSetIndex = {}
-    _add_to_function_set_index(function_set_index, ImageId.ORIG, orig_array)
-    _add_to_function_set_index(function_set_index, ImageId.RECOMP, recomp_array)
+    index = FunctionSetIndex()
+    index.add(ImageId.ORIG, orig_array)
+    index.add(ImageId.RECOMP, recomp_array)
 
     matches: list[tuple[int, int]] = []
-    thunks: list[tuple[int, int]] = []
 
-    while (pair := _find_unique_pair(function_set_index)) is not None:
-        orig_group, recomp_group = pair
-        # Match the functions in the order we detected them.
-        # zip stops at the shorter group.
-        matches.extend(zip(orig_group.addrs, recomp_group.addrs))
-        # Add the thunks last, after all functions are matched.
-        if orig_group.thunk is not None and recomp_group.thunk is not None:
-            thunks.append((orig_group.thunk, recomp_group.thunk))
+    # All pairs found in one pass are removed before looking for more.
+    while pairs := index.find_unique_pairs():
+        for orig_group, recomp_group in pairs:
+            # Match the functions in the order we detected them.
+            # zip stops at the shorter group.
+            matches.extend(zip(orig_group.addrs, recomp_group.addrs))
+            if orig_group.thunk is not None and recomp_group.thunk is not None:
+                matches.append((orig_group.thunk, recomp_group.thunk))
+            index.remove(ImageId.ORIG, orig_group)
+            index.remove(ImageId.RECOMP, recomp_group)
 
-        # Remove the matched sets so their samples can't match again.
-        matched = {(ImageId.ORIG, orig_group), (ImageId.RECOMP, recomp_group)}
-        for func_groups in function_set_index.values():
-            func_groups -= matched
-
-    matches.extend(thunks)
     return matches

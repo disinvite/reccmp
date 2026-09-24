@@ -149,8 +149,8 @@ def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:
 def get_function_fingerprint(
     db: EntityDb, image_id: ImageId, binfile: Image, addr: int
 ) -> tuple[UsedAddress, ...]:
-    """Create lists of addresses written to and read from by this function.
-    Filter the addresses that point to a matched variable entity.
+    """Create lists of addresses used by this function and the way they are used.
+    Filter the addresses that point to a matched variable or function entity.
     These two lists of identifying characteristics about the function
     are the "fingerprint" we can use for matching."""
     size = get_function_sample_size(db, image_id, addr)
@@ -205,11 +205,11 @@ def find_crt_startup_labels(db: EntityDb, image_id: ImageId) -> dict[str, int]:
 
 
 JMP_THUNKS = {b"\xe9\x00\x00\x00\x00", b"\xe9\x0b\x00\x00\x00"}
-"""Observed thunk patterns for CRT init: jump to a single function, located
+"""Observed thunk patterns for C++ init: jump to a single function, located
 either directly after the thunk or at the next 16-byte boundary."""
 
 CALL_JMP_THUNKS = {b"\xe8\x05\x00\x00\x00\xe9", b"\xe8\x0b\x00\x00\x00\xe9"}
-"""Observed thunk patterns for CRT init: call the first function, then jump to
+"""Observed thunk patterns for C++ init: call the first function, then jump to
 the second. The position of the second function depends on the size of the first,
 so its displacement is not part of the pattern."""
 
@@ -277,6 +277,39 @@ def detect_crt_startup_arrays(
     }
 
 
+FunctionSetIndex = dict[UsedAddress, set[tuple[ImageId, FunctionSet]]]
+"""FunctionSet must be hashable to use in the set."""
+
+
+def _add_to_function_set_index(
+    function_set_index: FunctionSetIndex, image_id: ImageId, array: CrtStartupArray
+):
+    """Add each sample from the array to the index, mapped to the function sets that use it.
+    Sampled addresses are already normalized to the original binary address space."""
+    for group in array.functions:
+        # Samples from all functions in the set are combined here.
+        for func_addr in group.addrs:
+            for sample in array.fingerprints.get(func_addr, ()):
+                function_set_index.setdefault(sample, set()).add((image_id, group))
+
+
+def _find_unique_pair(
+    function_set_index: FunctionSetIndex,
+) -> tuple[FunctionSet, FunctionSet] | None:
+    """Return the (orig, recomp) function sets that share a sample used exactly
+    once in each array, or None if there are none. The samples are distinguished
+    by how they are used: a READ is different from a WRITE to the same address."""
+    for func_groups in function_set_index.values():
+        if len(func_groups) == 2:
+            [(img_x, group_x), (img_y, group_y)] = func_groups
+            if img_x != img_y:
+                # These are sets, so order is not guaranteed.
+                if img_x == ImageId.ORIG:
+                    return (group_x, group_y)
+                return (group_y, group_x)
+    return None
+
+
 def create_crt_matches(
     orig_array: CrtStartupArray, recomp_array: CrtStartupArray
 ) -> list[tuple[int, int]]:
@@ -292,55 +325,26 @@ def create_crt_matches(
     different purposes, so it seems unlikely that pooling the samples could cause a
     mismatch."""
 
-    # FunctionSet must be hashable to use in both sets.
-    combined_map: dict[UsedAddress, set[tuple[ImageId, FunctionSet]]] = {}
-    # Entries to be deleted on each pass
-    # (because we cannot modify ___ while iterating over it)
-    eliminated: set[tuple[ImageId, FunctionSet]] = set()
+    function_set_index: FunctionSetIndex = {}
+    _add_to_function_set_index(function_set_index, ImageId.ORIG, orig_array)
+    _add_to_function_set_index(function_set_index, ImageId.RECOMP, recomp_array)
+
     matches: list[tuple[int, int]] = []
     thunks: list[tuple[int, int]] = []
 
-    # Sampled addresses are already normalized to the original binary address space.
-    for image_id, array in ((ImageId.ORIG, orig_array), (ImageId.RECOMP, recomp_array)):
-        for group in array.functions:
-            # Samples from all functions in the set are combined here.
-            for func_addr in group.addrs:
-                for sample in array.fingerprints.get(func_addr, ()):
-                    combined_map.setdefault(sample, set()).add((image_id, group))
+    while (pair := _find_unique_pair(function_set_index)) is not None:
+        orig_group, recomp_group = pair
+        # Match the functions in the order we detected them.
+        # zip stops at the shorter group.
+        matches.extend(zip(orig_group.addrs, recomp_group.addrs))
+        # Add the thunks last, after all functions are matched.
+        if orig_group.thunk is not None and recomp_group.thunk is not None:
+            thunks.append((orig_group.thunk, recomp_group.thunk))
 
-    while True:
-        matched_this_pass = False
-
-        # Remove startup functions matched on a previous pass.
-        for value in combined_map.values():
-            value -= eliminated
-
-        # Match function sets that contributed a sample used exactly once in each array.
-        # The samples are distinguished by how they are used. A READ is different from
-        # a WRITE to the same address.
-        for _, func_groups in combined_map.items():
-            if len(func_groups) == 2:
-                [(img_x, group_x), (img_y, group_y)] = func_groups
-                if img_x != img_y:
-                    # These are sets, so order is not guaranteed.
-                    # Figure out which group is orig and which is recomp.
-                    orig_group = group_x if img_x == ImageId.ORIG else group_y
-                    recomp_group = group_y if img_y == ImageId.RECOMP else group_x
-                    # Match the functions in the order we detected them.
-                    # zip stops at the shorter group.
-                    matches.extend(zip(orig_group.addrs, recomp_group.addrs))
-                    # Add the thunks last, after all functions are matched.
-                    if orig_group.thunk is not None and recomp_group.thunk is not None:
-                        thunks.append((orig_group.thunk, recomp_group.thunk))
-
-                    eliminated.update(func_groups)
-                    matched_this_pass = True
-                    # Break because we need to remove the addresses we just matched
-                    # to prevent a double match.
-                    break
-
-        if not matched_this_pass:
-            break
+        # Remove the matched sets so their samples can't match again.
+        matched = {(ImageId.ORIG, orig_group), (ImageId.RECOMP, recomp_group)}
+        for func_groups in function_set_index.values():
+            func_groups -= matched
 
     matches.extend(thunks)
     return matches

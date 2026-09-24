@@ -413,6 +413,20 @@ def test_create_match_group_with_elimination():
     ]
 
 
+def test_create_match_no_match_within_one_array():
+    write_sample = (1234, UsedHow.WRITE)
+    read_sample = (5000, UsedHow.READ)
+    x_array = CrtStartupArray(
+        functions=[FunctionSet((100,)), FunctionSet((200,)), FunctionSet((300,))],
+        fingerprints={100: (write_sample,), 200: (read_sample,), 300: (read_sample,)},
+    )
+    y_array = CrtStartupArray(
+        functions=[FunctionSet((400,))],
+        fingerprints={400: (write_sample, read_sample)},
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 400)]
+
+
 def test_collector_small_addrs_ignored():
     """Limit tested addresses to those large enough to be an EXE imagebase."""
     code = (

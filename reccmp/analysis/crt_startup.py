@@ -277,70 +277,15 @@ def detect_crt_startup_arrays(
     }
 
 
-class FunctionSetIndex:
-    """Maps each sample to the function sets that use it, from both arrays.
-    Finds pairs of orig and recomp function sets that share a sample used
-    exactly once in each array. The samples are distinguished by how they
-    are used: a READ is different from a WRITE to the same address."""
-
-    def __init__(self) -> None:
-        self._arrays: dict[ImageId, CrtStartupArray] = {}
-        # FunctionSet must be hashable to use in these sets.
-        self._groups: dict[ImageId, dict[UsedAddress, set[FunctionSet]]] = {
-            ImageId.ORIG: {},
-            ImageId.RECOMP: {},
-        }
-        # Samples that may pair an orig and recomp set.
-        # They can go stale when a set is removed, so they are checked before use.
-        self._candidates: set[UsedAddress] = set()
-
-    def add(self, image_id: ImageId, array: CrtStartupArray):
-        """Add each sample from the array, mapped to the function sets that use it.
-        Call once for each image. Sampled addresses are already normalized to the
-        original binary address space."""
-        self._arrays[image_id] = array
-        groups = self._groups[image_id]
-        for group in array.functions:
-            # Samples from all functions in the set are combined here.
-            for func_addr in group.addrs:
-                for sample in array.fingerprints.get(func_addr, ()):
-                    groups.setdefault(sample, set()).add(group)
-                    self._candidates.add(sample)
-
-    def find_unique_pairs(self) -> list[tuple[FunctionSet, FunctionSet]]:
-        """Return each (orig, recomp) pair of function sets that share a sample used
-        exactly once in each array. A function set that would pair with more than
-        one partner is ambiguous and left out."""
-        orig_groups = self._groups[ImageId.ORIG]
-        recomp_groups = self._groups[ImageId.RECOMP]
-        pairs = set()
-        # Replace the set instead of discarding from it: a set does not shrink,
-        # and iterating it costs as much as its largest size.
-        candidates, self._candidates = self._candidates, set()
-        for sample in candidates:
-            orig = orig_groups.get(sample, ())
-            recomp = recomp_groups.get(sample, ())
-            if len(orig) == 1 and len(recomp) == 1:
-                pairs.add((next(iter(orig)), next(iter(recomp))))
-                self._candidates.add(sample)
-
-        orig_counts = Counter(orig_group for orig_group, _ in pairs)
-        recomp_counts = Counter(recomp_group for _, recomp_group in pairs)
-        return [
-            (orig_group, recomp_group)
-            for orig_group, recomp_group in pairs
-            if orig_counts[orig_group] == 1 and recomp_counts[recomp_group] == 1
-        ]
-
-    def remove(self, image_id: ImageId, group: FunctionSet):
-        """Remove a matched set so its samples can't match again."""
-        groups = self._groups[image_id]
-        fingerprints = self._arrays[image_id].fingerprints
+def index_samples(array: CrtStartupArray) -> dict[UsedAddress, set[FunctionSet]]:
+    """Map each sample to the function sets that use it.
+    Samples from all functions in a set are combined."""
+    index: dict[UsedAddress, set[FunctionSet]] = {}
+    for group in array.functions:
         for func_addr in group.addrs:
-            for sample in fingerprints.get(func_addr, ()):
-                groups[sample].discard(group)
-                # Removing a set may leave exactly one orig and one recomp set.
-                self._candidates.add(sample)
+            for sample in array.fingerprints.get(func_addr, ()):
+                index.setdefault(sample, set()).add(group)
+    return index
 
 
 def create_crt_matches(
@@ -358,21 +303,43 @@ def create_crt_matches(
     different purposes, so it seems unlikely that pooling the samples could cause a
     mismatch."""
 
-    index = FunctionSetIndex()
-    index.add(ImageId.ORIG, orig_array)
-    index.add(ImageId.RECOMP, recomp_array)
-
+    orig_index = index_samples(orig_array)
+    recomp_index = index_samples(recomp_array)
+    # Only a sample used in both arrays can match.
+    shared = orig_index.keys() & recomp_index.keys()
     matches: list[tuple[int, int]] = []
 
-    # All pairs found in one pass are removed before looking for more.
-    while pairs := index.find_unique_pairs():
+    while True:
+        pairs = set()
+        for sample in shared:
+            orig_groups = orig_index[sample]
+            recomp_groups = recomp_index[sample]
+            if len(orig_groups) == 1 and len(recomp_groups) == 1:
+                pairs.add((next(iter(orig_groups)), next(iter(recomp_groups))))
+
+        # A set that would pair with more than one partner is ambiguous.
+        orig_counts = Counter(orig_group for orig_group, _ in pairs)
+        recomp_counts = Counter(recomp_group for _, recomp_group in pairs)
+        pairs = {
+            (orig_group, recomp_group)
+            for orig_group, recomp_group in pairs
+            if orig_counts[orig_group] == 1 and recomp_counts[recomp_group] == 1
+        }
+        if not pairs:
+            return matches
+
         for orig_group, recomp_group in pairs:
             # Match the functions in the order we detected them.
             # zip stops at the shorter group.
             matches.extend(zip(orig_group.addrs, recomp_group.addrs))
             if orig_group.thunk is not None and recomp_group.thunk is not None:
                 matches.append((orig_group.thunk, recomp_group.thunk))
-            index.remove(ImageId.ORIG, orig_group)
-            index.remove(ImageId.RECOMP, recomp_group)
 
-    return matches
+            # Remove the matched sets so their samples can't match again.
+            for array, index, group in (
+                (orig_array, orig_index, orig_group),
+                (recomp_array, recomp_index, recomp_group),
+            ):
+                for func_addr in group.addrs:
+                    for sample in array.fingerprints.get(func_addr, ()):
+                        index[sample].discard(group)

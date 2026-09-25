@@ -1,7 +1,6 @@
 import enum
 import re
 import struct
-from collections import Counter
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Callable, Iterator, NamedTuple
@@ -11,7 +10,7 @@ from reccmp.compare.asm.instgen import (
     InstructGen,
     SectionType,
 )
-from reccmp.formats import Image, PEImage
+from reccmp.formats import Image
 from reccmp.types import EntityType, ImageId
 from reccmp.compare.db import EntityDb
 
@@ -78,10 +77,11 @@ class CrtStartupArray:
     functions: list[FunctionSet] = field(default_factory=list)
     """One entry per address in the array, with any thunk unwrapped."""
 
-    fingerprints: dict[int, tuple[UsedAddress, ...]] = field(default_factory=dict)
-    """Maps function address -> (sorted) list of matched entities used in
-    the function, normalized to orig address space. These fingerprints are
-    used to match initializer functions in orig and recomp."""
+    samples: dict[FunctionSet, tuple[UsedAddress, ...]] = field(default_factory=dict)
+    """Maps function set -> matched entities used by its functions, normalized to
+    orig address space. The fingerprints of all functions in the set are combined.
+    Sets with no samples are left out because they cannot be matched.
+    These samples are used to match initializer functions in orig and recomp."""
 
 
 ADDR_REGEX = re.compile(r"0x[0-9a-f]{6,8}")
@@ -176,7 +176,7 @@ def get_function_fingerprint(
     return tuple(normalized_addrs)
 
 
-def read_crt_array(binfile: PEImage, span: range) -> Iterator[int]:
+def read_crt_array(binfile: Image, span: range) -> Iterator[int]:
     """Read 4-byte (dword) pointers from the specified range.
     Excludes the first element, a zero."""
     try:
@@ -233,7 +233,7 @@ def read_function_set(binfile: Image, addr: int) -> FunctionSet:
     return FunctionSet((addr,))
 
 
-def read_crt_functions(binfile: PEImage, span: range) -> CrtStartupArray:
+def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
     """Create the CRT array structure using the given range of addresses.
     For each function in the array that matches a known thunk pattern,
     "unwrap" the indirection so we can search the most likely place for
@@ -245,15 +245,18 @@ def read_crt_functions(binfile: PEImage, span: range) -> CrtStartupArray:
 
 
 def fingerprint_crt_functions(
-    db: EntityDb, image_id: ImageId, binfile: PEImage, array: CrtStartupArray
+    db: EntityDb, image_id: ImageId, binfile: Image, array: CrtStartupArray
 ):
     """Update the CRT array structure so that the detected functions have a characteristic
     set of addresses (the "fingerprint") read or written to by their instructions."""
     for group in array.functions:
-        for addr in group.addrs:
-            array.fingerprints[addr] = get_function_fingerprint(
-                db, image_id, binfile, addr
-            )
+        samples = tuple(
+            sample
+            for addr in group.addrs
+            for sample in get_function_fingerprint(db, image_id, binfile, addr)
+        )
+        if samples:
+            array.samples[group] = samples
 
 
 def iter_crt_array_ranges(
@@ -268,7 +271,7 @@ def iter_crt_array_ranges(
 
 
 def detect_crt_startup_arrays(
-    db: EntityDb, image_id: ImageId, binfile: PEImage
+    db: EntityDb, image_id: ImageId, binfile: Image
 ) -> dict[CrtStartupArrayType, CrtStartupArray]:
     """Return a map of CRT startup array types to each list of functions."""
     return {
@@ -278,14 +281,32 @@ def detect_crt_startup_arrays(
 
 
 def index_samples(array: CrtStartupArray) -> dict[UsedAddress, set[FunctionSet]]:
-    """Map each sample to the function sets that use it.
-    Samples from all functions in a set are combined."""
+    """Map each sample to the function sets that use it."""
     index: dict[UsedAddress, set[FunctionSet]] = {}
-    for group in array.functions:
-        for func_addr in group.addrs:
-            for sample in array.fingerprints.get(func_addr, ()):
-                index.setdefault(sample, set()).add(group)
+    for group, samples in array.samples.items():
+        for sample in samples:
+            index.setdefault(sample, set()).add(group)
     return index
+
+
+def find_unique_pairs(
+    links: list[tuple[FunctionSet, FunctionSet]],
+) -> list[tuple[FunctionSet, FunctionSet]]:
+    """Return the linked (orig, recomp) pairs whose sets are each other's only partner.
+    A set that would pair with more than one partner is ambiguous."""
+    orig_links: dict[FunctionSet, set[FunctionSet]] = {}
+    recomp_links: dict[FunctionSet, set[FunctionSet]] = {}
+    for orig_group, recomp_group in links:
+        orig_links.setdefault(orig_group, set()).add(recomp_group)
+        recomp_links.setdefault(recomp_group, set()).add(orig_group)
+
+    pairs = []
+    for orig_group, partners in orig_links.items():
+        if len(partners) == 1:
+            (recomp_group,) = partners
+            if len(recomp_links[recomp_group]) == 1:
+                pairs.append((orig_group, recomp_group))
+    return pairs
 
 
 def create_crt_matches(
@@ -310,21 +331,17 @@ def create_crt_matches(
     matches: list[tuple[int, int]] = []
 
     while True:
-        pairs = set()
+        # Link two sets if a sample is used only by them.
+        links = []
         for sample in shared:
             orig_groups = orig_index[sample]
             recomp_groups = recomp_index[sample]
             if len(orig_groups) == 1 and len(recomp_groups) == 1:
-                pairs.add((next(iter(orig_groups)), next(iter(recomp_groups))))
+                (orig_group,) = orig_groups
+                (recomp_group,) = recomp_groups
+                links.append((orig_group, recomp_group))
 
-        # A set that would pair with more than one partner is ambiguous.
-        orig_counts = Counter(orig_group for orig_group, _ in pairs)
-        recomp_counts = Counter(recomp_group for _, recomp_group in pairs)
-        pairs = {
-            (orig_group, recomp_group)
-            for orig_group, recomp_group in pairs
-            if orig_counts[orig_group] == 1 and recomp_counts[recomp_group] == 1
-        }
+        pairs = find_unique_pairs(links)
         if not pairs:
             return matches
 
@@ -340,6 +357,5 @@ def create_crt_matches(
                 (orig_array, orig_index, orig_group),
                 (recomp_array, recomp_index, recomp_group),
             ):
-                for func_addr in group.addrs:
-                    for sample in array.fingerprints.get(func_addr, ()):
-                        index[sample].discard(group)
+                for sample in array.samples[group]:
+                    index[sample].discard(group)

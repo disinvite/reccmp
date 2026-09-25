@@ -156,8 +156,7 @@ def test_xca_fingerprints_empty(binfile: PEImage):
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
 
-    assert set(array.fingerprints.keys()) == {addr for addr, _ in XCA_THUNK_MAPPING}
-    assert all(not v for v in array.fingerprints.values())
+    assert not array.samples
 
 
 def test_xca_functions(binfile: PEImage):
@@ -178,7 +177,7 @@ def test_xca_fingerprints_not_variable(binfile: PEImage):
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert not array.fingerprints[0x1001A6D0]
+    assert FunctionSet((0x1001A6D0,), thunk=0x1001A6C0) not in array.samples
 
 
 def test_xca_fingerprints_matched_variable(binfile: PEImage):
@@ -193,7 +192,42 @@ def test_xca_fingerprints_matched_variable(binfile: PEImage):
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
     fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert array.fingerprints[0x1001A6D0] == ((0x10102B28, UsedHow.READ),)
+    assert array.samples[FunctionSet((0x1001A6D0,), thunk=0x1001A6C0)] == (
+        (0x10102B28, UsedHow.READ),
+    )
+
+
+def test_fingerprint_combines_function_set():
+    """The fingerprints of both functions behind a CALL+JMP thunk are stored together
+    under their function set."""
+    code = bytearray(0x30)
+    code[0:10] = (
+        b"\xe8\x0b\x00\x00\x00\xe9\x16\x00\x00\x00"  # call 0x400010, jmp 0x400020
+    )
+    code[0x10:0x18] = (
+        b"\xc6\x05\x00\x00\x41\x00\x00"  # mov byte ptr [0x410000], 0
+        b"\xc3"  # ret
+    )
+    code[0x20:0x28] = (
+        b"\xc6\x05\x00\x00\x42\x00\x00"  # mov byte ptr [0x420000], 0
+        b"\xc3"  # ret
+    )
+    binfile = RawImage.from_memory(bytes(code), base_addr=0x400000)
+
+    db = EntityDb()
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 0x400010, size=8)
+        batch.set(ImageId.ORIG, 0x400020, size=8)
+        for addr in (0x410000, 0x420000):
+            batch.set(ImageId.ORIG, addr, name="test", type=EntityType.DATA)
+            batch.match(addr, addr)
+
+    group = FunctionSet((0x400010, 0x400020), thunk=0x400000)
+    array = CrtStartupArray(functions=[group])
+    fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
+    assert array.samples == {
+        group: ((0x410000, UsedHow.WRITE), (0x420000, UsedHow.WRITE))
+    }
 
 
 def test_xca_fingerprints_avoid_crash(binfile: PEImage):
@@ -216,65 +250,40 @@ def test_create_match_baseline():
 def test_create_match_single():
     """Should create match for unique fingerprint."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100,))], fingerprints={100: (write_sample,)}
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200,))], fingerprints={200: (write_sample,)}
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100,)): (write_sample,)})
+    y_array = CrtStartupArray(samples={FunctionSet((200,)): (write_sample,)})
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_single_call():
     """Should create match for a unique function call."""
     call_sample = (1234, UsedHow.CALL)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100,))], fingerprints={100: (call_sample,)}
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200,))], fingerprints={200: (call_sample,)}
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100,)): (call_sample,)})
+    y_array = CrtStartupArray(samples={FunctionSet((200,)): (call_sample,)})
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_call_is_not_a_read():
     """Should not match a function that calls the address with one that
     only reads it. e.g. passing the function pointer as an argument."""
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100,))],
-        fingerprints={100: ((1234, UsedHow.READ),)},
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200,))],
-        fingerprints={200: ((1234, UsedHow.CALL),)},
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100,)): ((1234, UsedHow.READ),)})
+    y_array = CrtStartupArray(samples={FunctionSet((200,)): ((1234, UsedHow.CALL),)})
     assert not create_crt_matches(x_array, y_array)
 
 
 def test_create_match_single_with_thunks_one_sided():
     """Should not add thunk match unless it exists in both arrays."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100,), thunk=500)],
-        fingerprints={100: (write_sample,)},
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200,))], fingerprints={200: (write_sample,)}
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100,), thunk=500): (write_sample,)})
+    y_array = CrtStartupArray(samples={FunctionSet((200,)): (write_sample,)})
     assert create_crt_matches(x_array, y_array) == [(100, 200)]
 
 
 def test_create_match_single_with_thunks_two_sided():
     """Should match function and thunk."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100,), thunk=500)],
-        fingerprints={100: (write_sample,)},
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200,), thunk=600)],
-        fingerprints={200: (write_sample,)},
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100,), thunk=500): (write_sample,)})
+    y_array = CrtStartupArray(samples={FunctionSet((200,), thunk=600): (write_sample,)})
     assert create_crt_matches(x_array, y_array) == [(100, 200), (500, 600)]
 
 
@@ -290,12 +299,10 @@ def test_create_match_non_unique_fingerprint(used_how: UsedHow):
     """Should not match functions if their fingerprint is not unique."""
     sample = (1234, used_how)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,)), FunctionSet((200,))],
-        fingerprints={100: (sample,), 200: (sample,)},
+        samples={FunctionSet((100,)): (sample,), FunctionSet((200,)): (sample,)},
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200,)), FunctionSet((300,))],
-        fingerprints={200: (sample,), 300: (sample,)},
+        samples={FunctionSet((200,)): (sample,), FunctionSet((300,)): (sample,)},
     )
     assert not create_crt_matches(x_array, y_array)
 
@@ -307,12 +314,16 @@ def test_create_match_with_elimination():
     # `write_sample` can be used to match uniquely on the first pass.
     # `read_sample` will provide a unique match after deleting the functions that contain `write_sample`.
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,)), FunctionSet((200,))],
-        fingerprints={100: (read_sample,), 200: (write_sample, read_sample)},
+        samples={
+            FunctionSet((100,)): (read_sample,),
+            FunctionSet((200,)): (write_sample, read_sample),
+        },
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200,)), FunctionSet((300,))],
-        fingerprints={200: (read_sample,), 300: (write_sample, read_sample)},
+        samples={
+            FunctionSet((200,)): (read_sample,),
+            FunctionSet((300,)): (write_sample, read_sample),
+        },
     )
     assert sorted(create_crt_matches(x_array, y_array)) == [
         (100, 200),
@@ -320,27 +331,11 @@ def test_create_match_with_elimination():
     ]
 
 
-def test_create_match_group_by_first_function():
-    """Should match the second function in the set when we match the first."""
+def test_create_match_group():
+    """Should match every function in the set when the set matches."""
     write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100, 101))], fingerprints={100: (write_sample,)}
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200, 201))], fingerprints={200: (write_sample,)}
-    )
-    assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
-
-
-def test_create_match_group_by_second_function():
-    """Should match the first function in the set when we match the second."""
-    write_sample = (1234, UsedHow.WRITE)
-    x_array = CrtStartupArray(
-        functions=[FunctionSet((100, 101))], fingerprints={101: (write_sample,)}
-    )
-    y_array = CrtStartupArray(
-        functions=[FunctionSet((200, 201))], fingerprints={201: (write_sample,)}
-    )
+    x_array = CrtStartupArray(samples={FunctionSet((100, 101)): (write_sample,)})
+    y_array = CrtStartupArray(samples={FunctionSet((200, 201)): (write_sample,)})
     assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
 
 
@@ -349,12 +344,10 @@ def test_create_match_group_shares_fingerprint():
     This is not the ambiguity that blocks a match between two different entries."""
     write_sample = (1234, UsedHow.WRITE)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100, 101))],
-        fingerprints={100: (write_sample,), 101: (write_sample,)},
+        samples={FunctionSet((100, 101)): (write_sample, write_sample)},
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200, 201))],
-        fingerprints={200: (write_sample,), 201: (write_sample,)},
+        samples={FunctionSet((200, 201)): (write_sample, write_sample)},
     )
     assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201)]
 
@@ -363,12 +356,10 @@ def test_create_match_group_with_thunk():
     """Should match the thunk once, not once per function in the group."""
     write_sample = (1234, UsedHow.WRITE)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100, 101), thunk=500)],
-        fingerprints={100: (write_sample,)},
+        samples={FunctionSet((100, 101), thunk=500): (write_sample,)},
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200, 201), thunk=600)],
-        fingerprints={200: (write_sample,)},
+        samples={FunctionSet((200, 201), thunk=600): (write_sample,)},
     )
     assert create_crt_matches(x_array, y_array) == [(100, 200), (101, 201), (500, 600)]
 
@@ -379,12 +370,10 @@ def test_create_match_different_patterns():
     match only the function that both patterns have in common."""
     write_sample = (1234, UsedHow.WRITE)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100, 101), thunk=500)],
-        fingerprints={100: (write_sample,)},
+        samples={FunctionSet((100, 101), thunk=500): (write_sample,)},
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200,), thunk=600)],
-        fingerprints={200: (write_sample,)},
+        samples={FunctionSet((200,), thunk=600): (write_sample,)},
     )
     assert create_crt_matches(x_array, y_array) == [(100, 200), (500, 600)]
 
@@ -397,12 +386,16 @@ def test_create_match_group_with_elimination():
     # 100, 200, 300 and 400 all use `read_sample`, so none can match on the first pass.
     # `write_sample` is unique to 201 and 401. Matching them takes their groups with them.
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,)), FunctionSet((200, 201))],
-        fingerprints={100: (read_sample,), 200: (read_sample,), 201: (write_sample,)},
+        samples={
+            FunctionSet((100,)): (read_sample,),
+            FunctionSet((200, 201)): (read_sample, write_sample),
+        },
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((300,)), FunctionSet((400, 401))],
-        fingerprints={300: (read_sample,), 400: (read_sample,), 401: (write_sample,)},
+        samples={
+            FunctionSet((300,)): (read_sample,),
+            FunctionSet((400, 401)): (read_sample, write_sample),
+        },
     )
     assert sorted(create_crt_matches(x_array, y_array)) == [
         (100, 300),
@@ -415,12 +408,14 @@ def test_create_match_no_match_within_one_array():
     write_sample = (1234, UsedHow.WRITE)
     read_sample = (5000, UsedHow.READ)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,)), FunctionSet((200,)), FunctionSet((300,))],
-        fingerprints={100: (write_sample,), 200: (read_sample,), 300: (read_sample,)},
+        samples={
+            FunctionSet((100,)): (write_sample,),
+            FunctionSet((200,)): (read_sample,),
+            FunctionSet((300,)): (read_sample,),
+        },
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((400,))],
-        fingerprints={400: (write_sample, read_sample)},
+        samples={FunctionSet((400,)): (write_sample, read_sample)},
     )
     assert create_crt_matches(x_array, y_array) == [(100, 400)]
 
@@ -430,18 +425,16 @@ def test_create_match_unique_pairs_removed_together():
     write_sample_a = (2000, UsedHow.WRITE)
     write_sample_b = (3000, UsedHow.WRITE)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,)), FunctionSet((300,))],
-        fingerprints={
-            100: (read_sample, write_sample_a),
-            300: (read_sample, write_sample_b),
+        samples={
+            FunctionSet((100,)): (read_sample, write_sample_a),
+            FunctionSet((300,)): (read_sample, write_sample_b),
         },
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200,)), FunctionSet((400,)), FunctionSet((500,))],
-        fingerprints={
-            200: (write_sample_a,),
-            400: (read_sample,),
-            500: (write_sample_b,),
+        samples={
+            FunctionSet((200,)): (write_sample_a,),
+            FunctionSet((400,)): (read_sample,),
+            FunctionSet((500,)): (write_sample_b,),
         },
     )
     assert sorted(create_crt_matches(x_array, y_array)) == [(100, 200), (300, 500)]
@@ -451,12 +444,13 @@ def test_create_match_ambiguous_partner():
     write_sample_a = (2000, UsedHow.WRITE)
     write_sample_b = (3000, UsedHow.WRITE)
     x_array = CrtStartupArray(
-        functions=[FunctionSet((100,))],
-        fingerprints={100: (write_sample_a, write_sample_b)},
+        samples={FunctionSet((100,)): (write_sample_a, write_sample_b)},
     )
     y_array = CrtStartupArray(
-        functions=[FunctionSet((200,)), FunctionSet((400,))],
-        fingerprints={200: (write_sample_a,), 400: (write_sample_b,)},
+        samples={
+            FunctionSet((200,)): (write_sample_a,),
+            FunctionSet((400,)): (write_sample_b,),
+        },
     )
     assert not create_crt_matches(x_array, y_array)
 

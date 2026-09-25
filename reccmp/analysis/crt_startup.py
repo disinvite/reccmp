@@ -1,6 +1,7 @@
 import enum
 import re
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Callable, Iterator, NamedTuple
@@ -294,19 +295,14 @@ def find_unique_pairs(
 ) -> list[tuple[FunctionSet, FunctionSet]]:
     """Return the linked (orig, recomp) pairs whose sets are each other's only partner.
     A set that would pair with more than one partner is ambiguous."""
-    orig_links: dict[FunctionSet, set[FunctionSet]] = {}
-    recomp_links: dict[FunctionSet, set[FunctionSet]] = {}
-    for orig_group, recomp_group in links:
-        orig_links.setdefault(orig_group, set()).add(recomp_group)
-        recomp_links.setdefault(recomp_group, set()).add(orig_group)
-
-    pairs = []
-    for orig_group, partners in orig_links.items():
-        if len(partners) == 1:
-            (recomp_group,) = partners
-            if len(recomp_links[recomp_group]) == 1:
-                pairs.append((orig_group, recomp_group))
-    return pairs
+    distinct = set(links)
+    orig_count = Counter(orig for orig, _ in distinct)
+    recomp_count = Counter(recomp for _, recomp in distinct)
+    return [
+        (orig, recomp)
+        for orig, recomp in distinct
+        if orig_count[orig] == 1 and recomp_count[recomp] == 1
+    ]
 
 
 def create_crt_matches(

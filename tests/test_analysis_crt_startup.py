@@ -455,6 +455,19 @@ def test_create_match_ambiguous_partner():
     assert not create_crt_matches(x_array, y_array)
 
 
+def test_create_match_two_unique_samples():
+    """Should match functions that share more than one unique sample."""
+    write_sample_a = (2000, UsedHow.WRITE)
+    write_sample_b = (3000, UsedHow.WRITE)
+    x_array = CrtStartupArray(
+        samples={FunctionSet((100,)): (write_sample_a, write_sample_b)},
+    )
+    y_array = CrtStartupArray(
+        samples={FunctionSet((200,)): (write_sample_a, write_sample_b)},
+    )
+    assert create_crt_matches(x_array, y_array) == [(100, 200)]
+
+
 def test_collector_small_addrs_ignored():
     """Limit tested addresses to those large enough to be an EXE imagebase."""
     code = (

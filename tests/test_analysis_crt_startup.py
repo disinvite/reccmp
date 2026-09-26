@@ -1,15 +1,15 @@
 import struct
 import pytest
 from reccmp.analysis.crt_startup import (
-    get_function_fingerprint,
+    get_function_xrefs,
     find_crt_startup_labels,
     read_crt_functions,
-    fingerprint_crt_functions,
+    collect_crt_xrefs,
     CrtStartupArray,
     create_crt_matches,
     expand_entry_matches,
-    UsedAddressCollector,
-    UsedHow,
+    XrefCollector,
+    RefType,
     read_function_set,
 )
 from reccmp.compare.db import EntityDb
@@ -23,35 +23,35 @@ SET_DO_MUTEX_ADDR = 0x100B6E00
 G_MUTEX_ADDR = 0x10101E78
 
 
-def test_get_function_fingerprint_empty(binfile: PEImage):
-    """The function fingerprint will be empty if entities it references are not known."""
+def test_get_function_xrefs_empty(binfile: PEImage):
+    """The function's xrefs will be empty if entities it references are not known."""
     db = EntityDb()
-    assert not get_function_fingerprint(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR)
+    assert not get_function_xrefs(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR)
 
 
-def test_get_function_fingerprint_unmatched(binfile: PEImage):
-    """The function fingerprint will be empty if entities it references are not *matched*."""
+def test_get_function_xrefs_unmatched(binfile: PEImage):
+    """The function's xrefs will be empty if entities it references are not *matched*."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, G_MUTEX_ADDR, name="g_mutex", type=EntityType.DATA)
 
-    assert not get_function_fingerprint(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR)
+    assert not get_function_xrefs(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR)
 
 
-def test_get_function_fingerprint_matched(binfile: PEImage):
-    """g_mutex variable is matched, and it should appear in the fingerprint for SetDoMutex"""
+def test_get_function_xrefs_matched(binfile: PEImage):
+    """g_mutex variable is matched, and it should appear in the xrefs for SetDoMutex"""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, G_MUTEX_ADDR, name="g_mutex", type=EntityType.DATA)
         batch.match(G_MUTEX_ADDR, G_MUTEX_ADDR)
 
-    assert get_function_fingerprint(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR) == (
-        (G_MUTEX_ADDR, UsedHow.WRITE),
+    assert get_function_xrefs(db, ImageId.ORIG, binfile, SET_DO_MUTEX_ADDR) == (
+        (G_MUTEX_ADDR, RefType.WRITE),
     )
 
 
-def test_get_function_fingerprint_called_function():
-    """Called functions appear as CALLs in the fingerprint list."""
+def test_get_function_xrefs_called_function():
+    """Called functions appear as CALLs in the xrefs."""
     start_addr = 0x400000
     other_addr = 0x401000
     code = (
@@ -66,14 +66,14 @@ def test_get_function_fingerprint_called_function():
         batch.set(ImageId.ORIG, other_addr, name="test", type=EntityType.FUNCTION)
         batch.match(other_addr, other_addr)
 
-    assert get_function_fingerprint(db, ImageId.ORIG, binfile, start_addr) == (
-        (other_addr, UsedHow.CALL),
+    assert get_function_xrefs(db, ImageId.ORIG, binfile, start_addr) == (
+        (other_addr, RefType.CALL),
     )
 
 
-def test_get_function_fingerprint_function_pointer():
+def test_get_function_xrefs_function_pointer():
     """Function entities that are not used in a call instruction appear as
-    READ entries in the fingerprint list."""
+    READ entries in the xrefs."""
     start_addr = 0x400000
     other_addr = 0x401000
     code = (
@@ -88,14 +88,14 @@ def test_get_function_fingerprint_function_pointer():
         batch.set(ImageId.ORIG, other_addr, name="test", type=EntityType.FUNCTION)
         batch.match(other_addr, other_addr)
 
-    assert get_function_fingerprint(db, ImageId.ORIG, binfile, start_addr) == (
-        (other_addr, UsedHow.READ),
+    assert get_function_xrefs(db, ImageId.ORIG, binfile, start_addr) == (
+        (other_addr, RefType.READ),
     )
 
 
 @pytest.mark.xfail(reason="Undecided on whether we need this")
-def test_get_function_fingerprint_indirect_call():
-    """Indirect function calls should have their own fingerprint category
+def test_get_function_xrefs_indirect_call():
+    """Indirect function calls should have their own xref category
     that is distinct from regular calls."""
     start_addr = 0x400000
     other_addr = 0x401000
@@ -113,8 +113,8 @@ def test_get_function_fingerprint_indirect_call():
         batch.set(ImageId.ORIG, other_addr, name="test", type=EntityType.FUNCTION)
         batch.match(other_addr, other_addr)
 
-    # TODO: Add the fingerprints here if this feature is added.
-    assert get_function_fingerprint(db, ImageId.ORIG, binfile, func_addr)
+    # TODO: Add the xrefs here if this feature is added.
+    assert get_function_xrefs(db, ImageId.ORIG, binfile, func_addr)
 
 
 XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
@@ -149,14 +149,14 @@ XCA_THUNK_MAPPING = (
 )
 
 
-def test_xca_fingerprints_empty(binfile: PEImage):
+def test_xca_xrefs_empty(binfile: PEImage):
     db = EntityDb()
 
-    # Baseline: no entities so all fingerprints are empty
+    # Baseline: no entities so all xrefs are empty
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
-    fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
+    collect_crt_xrefs(db, ImageId.ORIG, binfile, array)
 
-    assert not array.samples
+    assert not array.xrefs
 
 
 def test_xca_functions(binfile: PEImage):
@@ -166,22 +166,22 @@ def test_xca_functions(binfile: PEImage):
     assert array.function_set == {thunk: (addr,) for addr, thunk in XCA_THUNK_MAPPING}
 
 
-def test_xca_fingerprints_not_variable(binfile: PEImage):
+def test_xca_xrefs_not_variable(binfile: PEImage):
     """We have the variable's entity in the database, but its type is not set.
-    This means it cannot be part of the function's fingerprint."""
+    This means it cannot be part of the function's xrefs."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, 0x10102B28, name="g_spawnLocations")
         batch.match(0x10102B28, 0x10102B28)
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
-    fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert 0x1001A6C0 not in array.samples
+    collect_crt_xrefs(db, ImageId.ORIG, binfile, array)
+    assert 0x1001A6C0 not in array.xrefs
 
 
-def test_xca_fingerprints_matched_variable(binfile: PEImage):
+def test_xca_xrefs_matched_variable(binfile: PEImage):
     """Variable entity matched and with type set.
-    We should now see it in the function's fingerprint list."""
+    We should now see it in the function's xrefs."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(
@@ -190,12 +190,12 @@ def test_xca_fingerprints_matched_variable(binfile: PEImage):
         batch.match(0x10102B28, 0x10102B28)
 
     array = read_crt_functions(binfile, XCA_XCZ_RANGE)
-    fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert array.samples[0x1001A6C0] == ((0x10102B28, UsedHow.READ),)
+    collect_crt_xrefs(db, ImageId.ORIG, binfile, array)
+    assert array.xrefs[0x1001A6C0] == ((0x10102B28, RefType.READ),)
 
 
-def test_fingerprint_combines_function_set():
-    """The fingerprints of both functions behind a CALL+JMP thunk are stored together
+def test_xrefs_combine_function_set():
+    """The xrefs of both functions behind a CALL+JMP thunk are stored together
     under the thunk's entry."""
     code = bytearray(0x30)
     code[0:10] = (
@@ -222,13 +222,13 @@ def test_fingerprint_combines_function_set():
     array = CrtStartupArray(
         entries=[0x400000], function_set={0x400000: (0x400010, 0x400020)}
     )
-    fingerprint_crt_functions(db, ImageId.ORIG, binfile, array)
-    assert array.samples == {
-        0x400000: ((0x410000, UsedHow.WRITE), (0x420000, UsedHow.WRITE))
+    collect_crt_xrefs(db, ImageId.ORIG, binfile, array)
+    assert array.xrefs == {
+        0x400000: ((0x410000, RefType.WRITE), (0x420000, RefType.WRITE))
     }
 
 
-def test_xca_fingerprints_avoid_crash(binfile: PEImage):
+def test_xca_xrefs_avoid_crash(binfile: PEImage):
     # Misaligned end address will cause struct.iter_unpack to raise struct.error.
     modified_range = range(XCA_XCZ_RANGE.start, XCA_XCZ_RANGE.stop - 1)
 
@@ -244,123 +244,123 @@ def test_create_match_baseline():
 
 
 def test_create_match_single():
-    """Should create match for unique fingerprint."""
-    write_sample = (1234, UsedHow.WRITE)
-    x_samples = {100: (write_sample,)}
-    y_samples = {200: (write_sample,)}
-    assert create_crt_matches(x_samples, y_samples) == [(100, 200)]
+    """Should create match for unique xref."""
+    write_xref = (1234, RefType.WRITE)
+    x_xrefs = {100: (write_xref,)}
+    y_xrefs = {200: (write_xref,)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_create_match_single_call():
     """Should create match for a unique function call."""
-    call_sample = (1234, UsedHow.CALL)
-    x_samples = {100: (call_sample,)}
-    y_samples = {200: (call_sample,)}
-    assert create_crt_matches(x_samples, y_samples) == [(100, 200)]
+    call_xref = (1234, RefType.CALL)
+    x_xrefs = {100: (call_xref,)}
+    y_xrefs = {200: (call_xref,)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_create_match_call_is_not_a_read():
     """Should not match a function that calls the address with one that
     only reads it. e.g. passing the function pointer as an argument."""
-    x_samples = {100: ((1234, UsedHow.READ),)}
-    y_samples = {200: ((1234, UsedHow.CALL),)}
-    assert not create_crt_matches(x_samples, y_samples)
+    x_xrefs = {100: ((1234, RefType.READ),)}
+    y_xrefs = {200: ((1234, RefType.CALL),)}
+    assert not create_crt_matches(x_xrefs, y_xrefs)
 
 
-@pytest.mark.parametrize("used_how", UsedHow)
-def test_create_match_non_unique_fingerprint(used_how: UsedHow):
-    """Should not match functions if their fingerprint is not unique."""
-    sample = (1234, used_how)
-    x_samples = {100: (sample,), 200: (sample,)}
-    y_samples = {200: (sample,), 300: (sample,)}
-    assert not create_crt_matches(x_samples, y_samples)
+@pytest.mark.parametrize("ref_type", RefType)
+def test_create_match_non_unique_xref(ref_type: RefType):
+    """Should not match functions if their xref is not unique."""
+    xref = (1234, ref_type)
+    x_xrefs = {100: (xref,), 200: (xref,)}
+    y_xrefs = {200: (xref,), 300: (xref,)}
+    assert not create_crt_matches(x_xrefs, y_xrefs)
 
 
 def test_create_match_with_elimination():
     """Can create unique matches by eliminating already-matched functions."""
-    write_sample = (1234, UsedHow.WRITE)
-    read_sample = (5000, UsedHow.READ)
-    # `write_sample` can be used to match uniquely on the first pass.
-    # `read_sample` will provide a unique match after deleting the functions that contain `write_sample`.
-    x_samples = {100: (read_sample,), 200: (write_sample, read_sample)}
-    y_samples = {200: (read_sample,), 300: (write_sample, read_sample)}
-    assert sorted(create_crt_matches(x_samples, y_samples)) == [
+    write_xref = (1234, RefType.WRITE)
+    read_xref = (5000, RefType.READ)
+    # `write_xref` can be used to match uniquely on the first pass.
+    # `read_xref` will provide a unique match after deleting the functions that contain `write_xref`.
+    x_xrefs = {100: (read_xref,), 200: (write_xref, read_xref)}
+    y_xrefs = {200: (read_xref,), 300: (write_xref, read_xref)}
+    assert sorted(create_crt_matches(x_xrefs, y_xrefs)) == [
         (100, 200),
         (200, 300),
     ]
 
 
-def test_create_match_group_shares_fingerprint():
+def test_create_match_group_shares_xref():
     """Two functions from the same array entry may use the same address.
     This is not the ambiguity that blocks a match between two different entries."""
-    write_sample = (1234, UsedHow.WRITE)
-    x_samples = {500: (write_sample, write_sample)}
-    y_samples = {600: (write_sample, write_sample)}
-    assert create_crt_matches(x_samples, y_samples) == [(500, 600)]
+    write_xref = (1234, RefType.WRITE)
+    x_xrefs = {500: (write_xref, write_xref)}
+    y_xrefs = {600: (write_xref, write_xref)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(500, 600)]
 
 
 def test_create_match_no_match_within_one_array():
-    write_sample = (1234, UsedHow.WRITE)
-    read_sample = (5000, UsedHow.READ)
-    x_samples = {
-        100: (write_sample,),
-        200: (read_sample,),
-        300: (read_sample,),
+    write_xref = (1234, RefType.WRITE)
+    read_xref = (5000, RefType.READ)
+    x_xrefs = {
+        100: (write_xref,),
+        200: (read_xref,),
+        300: (read_xref,),
     }
-    y_samples = {400: (write_sample, read_sample)}
-    assert create_crt_matches(x_samples, y_samples) == [(100, 400)]
+    y_xrefs = {400: (write_xref, read_xref)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 400)]
 
 
 def test_create_match_unique_pairs_removed_together():
-    read_sample = (1000, UsedHow.READ)
-    write_sample_a = (2000, UsedHow.WRITE)
-    write_sample_b = (3000, UsedHow.WRITE)
-    x_samples = {
-        100: (read_sample, write_sample_a),
-        300: (read_sample, write_sample_b),
+    read_xref = (1000, RefType.READ)
+    write_xref_a = (2000, RefType.WRITE)
+    write_xref_b = (3000, RefType.WRITE)
+    x_xrefs = {
+        100: (read_xref, write_xref_a),
+        300: (read_xref, write_xref_b),
     }
-    y_samples = {
-        200: (write_sample_a,),
-        400: (read_sample,),
-        500: (write_sample_b,),
+    y_xrefs = {
+        200: (write_xref_a,),
+        400: (read_xref,),
+        500: (write_xref_b,),
     }
-    assert sorted(create_crt_matches(x_samples, y_samples)) == [(100, 200), (300, 500)]
+    assert sorted(create_crt_matches(x_xrefs, y_xrefs)) == [(100, 200), (300, 500)]
 
 
 def test_create_match_ambiguous_partner():
-    write_sample_a = (2000, UsedHow.WRITE)
-    write_sample_b = (3000, UsedHow.WRITE)
-    x_samples = {100: (write_sample_a, write_sample_b)}
-    y_samples = {200: (write_sample_a,), 400: (write_sample_b,)}
-    assert not create_crt_matches(x_samples, y_samples)
+    write_xref_a = (2000, RefType.WRITE)
+    write_xref_b = (3000, RefType.WRITE)
+    x_xrefs = {100: (write_xref_a, write_xref_b)}
+    y_xrefs = {200: (write_xref_a,), 400: (write_xref_b,)}
+    assert not create_crt_matches(x_xrefs, y_xrefs)
 
 
 def test_create_match_ambiguous_partner_after_elimination():
     """An entry that was ambiguous in an earlier pass is still ambiguous
     when eliminating a matched entry gives it another partner."""
-    sample_a = (1000, UsedHow.READ)
-    sample_b = (2000, UsedHow.READ)
-    sample_c = (3000, UsedHow.READ)
-    sample_d = (4000, UsedHow.READ)
+    xref_a = (1000, RefType.READ)
+    xref_b = (2000, RefType.READ)
+    xref_c = (3000, RefType.READ)
+    xref_d = (4000, RefType.READ)
     # 100 and 200 both link to 1000 on the first pass. 400 matches 2000.
-    # Removing 400 links 300 to 1000 through `sample_c`.
-    x_samples = {
-        100: (sample_a,),
-        200: (sample_b,),
-        300: (sample_c,),
-        400: (sample_c, sample_d),
+    # Removing 400 links 300 to 1000 through `xref_c`.
+    x_xrefs = {
+        100: (xref_a,),
+        200: (xref_b,),
+        300: (xref_c,),
+        400: (xref_c, xref_d),
     }
-    y_samples = {1000: (sample_a, sample_b, sample_c), 2000: (sample_d,)}
-    assert create_crt_matches(x_samples, y_samples) == [(400, 2000)]
+    y_xrefs = {1000: (xref_a, xref_b, xref_c), 2000: (xref_d,)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(400, 2000)]
 
 
-def test_create_match_two_unique_samples():
-    """Should match functions that share more than one unique sample."""
-    write_sample_a = (2000, UsedHow.WRITE)
-    write_sample_b = (3000, UsedHow.WRITE)
-    x_samples = {100: (write_sample_a, write_sample_b)}
-    y_samples = {200: (write_sample_a, write_sample_b)}
-    assert create_crt_matches(x_samples, y_samples) == [(100, 200)]
+def test_create_match_two_unique_xrefs():
+    """Should match functions that share more than one unique xref."""
+    write_xref_a = (2000, RefType.WRITE)
+    write_xref_b = (3000, RefType.WRITE)
+    x_xrefs = {100: (write_xref_a, write_xref_b)}
+    y_xrefs = {200: (write_xref_a, write_xref_b)}
+    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_expand_matches_thunk_one_sided():
@@ -414,12 +414,12 @@ def test_collector_small_addrs_ignored():
         b"\xc3"  # ret
     )
 
-    collector = UsedAddressCollector(lambda _: True)
+    collector = XrefCollector(lambda _: True)
     collector.analyze(code, 0)
 
     assert collector.seen_addrs == [
-        (0x400000, UsedHow.WRITE),
-        (0x10000000, UsedHow.WRITE),
+        (0x400000, RefType.WRITE),
+        (0x10000000, RefType.WRITE),
     ]
 
 
@@ -433,13 +433,13 @@ def test_collector_repeated_addrs():
         b"\xc3"  # ret
     )
 
-    collector = UsedAddressCollector(lambda _: True)
+    collector = XrefCollector(lambda _: True)
     collector.analyze(code, 0)
 
     assert collector.seen_addrs == [
-        (0x400000, UsedHow.WRITE),
-        (0x400000, UsedHow.WRITE),
-        (0x400000, UsedHow.READ),
+        (0x400000, RefType.WRITE),
+        (0x400000, RefType.WRITE),
+        (0x400000, RefType.READ),
     ]
 
 
@@ -453,13 +453,13 @@ def test_collector_classify_float_instructions_as_read_or_write():
         b"\xc3"  # ret
     )
 
-    collector = UsedAddressCollector(lambda _: True)
+    collector = XrefCollector(lambda _: True)
     collector.analyze(code, 0)
 
     assert collector.seen_addrs == [
-        (0x401000, UsedHow.READ),
-        (0x402000, UsedHow.READ),
-        (0x403000, UsedHow.WRITE),
+        (0x401000, RefType.READ),
+        (0x402000, RefType.READ),
+        (0x403000, RefType.WRITE),
     ]
 
 
@@ -470,12 +470,12 @@ def test_collector_not_all_dst_operands_are_writes():
         b"\xc3"  # ret
     )
 
-    collector = UsedAddressCollector(lambda _: True)
+    collector = XrefCollector(lambda _: True)
     collector.analyze(code, 0)
 
     assert collector.seen_addrs == [
-        (0x400000, UsedHow.READ),
-        (0x410000, UsedHow.READ),
+        (0x400000, RefType.READ),
+        (0x410000, RefType.READ),
     ]
 
 
@@ -487,12 +487,12 @@ def test_collector_calls_and_jumps():
         b"\xc3"  # ret
     )
 
-    collector = UsedAddressCollector(lambda _: True)
+    collector = XrefCollector(lambda _: True)
     # Must set start addr here because CALLs and JMPs are relative.
     collector.analyze(code, 0x400000)
 
     assert collector.seen_addrs == [
-        (0x401000, UsedHow.CALL),
+        (0x401000, RefType.CALL),
     ]
 
 

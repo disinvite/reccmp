@@ -47,16 +47,16 @@ def get_crt_function_name(type_: CrtStartupArrayType) -> str:
     return _CRT_FUNCTION_NAMES[type_]
 
 
-class UsedHow(enum.Enum):
+class RefType(enum.Enum):
     READ = enum.auto()
     WRITE = enum.auto()
     CALL = enum.auto()
 
 
-UsedAddress = tuple[int, UsedHow]
+Xref = tuple[int, RefType]
 
 
-FunctionSampleMap = Mapping[int, tuple[UsedAddress, ...]]
+FunctionXrefMap = Mapping[int, tuple[Xref, ...]]
 
 
 @dataclass
@@ -72,18 +72,18 @@ class CrtStartupArray:
     function_set: dict[int, tuple[int, ...]] = field(default_factory=dict)
     """Maps entry -> the functions it calls or jumps to, for entries that are thunks."""
 
-    samples: FunctionSampleMap = field(default_factory=dict)
+    xrefs: FunctionXrefMap = field(default_factory=dict)
     """Maps entry -> matched entities used by its function, normalized to
-    orig address space. For a thunk, the fingerprints of all thunked functions
-    are combined. Entries with no samples are left out because they cannot be matched.
-    These samples are used to match initializer functions in orig and recomp."""
+    orig address space. For a thunk, the xrefs of all thunked functions
+    are combined. Entries with no xrefs are left out because they cannot be matched.
+    These xrefs are used to match initializer functions in orig and recomp."""
 
 
 ADDR_REGEX = re.compile(r"0x[0-9a-f]{6,8}")
 
 
-class UsedAddressCollector:
-    seen_addrs: list[UsedAddress]
+class XrefCollector:
+    seen_addrs: list[Xref]
     """List of addrs that would be replaced by a name or placeholder."""
 
     is_entity: Callable[[int], bool]
@@ -93,11 +93,11 @@ class UsedAddressCollector:
         self.is_entity = is_entity
         self.seen_addrs = []
 
-    def _append_addrs(self, text: str, used_how: UsedHow):
+    def _append_addrs(self, text: str, ref_type: RefType):
         for hex_str in ADDR_REGEX.findall(text):
             addr = int(hex_str, 16)
             if self.is_entity(addr):
-                self.seen_addrs.append((addr, used_how))
+                self.seen_addrs.append((addr, ref_type))
 
     def analyze(self, data: Buffer, start_addr: int):
         ig = InstructGen(bytes(data), start_addr, True)
@@ -113,14 +113,14 @@ class UsedAddressCollector:
                         continue
 
                     if inst_mnemonic in ("call",):
-                        self._append_addrs(inst_op_str, UsedHow.CALL)
-                        # self._append_addrs(inst_op_str, UsedHow.READ)
+                        self._append_addrs(inst_op_str, RefType.CALL)
+                        # self._append_addrs(inst_op_str, RefType.READ)
                     elif inst_mnemonic in ("mov", "fstp"):
                         dst_operand, _, src_operand = inst_op_str.partition(", ")
-                        self._append_addrs(dst_operand, UsedHow.WRITE)
-                        self._append_addrs(src_operand, UsedHow.READ)
+                        self._append_addrs(dst_operand, RefType.WRITE)
+                        self._append_addrs(src_operand, RefType.READ)
                     else:
-                        self._append_addrs(inst_op_str, UsedHow.READ)
+                        self._append_addrs(inst_op_str, RefType.READ)
 
 
 def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:
@@ -141,23 +141,22 @@ def get_function_sample_size(db: EntityDb, image_id: ImageId, addr: int) -> int:
     return 1000
 
 
-def get_function_fingerprint(
+def get_function_xrefs(
     db: EntityDb, image_id: ImageId, binfile: Image, addr: int
-) -> tuple[UsedAddress, ...]:
+) -> tuple[Xref, ...]:
     """Create lists of addresses used by this function and the way they are used.
     Filter the addresses that point to a matched variable or function entity.
-    These two lists of identifying characteristics about the function
-    are the "fingerprint" we can use for matching."""
+    These are the xrefs we use for matching."""
     size = get_function_sample_size(db, image_id, addr)
     raw = binfile.read(addr, size)
 
-    collector = UsedAddressCollector(partial(db.exists, image_id))
+    collector = XrefCollector(partial(db.exists, image_id))
     collector.analyze(raw, addr)
 
     normalized_addrs = []
-    for sample_addr, used_how in collector.seen_addrs:
-        ent = db.get(image_id, sample_addr)
-        # Only matched entities are candidates for the fingerprint
+    for xref_addr, ref_type in collector.seen_addrs:
+        ent = db.get(image_id, xref_addr)
+        # Only matched entities can be xrefs
         # because we have an address in both address spaces.
         if (
             ent
@@ -166,7 +165,7 @@ def get_function_fingerprint(
         ):
             normalized_addr = ent.addr(ImageId.ORIG)
             assert isinstance(normalized_addr, int)
-            normalized_addrs.append((normalized_addr, used_how))
+            normalized_addrs.append((normalized_addr, ref_type))
 
     return tuple(normalized_addrs)
 
@@ -247,22 +246,22 @@ def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
     return array
 
 
-def fingerprint_crt_functions(
+def collect_crt_xrefs(
     db: EntityDb, image_id: ImageId, binfile: Image, array: CrtStartupArray
 ):
-    """Update the CRT array structure so that the detected functions have a characteristic
-    set of addresses (the "fingerprint") read or written to by their instructions."""
-    samples: dict[int, tuple[UsedAddress, ...]] = {}
+    """Update the CRT array structure with the xrefs of each detected function:
+    the matched addresses its instructions read, write or call."""
+    xrefs: dict[int, tuple[Xref, ...]] = {}
     for entry in array.entries:
-        entry_samples = tuple(
-            sample
+        entry_xrefs = tuple(
+            xref
             for addr in array.function_set.get(entry, (entry,))
-            for sample in get_function_fingerprint(db, image_id, binfile, addr)
+            for xref in get_function_xrefs(db, image_id, binfile, addr)
         )
-        if entry_samples:
-            samples[entry] = entry_samples
+        if entry_xrefs:
+            xrefs[entry] = entry_xrefs
 
-    array.samples = samples
+    array.xrefs = xrefs
 
 
 def iter_crt_array_ranges(
@@ -286,30 +285,30 @@ def detect_crt_startup_arrays(
     }
 
 
-def _index_samples(
-    entry_to_sample_map: FunctionSampleMap,
-) -> dict[UsedAddress, set[int]]:
-    """Invert the input that maps each CRT array entry to samples collected from the function set.
-    Return a mapping of samples that point to each array entry where the sample was seen.
+def _index_xrefs(
+    entry_to_xref_map: FunctionXrefMap,
+) -> dict[Xref, set[int]]:
+    """Invert the input that maps each CRT array entry to xrefs collected from the function set.
+    Return a mapping of xrefs that point to each array entry where the xref was seen.
     """
-    index: dict[UsedAddress, set[int]] = {}
-    for entry, samples in entry_to_sample_map.items():
-        for sample in samples:
-            index.setdefault(sample, set()).add(entry)
+    index: dict[Xref, set[int]] = {}
+    for entry, xrefs in entry_to_xref_map.items():
+        for xref in xrefs:
+            index.setdefault(xref, set()).add(entry)
 
     return index
 
 
-def _find_unique_pairs(links: set[tuple[int, int]]) -> list[tuple[int, int]]:
+def _find_unique_pairs(links: set[tuple[int, int]]) -> set[tuple[int, int]]:
     """Return the linked (orig, recomp) pairs whose entries are each other's only partner.
     An entry that would pair with more than one partner is ambiguous."""
     orig_count = Counter(orig for orig, _ in links)
     recomp_count = Counter(recomp for _, recomp in links)
-    return [
+    return {
         (orig, recomp)
         for orig, recomp in links
         if orig_count[orig] == 1 and recomp_count[recomp] == 1
-    ]
+    }
 
 
 def expand_entry_matches(
@@ -334,55 +333,60 @@ def expand_entry_matches(
 
 
 def create_crt_matches(
-    orig_samples: FunctionSampleMap,
-    recomp_samples: FunctionSampleMap,
+    orig_xrefs: FunctionXrefMap,
+    recomp_xrefs: FunctionXrefMap,
 ) -> list[tuple[int, int]]:
     """Return a list of matched pairs of entries from the CRT startup array.
-    Matches are created using the combination of sampled addresses and how they
-    are used (fingerprint). We can create a match if the sample is used only once
+    Matches are created using xrefs: the addresses each function uses and how
+    it uses them. We can create a match if an xref is used by only one entry
     in each array, eliminating matched entries from the pool until no new matches
     can be created.
 
-    If the address in the CRT startup array points to a thunk, the samples for all
+    If the address in the CRT startup array points to a thunk, the xrefs for all
     thunked functions are pooled together. In the case of the C++ init functions,
     the only case where we have observed a thunk so far, the thunked functions serve
-    different purposes, so it seems unlikely that pooling the samples could cause a
+    different purposes, so it seems unlikely that pooling the xrefs could cause a
     mismatch."""
 
-    orig_index = _index_samples(orig_samples)
-    recomp_index = _index_samples(recomp_samples)
-    # Only a sample used in both arrays can link two entries.
+    # Build lists of function sets that contain each xref.
+    orig_index = _index_xrefs(orig_xrefs)
+    recomp_index = _index_xrefs(recomp_xrefs)
+
+    # We can only match with an xref common to both images.
     candidates = orig_index.keys() & recomp_index.keys()
-    links: set[tuple[int, int]] = set()
+    potential_pairs: set[tuple[int, int]] = set()
     matches: list[tuple[int, int]] = []
 
     while True:
-        # Link two entries if a sample is used only by them.
-        for sample in candidates:
-            orig_entries = orig_index.get(sample, ())
-            recomp_entries = recomp_index.get(sample, ())
+        for xref in candidates:
+            orig_entries = orig_index.get(xref, ())
+            recomp_entries = recomp_index.get(xref, ())
+            # If the xref is unique to each image, the pairing is a potential match.
             if len(orig_entries) == 1 and len(recomp_entries) == 1:
                 (orig_entry,) = orig_entries
                 (recomp_entry,) = recomp_entries
-                links.add((orig_entry, recomp_entry))
+                potential_pairs.add((orig_entry, recomp_entry))
 
-        pairs = _find_unique_pairs(links)
-        if not pairs:
+        # Extract "definitive" pairings from the list of all potential pairs.
+        # Meaning: in each image, the function set is not used by any other xref.
+        new_matches = _find_unique_pairs(potential_pairs)
+        if not new_matches:
             return matches
 
-        matches.extend(pairs)
-        # A link that did not pair will never pair, but it still makes its entries ambiguous.
-        links.difference_update(pairs)
+        matches.extend(new_matches)
+        # Remove the newly found unique pairs.
+        # The pairs that remain are there to block ambiguous matches.
+        potential_pairs -= new_matches
 
-        # Remove the matched entries. A sample left with one entry may link next round.
+        # Remove the matched entries. An xref left with one entry may link next round.
         candidates = set()
-        for orig_entry, recomp_entry in pairs:
-            for samples_by_entry, index, entry in (
-                (orig_samples, orig_index, orig_entry),
-                (recomp_samples, recomp_index, recomp_entry),
+        for orig_entry, recomp_entry in new_matches:
+            for xrefs_by_entry, index, entry in (
+                (orig_xrefs, orig_index, orig_entry),
+                (recomp_xrefs, recomp_index, recomp_entry),
             ):
-                for sample in samples_by_entry[entry]:
-                    entries = index[sample]
+                for xref in xrefs_by_entry[entry]:
+                    entries = index[xref]
                     entries.discard(entry)
                     if len(entries) == 1:
-                        candidates.add(sample)
+                        candidates.add(xref)

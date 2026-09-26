@@ -5,7 +5,7 @@ These functions create or update entities using the current information in the d
 import logging
 from reccmp.analysis.crt_startup import (
     detect_crt_startup_arrays,
-    fingerprint_crt_functions,
+    collect_crt_xrefs,
     create_crt_matches,
     expand_entry_matches,
 )
@@ -94,7 +94,7 @@ def unique_names_for_overloaded_functions(db: EntityDb):
 def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
     """Match CRT function entities established in create_crt_functions().
     For best performance, call after set_max_size() has provided a limit for
-    CRT function size. Otherwise, the fingerprint sampler will read more
+    CRT function size. Otherwise, the xref collector will read more
     bytes than necessary for each function."""
     crt_orig = detect_crt_startup_arrays(db, ImageId.ORIG, orig_bin)
     crt_recomp = detect_crt_startup_arrays(db, ImageId.RECOMP, recomp_bin)
@@ -107,9 +107,9 @@ def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
             continue
 
         if orig_array.entries and recomp_array.entries:
-            fingerprint_crt_functions(db, ImageId.ORIG, orig_bin, orig_array)
-            fingerprint_crt_functions(db, ImageId.RECOMP, recomp_bin, recomp_array)
-            pairs = create_crt_matches(orig_array.samples, recomp_array.samples)
+            collect_crt_xrefs(db, ImageId.ORIG, orig_bin, orig_array)
+            collect_crt_xrefs(db, ImageId.RECOMP, recomp_bin, recomp_array)
+            pairs = create_crt_matches(orig_array.xrefs, recomp_array.xrefs)
             matches.extend(expand_entry_matches(orig_array, recomp_array, pairs))
 
     with db.batch() as batch:

@@ -7,6 +7,7 @@ from reccmp.analysis.crt_startup import (
     detect_crt_startup_arrays,
     fingerprint_crt_functions,
     create_crt_matches,
+    expand_entry_matches,
 )
 from reccmp.cvdump.demangler import (
     get_function_arg_string,
@@ -105,10 +106,11 @@ def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
         if recomp_array is None:
             continue
 
-        if orig_array.functions and recomp_array.functions:
+        if orig_array.entries and recomp_array.entries:
             fingerprint_crt_functions(db, ImageId.ORIG, orig_bin, orig_array)
             fingerprint_crt_functions(db, ImageId.RECOMP, recomp_bin, recomp_array)
-            matches.extend(create_crt_matches(orig_array, recomp_array))
+            pairs = create_crt_matches(orig_array.samples, recomp_array.samples)
+            matches.extend(expand_entry_matches(orig_array, recomp_array, pairs))
 
     with db.batch() as batch:
         for orig_addr, recomp_addr in matches:

@@ -4,7 +4,7 @@ import struct
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Callable, Iterator, NamedTuple
+from typing import Callable, Iterator, Mapping
 from typing_extensions import Buffer
 from reccmp.compare.asm.const import JUMP_MNEMONICS
 from reccmp.compare.asm.instgen import (
@@ -56,16 +56,7 @@ class UsedHow(enum.Enum):
 UsedAddress = tuple[int, UsedHow]
 
 
-class FunctionSet(NamedTuple):
-    """The functions connected to a single entry in a CRT startup array.
-    They match as a unit, so any one of them can match the others."""
-
-    addrs: tuple[int, ...]
-    """The functions we match by fingerprint, in the order we detected them.
-    The thunk is excluded: it matches only after its group has matched."""
-
-    thunk: int | None = None
-    """The address that actually appeared in the array, if it is a thunk."""
+FunctionSampleMap = Mapping[int, tuple[UsedAddress, ...]]
 
 
 @dataclass
@@ -75,13 +66,16 @@ class CrtStartupArray:
     For example: addresses of C++ initializer functions are between
     the labels ___xc_a and ___xc_z."""
 
-    functions: list[FunctionSet] = field(default_factory=list)
-    """One entry per address in the array, with any thunk unwrapped."""
+    entries: list[int] = field(default_factory=list)
+    """The addresses in the array."""
 
-    samples: dict[FunctionSet, tuple[UsedAddress, ...]] = field(default_factory=dict)
-    """Maps function set -> matched entities used by its functions, normalized to
-    orig address space. The fingerprints of all functions in the set are combined.
-    Sets with no samples are left out because they cannot be matched.
+    function_set: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    """Maps entry -> the functions it calls or jumps to, for entries that are thunks."""
+
+    samples: FunctionSampleMap = field(default_factory=dict)
+    """Maps entry -> matched entities used by its function, normalized to
+    orig address space. For a thunk, the fingerprints of all thunked functions
+    are combined. Entries with no samples are left out because they cannot be matched.
     These samples are used to match initializer functions in orig and recomp."""
 
 
@@ -215,23 +209,26 @@ the second. The position of the second function depends on the size of the first
 so its displacement is not part of the pattern."""
 
 
-def read_function_set(binfile: Image, addr: int) -> FunctionSet:
-    """Read enough of the CRT startup function at `addr` to tell if it is a thunk.
-    In MSVC binaries, we have observed C++ initializer functions acting as thunks for
-    one or two other functions. If there are two (CALL + JMP pattern), the second
-    function sets the destructor using atexit(). If a similar pattern appears in
-    other kinds of startup functions, we will detect it here."""
+def read_function_set(binfile: Image, addr: int) -> tuple[int, ...]:
+    """For the given address of a function in a CRT startup array, return the list of
+    connected functions that follow specific patterns. For example, in the C++ initializer
+    array, we have observed two thunk patterns that point to:
+    1. JMP only:    Initializer function
+    2. CALL + JMP:  Initializer function, atexit destructor setter function"""
     data = binfile.read(addr, 10)
-    first, second = struct.unpack("<xixi", data)
+    first_disp, second_disp = struct.unpack("<xixi", data)
 
     if data[:5] in JMP_THUNKS:
-        return FunctionSet((addr + 5 + first,), thunk=addr)
+        return (addr + 5 + first_disp,)
 
-    # The jmp to the second function is the only displacement that varies. It always goes forward.
-    if data[:6] in CALL_JMP_THUNKS and second >= 0:
-        return FunctionSet((addr + 5 + first, addr + 10 + second), thunk=addr)
+    # In the CALL + JMP pattern, we cannot predict the JMP operand value because
+    # the displacement depends on the size of the function in the CALL instruction.
+    # However, the trend is that the three functions are in sequence, so allow
+    # a forward jump only.
+    if data[:6] in CALL_JMP_THUNKS and second_disp >= 0:
+        return (addr + 5 + first_disp, addr + 10 + second_disp)
 
-    return FunctionSet((addr,))
+    return ()
 
 
 def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
@@ -239,10 +236,15 @@ def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
     For each function in the array that matches a known thunk pattern,
     "unwrap" the indirection so we can search the most likely place for
     the instruction that sets the variable."""
+    array = CrtStartupArray()
     # n.b. The first value in the array is zero. It was excluded by read_crt_array.
-    return CrtStartupArray(
-        [read_function_set(binfile, addr) for addr in read_crt_array(binfile, span)]
-    )
+    for addr in read_crt_array(binfile, span):
+        array.entries.append(addr)
+        thunked = read_function_set(binfile, addr)
+        if thunked:
+            array.function_set[addr] = thunked
+
+    return array
 
 
 def fingerprint_crt_functions(
@@ -250,14 +252,17 @@ def fingerprint_crt_functions(
 ):
     """Update the CRT array structure so that the detected functions have a characteristic
     set of addresses (the "fingerprint") read or written to by their instructions."""
-    for group in array.functions:
-        samples = tuple(
+    samples: dict[int, tuple[UsedAddress, ...]] = {}
+    for entry in array.entries:
+        entry_samples = tuple(
             sample
-            for addr in group.addrs
+            for addr in array.function_set.get(entry, (entry,))
             for sample in get_function_fingerprint(db, image_id, binfile, addr)
         )
-        if samples:
-            array.samples[group] = samples
+        if entry_samples:
+            samples[entry] = entry_samples
+
+    array.samples = samples
 
 
 def iter_crt_array_ranges(
@@ -281,20 +286,23 @@ def detect_crt_startup_arrays(
     }
 
 
-def index_samples(array: CrtStartupArray) -> dict[UsedAddress, set[FunctionSet]]:
-    """Map each sample to the function sets that use it."""
-    index: dict[UsedAddress, set[FunctionSet]] = {}
-    for group, samples in array.samples.items():
+def _index_samples(
+    entry_to_sample_map: FunctionSampleMap,
+) -> dict[UsedAddress, set[int]]:
+    """Invert the input that maps each CRT array entry to samples collected from the function set.
+    Return a mapping of samples that point to each array entry where the sample was seen.
+    """
+    index: dict[UsedAddress, set[int]] = {}
+    for entry, samples in entry_to_sample_map.items():
         for sample in samples:
-            index.setdefault(sample, set()).add(group)
+            index.setdefault(sample, set()).add(entry)
+
     return index
 
 
-def find_unique_pairs(
-    links: list[tuple[FunctionSet, FunctionSet]],
-) -> list[tuple[FunctionSet, FunctionSet]]:
-    """Return the linked (orig, recomp) pairs whose sets are each other's only partner.
-    A set that would pair with more than one partner is ambiguous."""
+def _find_unique_pairs(links: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return the linked (orig, recomp) pairs whose entries are each other's only partner.
+    An entry that would pair with more than one partner is ambiguous."""
     distinct = set(links)
     orig_count = Counter(orig for orig, _ in distinct)
     recomp_count = Counter(recomp for _, recomp in distinct)
@@ -305,13 +313,35 @@ def find_unique_pairs(
     ]
 
 
-def create_crt_matches(
-    orig_array: CrtStartupArray, recomp_array: CrtStartupArray
+def expand_entry_matches(
+    orig_array: CrtStartupArray,
+    recomp_array: CrtStartupArray,
+    pairs: list[tuple[int, int]],
 ) -> list[tuple[int, int]]:
-    """Return a list of matched pairs for functions from the CRT startup array.
+    """Turn matched pairs of entries into matched pairs of functions.
+    The thunks themselves are matched only if both entries are thunks."""
+    matches: list[tuple[int, int]] = []
+    for orig_entry, recomp_entry in pairs:
+        orig_thunked = orig_array.function_set.get(orig_entry)
+        recomp_thunked = recomp_array.function_set.get(recomp_entry)
+        # zip stops at the shorter group.
+        matches.extend(
+            zip(orig_thunked or (orig_entry,), recomp_thunked or (recomp_entry,))
+        )
+        if orig_thunked and recomp_thunked:
+            matches.append((orig_entry, recomp_entry))
+
+    return matches
+
+
+def create_crt_matches(
+    orig_samples: FunctionSampleMap,
+    recomp_samples: FunctionSampleMap,
+) -> list[tuple[int, int]]:
+    """Return a list of matched pairs of entries from the CRT startup array.
     Matches are created using the combination of sampled addresses and how they
     are used (fingerprint). We can create a match if the sample is used only once
-    in each array, eliminating matched functions from the pool until no new matches
+    in each array, eliminating matched entries from the pool until no new matches
     can be created.
 
     If the address in the CRT startup array points to a thunk, the samples for all
@@ -320,38 +350,34 @@ def create_crt_matches(
     different purposes, so it seems unlikely that pooling the samples could cause a
     mismatch."""
 
-    orig_index = index_samples(orig_array)
-    recomp_index = index_samples(recomp_array)
+    orig_index = _index_samples(orig_samples)
+    recomp_index = _index_samples(recomp_samples)
     # Only a sample used in both arrays can match.
     shared = orig_index.keys() & recomp_index.keys()
     matches: list[tuple[int, int]] = []
 
     while True:
-        # Link two sets if a sample is used only by them.
+        # Link two entries if a sample is used only by them.
         links = []
         for sample in shared:
-            orig_groups = orig_index[sample]
-            recomp_groups = recomp_index[sample]
-            if len(orig_groups) == 1 and len(recomp_groups) == 1:
-                (orig_group,) = orig_groups
-                (recomp_group,) = recomp_groups
-                links.append((orig_group, recomp_group))
+            orig_entries = orig_index[sample]
+            recomp_entries = recomp_index[sample]
+            if len(orig_entries) == 1 and len(recomp_entries) == 1:
+                (orig_entry,) = orig_entries
+                (recomp_entry,) = recomp_entries
+                links.append((orig_entry, recomp_entry))
 
-        pairs = find_unique_pairs(links)
+        pairs = _find_unique_pairs(links)
         if not pairs:
             return matches
 
-        for orig_group, recomp_group in pairs:
-            # Match the functions in the order we detected them.
-            # zip stops at the shorter group.
-            matches.extend(zip(orig_group.addrs, recomp_group.addrs))
-            if orig_group.thunk is not None and recomp_group.thunk is not None:
-                matches.append((orig_group.thunk, recomp_group.thunk))
+        matches.extend(pairs)
 
-            # Remove the matched sets so their samples can't match again.
-            for array, index, group in (
-                (orig_array, orig_index, orig_group),
-                (recomp_array, recomp_index, recomp_group),
+        # Remove the matched entries so their samples can't match again.
+        for orig_entry, recomp_entry in pairs:
+            for samples_by_entry, index, entry in (
+                (orig_samples, orig_index, orig_entry),
+                (recomp_samples, recomp_index, recomp_entry),
             ):
-                for sample in array.samples[group]:
-                    index[sample].discard(group)
+                for sample in samples_by_entry[entry]:
+                    index[sample].discard(entry)

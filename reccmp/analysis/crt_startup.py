@@ -300,15 +300,14 @@ def _index_samples(
     return index
 
 
-def _find_unique_pairs(links: list[tuple[int, int]]) -> list[tuple[int, int]]:
+def _find_unique_pairs(links: set[tuple[int, int]]) -> list[tuple[int, int]]:
     """Return the linked (orig, recomp) pairs whose entries are each other's only partner.
     An entry that would pair with more than one partner is ambiguous."""
-    distinct = set(links)
-    orig_count = Counter(orig for orig, _ in distinct)
-    recomp_count = Counter(recomp for _, recomp in distinct)
+    orig_count = Counter(orig for orig, _ in links)
+    recomp_count = Counter(recomp for _, recomp in links)
     return [
         (orig, recomp)
-        for orig, recomp in distinct
+        for orig, recomp in links
         if orig_count[orig] == 1 and recomp_count[recomp] == 1
     ]
 
@@ -352,32 +351,38 @@ def create_crt_matches(
 
     orig_index = _index_samples(orig_samples)
     recomp_index = _index_samples(recomp_samples)
-    # Only a sample used in both arrays can match.
-    shared = orig_index.keys() & recomp_index.keys()
+    # Only a sample used in both arrays can link two entries.
+    candidates = orig_index.keys() & recomp_index.keys()
+    links: set[tuple[int, int]] = set()
     matches: list[tuple[int, int]] = []
 
     while True:
         # Link two entries if a sample is used only by them.
-        links = []
-        for sample in shared:
-            orig_entries = orig_index[sample]
-            recomp_entries = recomp_index[sample]
+        for sample in candidates:
+            orig_entries = orig_index.get(sample, ())
+            recomp_entries = recomp_index.get(sample, ())
             if len(orig_entries) == 1 and len(recomp_entries) == 1:
                 (orig_entry,) = orig_entries
                 (recomp_entry,) = recomp_entries
-                links.append((orig_entry, recomp_entry))
+                links.add((orig_entry, recomp_entry))
 
         pairs = _find_unique_pairs(links)
         if not pairs:
             return matches
 
         matches.extend(pairs)
+        # A link that did not pair will never pair, but it still makes its entries ambiguous.
+        links.difference_update(pairs)
 
-        # Remove the matched entries so their samples can't match again.
+        # Remove the matched entries. A sample left with one entry may link next round.
+        candidates = set()
         for orig_entry, recomp_entry in pairs:
             for samples_by_entry, index, entry in (
                 (orig_samples, orig_index, orig_entry),
                 (recomp_samples, recomp_index, recomp_entry),
             ):
                 for sample in samples_by_entry[entry]:
-                    index[sample].discard(entry)
+                    entries = index[sample]
+                    entries.discard(entry)
+                    if len(entries) == 1:
+                        candidates.add(sample)

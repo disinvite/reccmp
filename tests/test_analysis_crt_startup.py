@@ -335,6 +335,25 @@ def test_create_match_ambiguous_partner():
     assert not create_crt_matches(x_samples, y_samples)
 
 
+def test_create_match_ambiguous_partner_after_elimination():
+    """An entry that was ambiguous in an earlier pass is still ambiguous
+    when eliminating a matched entry gives it another partner."""
+    sample_a = (1000, UsedHow.READ)
+    sample_b = (2000, UsedHow.READ)
+    sample_c = (3000, UsedHow.READ)
+    sample_d = (4000, UsedHow.READ)
+    # 100 and 200 both link to 1000 on the first pass. 400 matches 2000.
+    # Removing 400 links 300 to 1000 through `sample_c`.
+    x_samples = {
+        100: (sample_a,),
+        200: (sample_b,),
+        300: (sample_c,),
+        400: (sample_c, sample_d),
+    }
+    y_samples = {1000: (sample_a, sample_b, sample_c), 2000: (sample_d,)}
+    assert create_crt_matches(x_samples, y_samples) == [(400, 2000)]
+
+
 def test_create_match_two_unique_samples():
     """Should match functions that share more than one unique sample."""
     write_sample_a = (2000, UsedHow.WRITE)

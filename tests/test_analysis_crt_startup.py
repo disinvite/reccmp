@@ -6,7 +6,7 @@ from reccmp.analysis.crt_startup import (
     read_crt_functions,
     collect_crt_xrefs,
     CrtStartupArray,
-    create_crt_matches,
+    create_xref_matches,
     expand_entry_matches,
     XrefCollector,
     RefType,
@@ -240,7 +240,7 @@ def test_xca_xrefs_avoid_crash(binfile: PEImage):
 
 def test_create_match_baseline():
     """No errors or exceptions for empty CRT arrays."""
-    assert not create_crt_matches({}, {})
+    assert not create_xref_matches({}, {})
 
 
 def test_create_match_single():
@@ -248,7 +248,7 @@ def test_create_match_single():
     write_xref = (1234, RefType.WRITE)
     x_xrefs = {100: (write_xref,)}
     y_xrefs = {200: (write_xref,)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_create_match_single_call():
@@ -256,7 +256,7 @@ def test_create_match_single_call():
     call_xref = (1234, RefType.CALL)
     x_xrefs = {100: (call_xref,)}
     y_xrefs = {200: (call_xref,)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_create_match_call_is_not_a_read():
@@ -264,7 +264,7 @@ def test_create_match_call_is_not_a_read():
     only reads it. e.g. passing the function pointer as an argument."""
     x_xrefs = {100: ((1234, RefType.READ),)}
     y_xrefs = {200: ((1234, RefType.CALL),)}
-    assert not create_crt_matches(x_xrefs, y_xrefs)
+    assert not create_xref_matches(x_xrefs, y_xrefs)
 
 
 @pytest.mark.parametrize("ref_type", RefType)
@@ -273,7 +273,7 @@ def test_create_match_non_unique_xref(ref_type: RefType):
     xref = (1234, ref_type)
     x_xrefs = {100: (xref,), 200: (xref,)}
     y_xrefs = {200: (xref,), 300: (xref,)}
-    assert not create_crt_matches(x_xrefs, y_xrefs)
+    assert not create_xref_matches(x_xrefs, y_xrefs)
 
 
 def test_create_match_with_elimination():
@@ -284,7 +284,7 @@ def test_create_match_with_elimination():
     # `read_xref` will provide a unique match after deleting the functions that contain `write_xref`.
     x_xrefs = {100: (read_xref,), 200: (write_xref, read_xref)}
     y_xrefs = {200: (read_xref,), 300: (write_xref, read_xref)}
-    assert sorted(create_crt_matches(x_xrefs, y_xrefs)) == [
+    assert sorted(create_xref_matches(x_xrefs, y_xrefs)) == [
         (100, 200),
         (200, 300),
     ]
@@ -296,7 +296,7 @@ def test_create_match_group_shares_xref():
     write_xref = (1234, RefType.WRITE)
     x_xrefs = {500: (write_xref, write_xref)}
     y_xrefs = {600: (write_xref, write_xref)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(500, 600)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
 
 
 def test_create_match_no_match_within_one_array():
@@ -308,7 +308,7 @@ def test_create_match_no_match_within_one_array():
         300: (read_xref,),
     }
     y_xrefs = {400: (write_xref, read_xref)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 400)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 400)]
 
 
 def test_create_match_unique_pairs_removed_together():
@@ -324,7 +324,7 @@ def test_create_match_unique_pairs_removed_together():
         400: (read_xref,),
         500: (write_xref_b,),
     }
-    assert sorted(create_crt_matches(x_xrefs, y_xrefs)) == [(100, 200), (300, 500)]
+    assert sorted(create_xref_matches(x_xrefs, y_xrefs)) == [(100, 200), (300, 500)]
 
 
 def test_create_match_ambiguous_partner():
@@ -332,7 +332,7 @@ def test_create_match_ambiguous_partner():
     write_xref_b = (3000, RefType.WRITE)
     x_xrefs = {100: (write_xref_a, write_xref_b)}
     y_xrefs = {200: (write_xref_a,), 400: (write_xref_b,)}
-    assert not create_crt_matches(x_xrefs, y_xrefs)
+    assert not create_xref_matches(x_xrefs, y_xrefs)
 
 
 def test_create_match_ambiguous_partner_after_elimination():
@@ -351,7 +351,7 @@ def test_create_match_ambiguous_partner_after_elimination():
         400: (xref_c, xref_d),
     }
     y_xrefs = {1000: (xref_a, xref_b, xref_c), 2000: (xref_d,)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(400, 2000)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(400, 2000)]
 
 
 def test_create_match_two_unique_xrefs():
@@ -360,7 +360,7 @@ def test_create_match_two_unique_xrefs():
     write_xref_b = (3000, RefType.WRITE)
     x_xrefs = {100: (write_xref_a, write_xref_b)}
     y_xrefs = {200: (write_xref_a, write_xref_b)}
-    assert create_crt_matches(x_xrefs, y_xrefs) == [(100, 200)]
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_expand_matches_thunk_one_sided():

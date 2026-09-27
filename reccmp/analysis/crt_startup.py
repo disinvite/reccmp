@@ -331,34 +331,33 @@ def expand_entry_matches(
     return matches
 
 
-def create_crt_matches(
+def create_xref_matches(
     orig_xrefs: FunctionXrefMap,
     recomp_xrefs: FunctionXrefMap,
 ) -> list[tuple[int, int]]:
-    """Match entries from two CRT startup arrays using xrefs.
+    """Match a set of functions from orig and recomp using their xrefs.
+    This requires that xrefs have been normalized to the orig address space.
 
-    In each pass, find "unique" xrefs that connect exactly one entry from each array.
-    Add these connected pairs to a set. Extract pairs from the set where each entry
-    appears only once: the entries can only connect to each other.
-    These pairs become matches.
-    Delete edges that connect a newly matched entry to its xrefs.
-    Repeat until there are no new matches.
+    In each pass, create connections between users of a unique xref: the xref appears only
+    once in each array. Add these connections to a set. Create matches from pairs of entries
+    in the set with a unique connection: the entries in each array connect only to each other.
+
+    Non-unique connections remain in the set. These entries can not match because they connect
+    to more than one other function.
+
+    When a function is matched, it no longer uses of any of its xrefs. If this creates new unique
+    xrefs, use them to create new connections. Continue until no new matches are possible.
     """
 
-    # The input maps contain edges from each entry to its xrefs.
-    # Build the reverse edge list of xrefs to entries.
+    # The input maps functions with the list of their xrefs.
+    # Build the reverse map of xrefs to their function users.
     orig_index = _index_xrefs(orig_xrefs)
     recomp_index = _index_xrefs(recomp_xrefs)
 
-    # Candidate xrefs that can connect two entries.
-    # To start, restrict to xrefs that appear in both arrays.
-    # After each pass, this set will contain only xrefs that became unique
-    # in at least one array after deleting edges to matched array entries.
+    # Set of xrefs that may connect two functions. To start, limit to xrefs used in both arrays.
     candidates = orig_index.keys() & recomp_index.keys()
 
-    # Pairs of entries connected via a unique xref.
-    # The set retains the "unresolvable" pairs where an entry points to more than
-    # one unique xref. This prevents future matches using those entries.
+    # Pairs of functions connected via a unique xref.
     connections: set[tuple[int, int]] = set()
 
     # Output list.
@@ -366,39 +365,38 @@ def create_crt_matches(
 
     while True:
         for xref in candidates:
-            # Use `get()` here because deleting edges may have dropped
-            # the xref from one of the arrays.
+            # Use `get()` here because the xref may have no remaining users.
             orig_entries = orig_index.get(xref, ())
             recomp_entries = recomp_index.get(xref, ())
             # If the xref is unique in both arrays:
             if len(orig_entries) == 1 and len(recomp_entries) == 1:
-                (orig_entry,) = orig_entries
-                (recomp_entry,) = recomp_entries
-                connections.add((orig_entry, recomp_entry))
+                (orig_addr,) = orig_entries
+                (recomp_addr,) = recomp_entries
+                connections.add((orig_addr, recomp_addr))
 
-        # Pairings on unique xrefs where orig and recomp can only pair
-        # to each other are upgraded to matches.
+        # Pull out the unique connections.
         new_matches = _find_unique_pairs(connections)
         if not new_matches:
             return matches
 
         matches.extend(new_matches)
-        # Remove newly matched pairs from the set, so it now contains only
-        # pairings where one or both entries have multiple options.
+        # Leave non-unique connections in the set to block
+        # potential matches on new connection using the same functions.
         connections -= new_matches
 
-        # For each newly matched entry, delete the edges that connect the
-        # entry to its xrefs. If this results in any xrefs that point to exactly
-        # one orig or recomp entry, we will try to create pairs on the next pass.
+        # Remove matched functions from the xref index.
+        # If this results in an xref having only one user, flag it for the next pass.
         candidates = set()
-        for orig_entry, recomp_entry in new_matches:
-            for xrefs_by_entry, index, matched_entry in (
-                (orig_xrefs, orig_index, orig_entry),
-                (recomp_xrefs, recomp_index, recomp_entry),
+        for orig_addr, recomp_addr in new_matches:
+            for xrefs_by_function, index, matched_addr in (
+                (orig_xrefs, orig_index, orig_addr),
+                (recomp_xrefs, recomp_index, recomp_addr),
             ):
-                for xref in xrefs_by_entry[matched_entry]:
-                    entries = index[xref]
-                    entries.discard(matched_entry)
-                    # If the xref is now used by only one entry in the array:
-                    if len(entries) == 1:
+                # For each xref used by a matched function:
+                for xref in xrefs_by_function[matched_addr]:
+                    # Delete the function from the xref's user list
+                    users = index[xref]
+                    users.discard(matched_addr)
+                    # If the xref has only one user left:
+                    if len(users) == 1:
                         candidates.add(xref)

@@ -299,14 +299,13 @@ def _index_xrefs(
     return index
 
 
-def _find_unique_pairs(links: set[tuple[int, int]]) -> set[tuple[int, int]]:
-    """Return the linked (orig, recomp) pairs whose entries are each other's only partner.
-    An entry that would pair with more than one partner is ambiguous."""
-    orig_count = Counter(orig for orig, _ in links)
-    recomp_count = Counter(recomp for _, recomp in links)
+def _find_unique_pairs(pairs: set[tuple[int, int]]) -> set[tuple[int, int]]:
+    """Return (orig, recomp) pairs where orig and recomp are each used only once."""
+    orig_count = Counter(orig for orig, _ in pairs)
+    recomp_count = Counter(recomp for _, recomp in pairs)
     return {
         (orig, recomp)
-        for orig, recomp in links
+        for orig, recomp in pairs
         if orig_count[orig] == 1 and recomp_count[recomp] == 1
     }
 
@@ -336,57 +335,70 @@ def create_crt_matches(
     orig_xrefs: FunctionXrefMap,
     recomp_xrefs: FunctionXrefMap,
 ) -> list[tuple[int, int]]:
-    """Return a list of matched pairs of entries from the CRT startup array.
-    Matches are created using xrefs: the addresses each function uses and how
-    it uses them. We can create a match if an xref is used by only one entry
-    in each array, eliminating matched entries from the pool until no new matches
-    can be created.
+    """Match entries from two CRT startup arrays using xrefs.
 
-    If the address in the CRT startup array points to a thunk, the xrefs for all
-    thunked functions are pooled together. In the case of the C++ init functions,
-    the only case where we have observed a thunk so far, the thunked functions serve
-    different purposes, so it seems unlikely that pooling the xrefs could cause a
-    mismatch."""
+    In each pass, find "unique" xrefs that connect exactly one entry from each array.
+    Add these connected pairs to a set. Extract pairs from the set where each entry
+    appears only once: the entries can only connect to each other.
+    These pairs become matches.
+    Delete edges that connect a newly matched entry to its xrefs.
+    Repeat until there are no new matches.
+    """
 
-    # Build lists of function sets that contain each xref.
+    # The input maps contain edges from each entry to its xrefs.
+    # Build the reverse edge list of xrefs to entries.
     orig_index = _index_xrefs(orig_xrefs)
     recomp_index = _index_xrefs(recomp_xrefs)
 
-    # We can only match with an xref common to both images.
+    # Candidate xrefs that can connect two entries.
+    # To start, restrict to xrefs that appear in both arrays.
+    # After each pass, this set will contain only xrefs that became unique
+    # in at least one array after deleting edges to matched array entries.
     candidates = orig_index.keys() & recomp_index.keys()
-    potential_pairs: set[tuple[int, int]] = set()
+
+    # Pairs of entries connected via a unique xref.
+    # The set retains the "unresolvable" pairs where an entry points to more than
+    # one unique xref. This prevents future matches using those entries.
+    connections: set[tuple[int, int]] = set()
+
+    # Output list.
     matches: list[tuple[int, int]] = []
 
     while True:
         for xref in candidates:
+            # Use `get()` here because deleting edges may have dropped
+            # the xref from one of the arrays.
             orig_entries = orig_index.get(xref, ())
             recomp_entries = recomp_index.get(xref, ())
-            # If the xref is unique to each image, the pairing is a potential match.
+            # If the xref is unique in both arrays:
             if len(orig_entries) == 1 and len(recomp_entries) == 1:
                 (orig_entry,) = orig_entries
                 (recomp_entry,) = recomp_entries
-                potential_pairs.add((orig_entry, recomp_entry))
+                connections.add((orig_entry, recomp_entry))
 
-        # Extract "definitive" pairings from the list of all potential pairs.
-        # Meaning: in each image, the function set is not used by any other xref.
-        new_matches = _find_unique_pairs(potential_pairs)
+        # Pairings on unique xrefs where orig and recomp can only pair
+        # to each other are upgraded to matches.
+        new_matches = _find_unique_pairs(connections)
         if not new_matches:
             return matches
 
         matches.extend(new_matches)
-        # Remove the newly found unique pairs.
-        # The pairs that remain are there to block ambiguous matches.
-        potential_pairs -= new_matches
+        # Remove newly matched pairs from the set, so it now contains only
+        # pairings where one or both entries have multiple options.
+        connections -= new_matches
 
-        # Remove the matched entries. An xref left with one entry may link next round.
+        # For each newly matched entry, delete the edges that connect the
+        # entry to its xrefs. If this results in any xrefs that point to exactly
+        # one orig or recomp entry, we will try to create pairs on the next pass.
         candidates = set()
         for orig_entry, recomp_entry in new_matches:
-            for xrefs_by_entry, index, entry in (
+            for xrefs_by_entry, index, matched_entry in (
                 (orig_xrefs, orig_index, orig_entry),
                 (recomp_xrefs, recomp_index, recomp_entry),
             ):
-                for xref in xrefs_by_entry[entry]:
+                for xref in xrefs_by_entry[matched_entry]:
                     entries = index[xref]
-                    entries.discard(entry)
+                    entries.discard(matched_entry)
+                    # If the xref is now used by only one entry in the array:
                     if len(entries) == 1:
                         candidates.add(xref)

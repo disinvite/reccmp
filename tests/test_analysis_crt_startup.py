@@ -5,7 +5,7 @@ from reccmp.analysis.crt_startup import (
     read_crt_functions,
     collect_crt_xrefs,
     CrtStartupArray,
-    expand_entry_matches,
+    match_function_sets,
     read_function_set,
 )
 from reccmp.analysis.xref import RefType
@@ -18,11 +18,13 @@ XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
 
 
 def test_find_crt_startup_labels_empty():
+    """Should not report CRT array range if its start and end entities do not exist."""
     db = EntityDb()
     assert not find_crt_startup_labels(db, ImageId.ORIG)
 
 
 def test_find_crt_startup_labels_cpp_init():
+    """Should report range for C++ init array if we have entities for its start and end labels."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, XCA_XCZ_RANGE.start, name="___xc_a")
@@ -46,7 +48,15 @@ XCA_THUNK_MAPPING = (
 )
 
 
+def test_xca_functions(binfile: PEImage):
+    """Should detect function set for CRT functions that follow the JMP thunk pattern."""
+    array = read_crt_functions(binfile, XCA_XCZ_RANGE)
+    assert array.entries == [thunk for _, thunk in XCA_THUNK_MAPPING]
+    assert array.function_set == {thunk: (addr,) for addr, thunk in XCA_THUNK_MAPPING}
+
+
 def test_xca_xrefs_empty(binfile: PEImage):
+    """Should not detect any xrefs for addresses that have no entity in the database."""
     db = EntityDb()
 
     # Baseline: no entities so all xrefs are empty
@@ -56,16 +66,8 @@ def test_xca_xrefs_empty(binfile: PEImage):
     assert not array.xrefs
 
 
-def test_xca_functions(binfile: PEImage):
-    """Every entry in this array is a JMP thunk to a single function."""
-    array = read_crt_functions(binfile, XCA_XCZ_RANGE)
-    assert array.entries == [thunk for _, thunk in XCA_THUNK_MAPPING]
-    assert array.function_set == {thunk: (addr,) for addr, thunk in XCA_THUNK_MAPPING}
-
-
 def test_xca_xrefs_not_variable(binfile: PEImage):
-    """We have the variable's entity in the database, but its type is not set.
-    This means it cannot be part of the function's xrefs."""
+    """Should not detect xrefs for an entity without a type."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(ImageId.ORIG, 0x10102B28, name="g_spawnLocations")
@@ -77,8 +79,7 @@ def test_xca_xrefs_not_variable(binfile: PEImage):
 
 
 def test_xca_xrefs_matched_variable(binfile: PEImage):
-    """Variable entity matched and with type set.
-    We should now see it in the function's xrefs."""
+    """Should create xref for variable `g_spawnLocations` if all expected metadata is set."""
     db = EntityDb()
     with db.batch() as batch:
         batch.set(
@@ -92,8 +93,9 @@ def test_xca_xrefs_matched_variable(binfile: PEImage):
 
 
 def test_xrefs_combine_function_set():
-    """The xrefs of both functions behind a CALL+JMP thunk are stored together
-    under the thunk's entry."""
+    """Should detect function set for CRT functions that follow the CALL + JMP thunk pattern.
+    (We need a synthetic example for this because the PE image sample does not have any to use.)
+    """
     code = bytearray(0x30)
     code[0:10] = (
         b"\xe8\x0b\x00\x00\x00\xe9\x16\x00\x00\x00"  # call 0x400010, jmp 0x400020
@@ -126,7 +128,7 @@ def test_xrefs_combine_function_set():
 
 
 def test_xca_xrefs_avoid_crash(binfile: PEImage):
-    # Misaligned end address will cause struct.iter_unpack to raise struct.error.
+    """Should handle misalignment of CRT start/end entities and not raise struct.error."""
     modified_range = range(XCA_XCZ_RANGE.start, XCA_XCZ_RANGE.stop - 1)
 
     try:
@@ -135,39 +137,49 @@ def test_xca_xrefs_avoid_crash(binfile: PEImage):
         assert False, "Should not throw"
 
 
-def test_expand_matches_thunk_one_sided():
-    """TODO"""
-    x_array = CrtStartupArray(function_set={500: (100,)})
-    y_array = CrtStartupArray()
-    assert expand_entry_matches(x_array, y_array, [(500, 200)]) == [(100, 200)]
+def test_match_function_sets_no_thunks():
+    """Should match CRT array entries without function sets (thunks)."""
+    x_array = CrtStartupArray(entries=[500])
+    y_array = CrtStartupArray(entries=[600])
+    assert match_function_sets(x_array, y_array, [(500, 600)]) == [(500, 600)]
 
 
-def test_expand_matches_thunk_two_sided():
-    """TODO"""
-    x_array = CrtStartupArray(function_set={500: (100,)})
-    y_array = CrtStartupArray(function_set={600: (200,)})
-    assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [
+def test_match_function_sets_thunk_in_one_array():
+    """Should match the function in the array with the first thunked function
+    if one array entry uses a thunk pattern and the other does not."""
+    x_array = CrtStartupArray(entries=[500], function_set={500: (100,)})
+    y_array = CrtStartupArray(
+        entries=[600],
+    )
+    assert match_function_sets(x_array, y_array, [(500, 600)]) == [(100, 600)]
+
+
+def test_match_function_sets_thunk_jmp_pattern():
+    """Should match thunks and thunked functions. Both entries use JMP pattern."""
+    x_array = CrtStartupArray(entries=[500], function_set={500: (100,)})
+    y_array = CrtStartupArray(entries=[600], function_set={600: (200,)})
+    assert match_function_sets(x_array, y_array, [(500, 600)]) == [
         (100, 200),
         (500, 600),
     ]
 
 
-def test_expand_matches_group():
-    """TODO"""
-    x_array = CrtStartupArray(function_set={500: (100, 101)})
-    y_array = CrtStartupArray(function_set={600: (200, 201)})
-    assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [
+def test_match_function_sets_thunk_call_jmp_pattern():
+    """Should match thunks and thunked functions. Both entries use CALL + JMP pattern."""
+    x_array = CrtStartupArray(entries=[500], function_set={500: (100, 101)})
+    y_array = CrtStartupArray(entries=[600], function_set={600: (200, 201)})
+    assert match_function_sets(x_array, y_array, [(500, 600)]) == [
         (100, 200),
         (101, 201),
         (500, 600),
     ]
 
 
-def test_expand_matches_different_patterns():
-    """TODO"""
-    x_array = CrtStartupArray(function_set={500: (100, 101)})
-    y_array = CrtStartupArray(function_set={600: (200,)})
-    assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [
+def test_match_function_sets_thunk_different_patterns():
+    """Should match only the first function and the thunk if the arrays use different thunk patterns"""
+    x_array = CrtStartupArray(entries=[500], function_set={500: (100, 101)})
+    y_array = CrtStartupArray(entries=[600], function_set={600: (200,)})
+    assert match_function_sets(x_array, y_array, [(500, 600)]) == [
         (100, 200),
         (500, 600),
     ]

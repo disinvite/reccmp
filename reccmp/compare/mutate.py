@@ -6,7 +6,7 @@ import logging
 from reccmp.analysis.crt_startup import (
     detect_crt_startup_arrays,
     collect_crt_xrefs,
-    expand_entry_matches,
+    match_function_sets,
 )
 from reccmp.analysis.xref import create_xref_matches
 from reccmp.cvdump.demangler import (
@@ -110,7 +110,7 @@ def match_crt_startup(db: EntityDb, orig_bin: PEImage, recomp_bin: PEImage):
             collect_crt_xrefs(db, ImageId.ORIG, orig_bin, orig_array)
             collect_crt_xrefs(db, ImageId.RECOMP, recomp_bin, recomp_array)
             pairs = create_xref_matches(orig_array.xrefs, recomp_array.xrefs)
-            matches.extend(expand_entry_matches(orig_array, recomp_array, pairs))
+            matches.extend(match_function_sets(orig_array, recomp_array, pairs))
 
     with db.batch() as batch:
         for orig_addr, recomp_addr in matches:

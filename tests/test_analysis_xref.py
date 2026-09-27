@@ -174,8 +174,21 @@ def test_create_match_duplicate_xref_same_pattern(ref_type: RefType):
     assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
 
 
+@pytest.mark.parametrize("ref_type_x", RefType)
+@pytest.mark.parametrize("ref_type_y", RefType)
+def test_create_match_duplicate_xref_different_order(
+    ref_type_x: RefType, ref_type_y: RefType
+):
+    """Should match functions that use the same xrefs despite their order."""
+    xref_1 = (1000, ref_type_x)
+    xref_2 = (2000, ref_type_y)
+    x_xrefs = {500: (xref_1, xref_2)}
+    y_xrefs = {600: (xref_2, xref_1)}
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
+
+
 @pytest.mark.parametrize("ref_type", RefType)
-def test_create_match_duplicate_xref_different_pattern(ref_type: RefType):
+def test_create_match_duplicate_xref_different_count(ref_type: RefType):
     """Should match functions that use the same xref multiple times,
     even if the functions use the xref a different number of times."""
     duplicate_xref = (1234, ref_type)
@@ -203,7 +216,10 @@ def test_create_match_reject_ambiguous_match(ref_type: RefType):
     x_xrefs = {
         100: (xref_1, xref_2),
     }
-    y_xrefs = {200: (xref_1,), 400: (xref_2,)}
+    y_xrefs = {
+        200: (xref_1,),
+        400: (xref_2,),
+    }
 
     # The functions (100, 200) and (100, 400) are connected by distinct xrefs.
     # It is not clear which pairing is correct, so we return no matches.
@@ -212,10 +228,11 @@ def test_create_match_reject_ambiguous_match(ref_type: RefType):
 
 @pytest.mark.parametrize("ref_type_x", RefType)
 @pytest.mark.parametrize("ref_type_y", RefType)
-def test_create_match_allow_unique_match_with_shared_xref(
+def test_create_match_use_unique_match_if_it_is_the_only_one(
     ref_type_x: RefType, ref_type_y: RefType
 ):
-    """???"""
+    """Should match using a unique xref if it is the only connection possible with a unique xref.
+    Ignore potential pairings that use a _non-unique_ xref."""
     xref_1 = (1234, ref_type_x)
     xref_2 = (5000, ref_type_y)
     x_xrefs = {
@@ -227,41 +244,54 @@ def test_create_match_allow_unique_match_with_shared_xref(
         400: (xref_1, xref_2),
     }
 
-    # Creating unique match (100, 400) leaves (200,) and (300,) without any functions to connec to
+    # Match (100, 400) using xref_1 because it is a unique xref.
+    # xref_2 is used by multiple functions in X. Potential pairings (200, 400) and (300, 400) are not considered.
     assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 400)]
 
 
-def test_create_match_unique_pairs_removed_together():
-    read_xref = (1000, RefType.READ)
-    write_xref_a = (2000, RefType.WRITE)
-    write_xref_b = (3000, RefType.WRITE)
+def test_create_match_use_unique_xref_as_soon_as_it_is_found():
+    """Should match any pairs of functions that use a unique xref on the first pass.
+    This is so that address order does not play a role in matching."""
+    xref_1 = (1000, RefType.READ)
+    xref_2 = (2000, RefType.WRITE)
+    xref_3 = (3000, RefType.WRITE)
     x_xrefs = {
-        100: (read_xref, write_xref_a),
-        300: (read_xref, write_xref_b),
+        100: (xref_1, xref_2),
+        300: (xref_1, xref_3),
     }
     y_xrefs = {
-        200: (write_xref_a,),
-        400: (read_xref,),
-        500: (write_xref_b,),
+        200: (xref_2,),
+        400: (xref_1,),
+        500: (xref_3,),
     }
+    # Matches (100, 200) using xref_2 and (300, 500) using xref_3 are created simultaneously.
+    # Should not match (300, 500) because xref_1 is not unique on the X side.
     assert sorted(create_xref_matches(x_xrefs, y_xrefs)) == [(100, 200), (300, 500)]
 
 
-def test_create_match_ambiguous_partner_after_elimination():
-    """TODO"""
-    xref_a = (1000, RefType.READ)
-    xref_b = (2000, RefType.READ)
-    xref_c = (3000, RefType.READ)
-    xref_d = (4000, RefType.READ)
-    # 100 and 200 both link to 1000 on the first pass. 400 matches 2000.
-    # Removing 400 links 300 to 1000 through `xref_c`.
+def test_create_match_reject_apparent_unique_match_after_elimination():
+    """Should remember ambiguous pairings that cannot result in a match.
+    Elimination may create apparent unique pairings that must be rejected."""
+    xref_1 = (1000, RefType.READ)
+    xref_2 = (2000, RefType.READ)
+    xref_3 = (3000, RefType.READ)
+    xref_4 = (4000, RefType.READ)
+
     x_xrefs = {
-        100: (xref_a,),
-        200: (xref_b,),
-        300: (xref_c,),
-        400: (xref_c, xref_d),
+        100: (xref_1,),
+        200: (xref_2,),
+        300: (xref_3,),
+        400: (xref_3, xref_4),
     }
-    y_xrefs = {1000: (xref_a, xref_b, xref_c), 2000: (xref_d,)}
+    y_xrefs = {
+        1000: (xref_1, xref_2, xref_3),
+        2000: (xref_4,),
+    }
+    # On the first pass, (400, 2000) match via unique xref_4.
+    # (100, 1000) and (200, 1000) also appear using unique xref_1 and xref_2.
+    # We cannot create a match on those functions because of the ambiguity.
+    # On the second pass, with 400 eliminated, xref_3 becomes unique, so the set of pairs becomes:
+    # { (100, 1000), (200, 1000), (300, 1000) }. We cannot return a match from this set.
     assert create_xref_matches(x_xrefs, y_xrefs) == [(400, 2000)]
 
 

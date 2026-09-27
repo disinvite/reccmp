@@ -134,15 +134,20 @@ def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
 def collect_crt_xrefs(
     db: EntityDb, image_id: ImageId, binfile: Image, array: CrtStartupArray
 ):
-    """Update the CRT array structure with the xrefs of each detected function:
-    the matched addresses its instructions read, write or call."""
+    """Update the CRT array structure with the xrefs of each function."""
     xrefs: dict[int, tuple[Xref, ...]] = {}
     for entry in array.entries:
+        # If the entry in the array is a thunk for a function set, sample the functions
+        # from the set instead.
+        sampled_funcs = array.function_set.get(entry, (entry,))
+
+        # Xrefs are pooled together for all functions in the set.
         entry_xrefs = tuple(
             xref
-            for addr in array.function_set.get(entry, (entry,))
+            for addr in sampled_funcs
             for xref in get_function_xrefs(db, image_id, binfile, addr)
         )
+
         if entry_xrefs:
             xrefs[entry] = entry_xrefs
 
@@ -170,22 +175,42 @@ def detect_crt_startup_arrays(
     }
 
 
-def expand_entry_matches(
+def match_function_sets(
     orig_array: CrtStartupArray,
     recomp_array: CrtStartupArray,
     pairs: list[tuple[int, int]],
 ) -> list[tuple[int, int]]:
-    """Turn matched pairs of entries into matched pairs of functions.
-    The thunks themselves are matched only if both entries are thunks."""
+    """Return a list of matches between functions in the two CRT startup arrays.
+    The input list `pairs` contains the array entry addresses matched by xref.
+    Expand the list so that members of the function sets are matched."""
     matches: list[tuple[int, int]] = []
     for orig_entry, recomp_entry in pairs:
-        orig_thunked = orig_array.function_set.get(orig_entry)
-        recomp_thunked = recomp_array.function_set.get(recomp_entry)
-        # zip stops at the shorter group.
-        matches.extend(
-            zip(orig_thunked or (orig_entry,), recomp_thunked or (recomp_entry,))
-        )
-        if orig_thunked and recomp_thunked:
+        assert orig_entry in orig_array.entries
+        assert recomp_entry in recomp_array.entries
+
+        # Check whether the arrays have a function set for this entry.
+        orig_set = orig_array.function_set.get(orig_entry, ())
+        recomp_set = recomp_array.function_set.get(recomp_entry, ())
+
+        if orig_set and recomp_set:
+            # Both arrays used a thunk for this entry.
+            # If one side used the JMP pattern and the other used CALL + JMP,
+            # match the first function in the set only.
+            matches.extend(zip(orig_set, recomp_set))
+            matches.append((orig_entry, recomp_entry))
+
+        # If one of the arrays has a thunk pattern but the other does not, we assume
+        # (following the C++ init pattern) that the non-thunk function is the initializer.
+        # Therefore: match the thunked initializer (first function) to the non-thunk in
+        # the other array. The thunk on only one side is not matched.
+        elif orig_set:
+            matches.append((orig_set[0], recomp_entry))
+
+        elif recomp_set:
+            matches.append((orig_entry, recomp_set[0]))
+
+        else:
+            # Neither side used a thunk pattern, just match the entries directly.
             matches.append((orig_entry, recomp_entry))
 
     return matches

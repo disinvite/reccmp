@@ -6,9 +6,9 @@ import logging
 from reccmp.analysis.crt_startup import (
     detect_crt_startup_arrays,
     collect_crt_xrefs,
-    create_xref_matches,
     expand_entry_matches,
 )
+from reccmp.analysis.xref import create_xref_matches
 from reccmp.cvdump.demangler import (
     get_function_arg_string,
 )

@@ -42,7 +42,7 @@ def get_crt_function_name(type_: CrtStartupArrayType) -> str:
 @dataclass
 class CrtStartupArray:
     """Result from analyzing functions in a CRT startup array.
-    The functions within are called before main() is executed.
+    The functions within are called either before startup or during shutdown.
     For example: addresses of C++ initializer functions are between
     the labels ___xc_a and ___xc_z."""
 
@@ -50,13 +50,10 @@ class CrtStartupArray:
     """The addresses in the array."""
 
     function_set: dict[int, tuple[int, ...]] = field(default_factory=dict)
-    """Maps entry -> the functions it calls or jumps to, for entries that are thunks."""
+    """Maps the array entry address to the addresses of related functions."""
 
     xrefs: FunctionXrefMap = field(default_factory=dict)
-    """Maps entry -> matched entities used by its function, normalized to
-    orig address space. For a thunk, the xrefs of all thunked functions
-    are combined. Entries with no xrefs are left out because they cannot be matched.
-    These xrefs are used to match initializer functions in orig and recomp."""
+    """Maps the array entry to a list of xrefs: addresses used in the function set."""
 
 
 def read_crt_array(binfile: Image, span: range) -> Iterator[int]:
@@ -122,15 +119,14 @@ def read_function_set(binfile: Image, addr: int) -> tuple[int, ...]:
 def read_crt_functions(binfile: Image, span: range) -> CrtStartupArray:
     """Create the CRT array structure using the given range of addresses.
     For each function in the array that matches a known thunk pattern,
-    "unwrap" the indirection so we can search the most likely place for
-    the instruction that sets the variable."""
+    "unwrap" the indirection and add the related functions to the list."""
     array = CrtStartupArray()
     # n.b. The first value in the array is zero. It was excluded by read_crt_array.
     for addr in read_crt_array(binfile, span):
         array.entries.append(addr)
-        thunked = read_function_set(binfile, addr)
-        if thunked:
-            array.function_set[addr] = thunked
+        function_set = read_function_set(binfile, addr)
+        if function_set:
+            array.function_set[addr] = function_set
 
     return array
 

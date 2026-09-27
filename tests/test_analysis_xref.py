@@ -1,3 +1,4 @@
+from itertools import combinations
 import pytest
 from reccmp.analysis.xref import (
     get_function_xrefs,
@@ -111,31 +112,27 @@ def test_get_function_xrefs_indirect_call():
 
 
 def test_create_match_baseline():
-    """No errors or exceptions for empty CRT arrays."""
+    """No errors or exceptions for empty xref maps."""
     assert not create_xref_matches({}, {})
 
 
-def test_create_match_single():
-    """Should create match for unique xref."""
-    write_xref = (1234, RefType.WRITE)
-    x_xrefs = {100: (write_xref,)}
-    y_xrefs = {200: (write_xref,)}
+@pytest.mark.parametrize("ref_type", RefType)
+def test_create_match_same_types(ref_type: RefType):
+    """Should create match for unique xref of the same type."""
+    xref = (1234, ref_type)
+    x_xrefs = {100: (xref,)}
+    y_xrefs = {200: (xref,)}
     assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
-def test_create_match_single_call():
-    """Should create match for a unique function call."""
-    call_xref = (1234, RefType.CALL)
-    x_xrefs = {100: (call_xref,)}
-    y_xrefs = {200: (call_xref,)}
-    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
+REFTYPE_COMBINATIONS = tuple(combinations(RefType, 2))
 
 
-def test_create_match_call_is_not_a_read():
-    """Should not match a function that calls the address with one that
-    only reads it. e.g. passing the function pointer as an argument."""
-    x_xrefs = {100: ((1234, RefType.READ),)}
-    y_xrefs = {200: ((1234, RefType.CALL),)}
+@pytest.mark.parametrize("ref_type_x, ref_type_y", REFTYPE_COMBINATIONS)
+def test_create_match_different_types(ref_type_x: RefType, ref_type_y: RefType):
+    """Should not create a match for unique xrefs of different types."""
+    x_xrefs = {100: ((1234, ref_type_x),)}
+    y_xrefs = {200: ((1234, ref_type_y),)}
     assert not create_xref_matches(x_xrefs, y_xrefs)
 
 
@@ -148,38 +145,89 @@ def test_create_match_non_unique_xref(ref_type: RefType):
     assert not create_xref_matches(x_xrefs, y_xrefs)
 
 
-def test_create_match_with_elimination():
+@pytest.mark.parametrize("ref_type_x", RefType)
+@pytest.mark.parametrize("ref_type_y", RefType)
+def test_create_match_with_elimination(ref_type_x: RefType, ref_type_y: RefType):
     """Can create unique matches by eliminating already-matched functions."""
-    write_xref = (1234, RefType.WRITE)
-    read_xref = (5000, RefType.READ)
-    # `write_xref` can be used to match uniquely on the first pass.
-    # `read_xref` will provide a unique match after deleting the functions that contain `write_xref`.
-    x_xrefs = {100: (read_xref,), 200: (write_xref, read_xref)}
-    y_xrefs = {200: (read_xref,), 300: (write_xref, read_xref)}
+    unique_xref = (1234, ref_type_x)
+    shared_xref = (5000, ref_type_y)
+
+    # `unique_xref` can be used to match uniquely on the first pass.
+    # `shared_xref` will provide a unique match after deleting the functions that use `unique_xref`.
+    x_xrefs = {100: (shared_xref,), 200: (unique_xref, shared_xref)}
+    y_xrefs = {200: (shared_xref,), 300: (unique_xref, shared_xref)}
+
+    # Using `sorted()` here because matches are created uniquely, but we also want to
+    # assert that there are no duplicates that would be hidden by using `set()`.
     assert sorted(create_xref_matches(x_xrefs, y_xrefs)) == [
         (100, 200),
         (200, 300),
     ]
 
 
-def test_create_match_group_shares_xref():
-    """Two functions from the same array entry may use the same address.
-    This is not the ambiguity that blocks a match between two different entries."""
-    write_xref = (1234, RefType.WRITE)
-    x_xrefs = {500: (write_xref, write_xref)}
-    y_xrefs = {600: (write_xref, write_xref)}
+@pytest.mark.parametrize("ref_type", RefType)
+def test_create_match_duplicate_xref_same_pattern(ref_type: RefType):
+    """Should match functions that use the same xref multiple times."""
+    duplicate_xref = (1234, ref_type)
+    x_xrefs = {500: (duplicate_xref, duplicate_xref)}
+    y_xrefs = {600: (duplicate_xref, duplicate_xref)}
     assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
 
 
-def test_create_match_no_match_within_one_array():
-    write_xref = (1234, RefType.WRITE)
-    read_xref = (5000, RefType.READ)
+@pytest.mark.parametrize("ref_type", RefType)
+def test_create_match_duplicate_xref_different_pattern(ref_type: RefType):
+    """Should match functions that use the same xref multiple times,
+    even if the functions use the xref a different number of times."""
+    duplicate_xref = (1234, ref_type)
+    x_xrefs = {500: (duplicate_xref, duplicate_xref)}
+    y_xrefs = {600: (duplicate_xref,)}
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
+
+
+@pytest.mark.parametrize("ref_type_x", RefType)
+@pytest.mark.parametrize("ref_type_y", RefType)
+def test_create_match_multiple_unique_xrefs(ref_type_x: RefType, ref_type_y: RefType):
+    """Should match functions that share multiple unique xrefs if the pairing is unique."""
+    xref_1 = (1000, ref_type_x)
+    xref_2 = (2000, ref_type_y)
+    x_xrefs = {500: (xref_1, xref_2)}
+    y_xrefs = {600: (xref_1, xref_2)}
+    assert create_xref_matches(x_xrefs, y_xrefs) == [(500, 600)]
+
+
+@pytest.mark.parametrize("ref_type", RefType)
+def test_create_match_reject_ambiguous_match(ref_type: RefType):
+    """Should not create a match when there is more than one possible pairing."""
+    xref_1 = (2000, ref_type)
+    xref_2 = (3000, ref_type)
     x_xrefs = {
-        100: (write_xref,),
-        200: (read_xref,),
-        300: (read_xref,),
+        100: (xref_1, xref_2),
     }
-    y_xrefs = {400: (write_xref, read_xref)}
+    y_xrefs = {200: (xref_1,), 400: (xref_2,)}
+
+    # The functions (100, 200) and (100, 400) are connected by distinct xrefs.
+    # It is not clear which pairing is correct, so we return no matches.
+    assert not create_xref_matches(x_xrefs, y_xrefs)
+
+
+@pytest.mark.parametrize("ref_type_x", RefType)
+@pytest.mark.parametrize("ref_type_y", RefType)
+def test_create_match_allow_unique_match_with_shared_xref(
+    ref_type_x: RefType, ref_type_y: RefType
+):
+    """???"""
+    xref_1 = (1234, ref_type_x)
+    xref_2 = (5000, ref_type_y)
+    x_xrefs = {
+        100: (xref_1,),
+        200: (xref_2,),
+        300: (xref_2,),
+    }
+    y_xrefs = {
+        400: (xref_1, xref_2),
+    }
+
+    # Creating unique match (100, 400) leaves (200,) and (300,) without any functions to connec to
     assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 400)]
 
 
@@ -199,17 +247,8 @@ def test_create_match_unique_pairs_removed_together():
     assert sorted(create_xref_matches(x_xrefs, y_xrefs)) == [(100, 200), (300, 500)]
 
 
-def test_create_match_ambiguous_partner():
-    write_xref_a = (2000, RefType.WRITE)
-    write_xref_b = (3000, RefType.WRITE)
-    x_xrefs = {100: (write_xref_a, write_xref_b)}
-    y_xrefs = {200: (write_xref_a,), 400: (write_xref_b,)}
-    assert not create_xref_matches(x_xrefs, y_xrefs)
-
-
 def test_create_match_ambiguous_partner_after_elimination():
-    """An entry that was ambiguous in an earlier pass is still ambiguous
-    when eliminating a matched entry gives it another partner."""
+    """TODO"""
     xref_a = (1000, RefType.READ)
     xref_b = (2000, RefType.READ)
     xref_c = (3000, RefType.READ)
@@ -224,15 +263,6 @@ def test_create_match_ambiguous_partner_after_elimination():
     }
     y_xrefs = {1000: (xref_a, xref_b, xref_c), 2000: (xref_d,)}
     assert create_xref_matches(x_xrefs, y_xrefs) == [(400, 2000)]
-
-
-def test_create_match_two_unique_xrefs():
-    """Should match functions that share more than one unique xref."""
-    write_xref_a = (2000, RefType.WRITE)
-    write_xref_b = (3000, RefType.WRITE)
-    x_xrefs = {100: (write_xref_a, write_xref_b)}
-    y_xrefs = {200: (write_xref_a, write_xref_b)}
-    assert create_xref_matches(x_xrefs, y_xrefs) == [(100, 200)]
 
 
 def test_collector_small_addrs_ignored():
@@ -295,6 +325,7 @@ def test_collector_classify_float_instructions_as_read_or_write():
 
 
 def test_collector_not_all_dst_operands_are_writes():
+    """Should check instruction mnemonic when deciding RefType."""
     code = (
         b"\x80\x3d\x00\x00\x40\x00\x00"  # cmp byte ptr [0x400000], 0x0
         b"\xf6\x05\x00\x00\x41\x00\x08"  # test byte ptr [0x410000], 0x8

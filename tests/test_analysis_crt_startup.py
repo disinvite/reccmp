@@ -14,7 +14,6 @@ from reccmp.formats import PEImage
 from reccmp.types import ImageId, EntityType
 from .raw_image import RawImage
 
-
 XCA_XCZ_RANGE = range(0x100F0000, 0x100F0020)
 
 
@@ -137,14 +136,14 @@ def test_xca_xrefs_avoid_crash(binfile: PEImage):
 
 
 def test_expand_matches_thunk_one_sided():
-    """Should not add thunk match unless it exists in both arrays."""
+    """TODO"""
     x_array = CrtStartupArray(function_set={500: (100,)})
     y_array = CrtStartupArray()
     assert expand_entry_matches(x_array, y_array, [(500, 200)]) == [(100, 200)]
 
 
 def test_expand_matches_thunk_two_sided():
-    """Should match function and thunk."""
+    """TODO"""
     x_array = CrtStartupArray(function_set={500: (100,)})
     y_array = CrtStartupArray(function_set={600: (200,)})
     assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [
@@ -154,8 +153,7 @@ def test_expand_matches_thunk_two_sided():
 
 
 def test_expand_matches_group():
-    """Should match every function behind the thunk when the thunk matches,
-    and match the thunk once."""
+    """TODO"""
     x_array = CrtStartupArray(function_set={500: (100, 101)})
     y_array = CrtStartupArray(function_set={600: (200, 201)})
     assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [
@@ -166,9 +164,7 @@ def test_expand_matches_group():
 
 
 def test_expand_matches_different_patterns():
-    """If one thunk leads to two functions and the other to one,
-    (i.e. if they both use thunks but with different patterns)
-    match only the function that both patterns have in common."""
+    """TODO"""
     x_array = CrtStartupArray(function_set={500: (100, 101)})
     y_array = CrtStartupArray(function_set={600: (200,)})
     assert expand_entry_matches(x_array, y_array, [(500, 600)]) == [

@@ -2,13 +2,13 @@ import re
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, NamedTuple
-from struct import calcsize, unpack, error as StructError
+from typing import NamedTuple
+from struct import unpack, error as StructError
 from typing_extensions import Self
 from reccmp.formats import Image
 from reccmp.formats.exceptions import InvalidVirtualReadError
 from reccmp.compare.db import EntityDb, ReccmpMatch
-from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap
+from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap, CVInfoTypeEnum
 from reccmp.cvdump.types import (
     CvdumpTypesParser,
     CvdumpKeyError,
@@ -16,7 +16,11 @@ from reccmp.cvdump.types import (
     FieldListItem,
 )
 from reccmp.types import ImageId
-from .type_layout import get_name_for_offset, get_scalars
+from .type_layout import (
+    get_format_string,
+    get_name_for_offset,
+    get_scalars_gapless,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,56 +129,6 @@ class DataBlock(NamedTuple):
         return cls(addr, data, bss)
 
 
-class DataOffset(NamedTuple):
-    offset: int
-    name: str
-    fmt: str
-    """Format character for struct.unpack"""
-    pointer: bool
-
-
-def to_data_offsets(scalars: Iterable[FieldListItem]) -> list[DataOffset]:
-    """Add the struct.unpack format char for each scalar."""
-    output: list[DataOffset] = []
-    for scalar in scalars:
-        cvinfo = CvdumpTypeMap[scalar.type]
-        output.append(
-            DataOffset(
-                scalar.offset, scalar.name, cvinfo.fmt, cvinfo.pointer is not None
-            )
-        )
-
-    return output
-
-
-def fill_gaps(scalars: list[DataOffset], total_size: int) -> list[DataOffset]:
-    """Fill any gap in the list of scalars with unsigned chars,
-    so the list covers every byte of the type."""
-    output: list[DataOffset] = []
-    next_offset = 0
-    for scalar in scalars:
-        output.extend(
-            DataOffset(i, "(padding)", "B", False)
-            for i in range(next_offset, scalar.offset)
-        )
-        output.append(scalar)
-        next_offset = scalar.offset + calcsize(f"<{scalar.fmt}")
-
-    output.extend(
-        DataOffset(i, "(padding)", "B", False) for i in range(next_offset, total_size)
-    )
-    return output
-
-
-def get_format_string(scalars: list[DataOffset]) -> str:
-    """Create a string for use with struct.unpack"""
-    format_string = "".join(s.fmt for s in scalars)
-    if len(format_string) > 0:
-        return "<" + format_string
-
-    return ""
-
-
 class ComparedOffset(NamedTuple):
     offset: int
     # name is None for scalar types
@@ -275,7 +229,7 @@ def pointer_display(
 
 def get_compare_items(
     types: CvdumpTypesParser, var: ReccmpMatch
-) -> tuple[int | None, list[DataOffset]]:
+) -> tuple[int | None, list[FieldListItem]]:
     """Return the size of the variable and its components for comparison.
     For a primitive type, this is a list with one item. For a struct, these are the struct members.
     Prefer to use the size for the variable's type, then any size from either address space.
@@ -293,7 +247,7 @@ def get_compare_items(
         if size is None:
             return var.any_size(), []
 
-        scalars = to_data_offsets(get_scalars(types, type_key))
+        scalars = get_scalars_gapless(types, type_key)
 
     except (CvdumpKeyError, CvdumpIntegrityError):
         # This may occur even when nothing is wrong, so permit a raw comparison here.
@@ -317,7 +271,7 @@ def get_compare_items(
         )
         return size, []
 
-    return size, fill_gaps(scalars, size)
+    return size, scalars
 
 
 @dataclass
@@ -380,7 +334,7 @@ class VariableComparator:
             # (i.e. if this is a static or non-public variable)
             # then we can only compare the raw bytes.
             compare_items = [
-                DataOffset(offset=i, name="", fmt="B", pointer=False)
+                FieldListItem(offset=i, name="", type=CVInfoTypeEnum.T_UCHAR)
                 for i in range(data_size)
             ]
             orig_data = tuple(orig_block.data)
@@ -396,7 +350,7 @@ class VariableComparator:
 
         compared = []
         for orig_val, recomp_val, member in zip(orig_data, recomp_data, compare_items):
-            if member.pointer:
+            if CvdumpTypeMap[member.type].pointer is not None:
                 match = self.is_pointer_match(orig_val, recomp_val)
 
                 if not match:

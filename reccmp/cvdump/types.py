@@ -211,7 +211,7 @@ class CvdumpTypesParser:
             if cvinfo.pointer is not None:
                 return TypeInfo(type_key, TypeKind.POINTER, cvinfo.size, None)
 
-            return TypeInfo(type_key, TypeKind.SCALAR, cvinfo.size, cvinfo.name)
+            return TypeInfo(type_key, TypeKind.SCALAR, cvinfo.size, None)
 
         assert leaf is not None
         kind = LEAF_KINDS.get(leaf["type"])

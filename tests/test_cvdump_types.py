@@ -8,12 +8,11 @@ and type dependency tree walker."""
 from struct import calcsize
 from typing import Iterable
 import pytest
-from reccmp.compare.type_layout import get_name_for_offset, get_scalars
-from reccmp.compare.variables import (
-    DataOffset,
-    fill_gaps,
+from reccmp.compare.type_layout import (
     get_format_string,
-    to_data_offsets,
+    get_name_for_offset,
+    get_scalars,
+    get_scalars_gapless,
 )
 from reccmp.cvdump.cvinfo import CVInfoTypeEnum
 from reccmp.cvdump.types import (
@@ -418,14 +417,8 @@ def simplify_scalars(
     return [(s.offset, s.name, s.type) for s in scalars]
 
 
-def gapless(parser: CvdumpTypesParser, key: TK) -> list[DataOffset]:
-    size = parser.get(key).size
-    assert size is not None
-    return fill_gaps(to_data_offsets(get_scalars(parser, key)), size)
-
-
 def format_string(parser: CvdumpTypesParser, key: TK) -> str:
-    return get_format_string(gapless(parser, key))
+    return get_format_string(get_scalars_gapless(parser, key))
 
 
 @pytest.fixture(name="parser")
@@ -453,7 +446,7 @@ def test_basic_parsing(parser: CvdumpTypesParser):
 def test_scalar_types(parser: CvdumpTypesParser):
     """Full tests on the scalar_* methods are in another file.
     Here we are just testing the passthrough of the "T_" types."""
-    assert parser.get(CVInfoTypeEnum.T_CHAR).name == "T_CHAR"
+    assert parser.get(CVInfoTypeEnum.T_CHAR).name is None
     assert parser.get(CVInfoTypeEnum.T_CHAR).size == 1
 
     assert parser.get(CVInfoTypeEnum.T_32PVOID).name is None
@@ -486,6 +479,14 @@ def test_members(parser: CvdumpTypesParser):
     ]
 
     # LegoRaceCar with multiple superclasses
+    assert simplify_scalars(get_scalars(parser, TK(0x5594))) == [
+        (0, "vftable", CVInfoTypeEnum.T_32PVOID),
+        (8, "m_parentClass1Field1", CVInfoTypeEnum.T_REAL32),
+        (32, "vftable", CVInfoTypeEnum.T_32PVOID),
+        (40, "m_parentClass2Field1", CVInfoTypeEnum.T_UCHAR),
+        (44, "m_parentClass2Field2", CVInfoTypeEnum.T_32PVOID),
+        (84, "m_childClassField", CVInfoTypeEnum.T_UCHAR),
+    ]
     assert parser.members(TK(0x5594)) == [
         FieldListItem(offset=84, name="m_childClassField", type=CVInfoTypeEnum.T_UCHAR),
     ]
@@ -578,12 +579,12 @@ def test_struct_padding(parser: CvdumpTypesParser):
 
     # MxString, padded to 16 bytes. 4 actual members. 2 bytes of padding.
     assert len(list(get_scalars(parser, TK(0x4DB6)))) == 4
-    assert len(gapless(parser, TK(0x4DB6))) == 6
+    assert len(get_scalars_gapless(parser, TK(0x4DB6))) == 6
 
     # MxVariable, with two MxStrings (and a vtable)
     # Fill in the middle gap and the outer gap.
     assert len(list(get_scalars(parser, TK(0x22D5)))) == 9
-    assert len(gapless(parser, TK(0x22D5))) == 13
+    assert len(get_scalars_gapless(parser, TK(0x22D5))) == 13
 
 
 def test_struct_format_string(parser: CvdumpTypesParser):
@@ -615,11 +616,11 @@ def test_struct_union_overlap(parser: CvdumpTypesParser):
     #   trailer   UINT4 @ 12
 
     # After dedup: header, pos.x, pos.y, trailer.
-    assert [(s.offset, s.fmt) for s in gapless(parser, TK(0x9003))] == [
-        (0, "I"),
-        (4, "l"),
-        (8, "l"),
-        (12, "I"),
+    assert simplify_scalars(get_scalars_gapless(parser, TK(0x9003))) == [
+        (0, "header", CVInfoTypeEnum.T_UINT4),
+        (4, "pos.x", CVInfoTypeEnum.T_LONG),
+        (8, "pos.y", CVInfoTypeEnum.T_LONG),
+        (12, "trailer", CVInfoTypeEnum.T_UINT4),
     ]
 
     # Format string must describe exactly the struct's 16 bytes.

@@ -1,7 +1,7 @@
 """Functions that apply rules that are common to all type database implementations."""
 
 from typing import Iterator
-from reccmp.cvdump.cvinfo import CvdumpTypeKey, CVInfoTypeEnum
+from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap, CVInfoTypeEnum
 from reccmp.cvdump.types import (
     CvdumpIntegrityError,
     CvdumpKeyError,
@@ -113,6 +113,45 @@ def get_scalars(
                 yield from get_scalars(
                     types, m.type, offset + m.offset, join_member_names(name, m.name)
                 )
+
+
+def get_scalars_gapless(
+    types: CvdumpTypesParser, key: CvdumpTypeKey
+) -> list[FieldListItem]:
+    """Reduce the given type to a list of scalars and fill any gap with unsigned chars,
+    so the list covers every byte of the type. The list is empty if the type has no scalars.
+    """
+    scalars = list(get_scalars(types, key))
+    if not scalars:
+        return []
+
+    size = types.get(key).size
+    assert size is not None
+
+    output: list[FieldListItem] = []
+    next_offset = 0
+    for scalar in scalars:
+        output.extend(
+            FieldListItem(i, "(padding)", CVInfoTypeEnum.T_UCHAR)
+            for i in range(next_offset, scalar.offset)
+        )
+        output.append(scalar)
+        next_offset = scalar.offset + CvdumpTypeMap[scalar.type].size
+
+    output.extend(
+        FieldListItem(i, "(padding)", CVInfoTypeEnum.T_UCHAR)
+        for i in range(next_offset, size)
+    )
+    return output
+
+
+def get_format_string(scalars: list[FieldListItem]) -> str:
+    """Create a string for use with struct.unpack"""
+    format_string = "".join(CvdumpTypeMap[s.type].fmt for s in scalars)
+    if len(format_string) > 0:
+        return "<" + format_string
+
+    return ""
 
 
 def _item_at_offset(

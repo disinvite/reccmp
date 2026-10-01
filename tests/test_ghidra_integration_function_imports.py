@@ -313,7 +313,7 @@ def test_global_array_access(
             section=0,
             offset=0,
             decorated_name="g_actorInfo",
-            data_type=type_helper.compare.types.resolve(lego_actor_info_array_key),
+            data_type=type_helper.compare.types.get(lego_actor_info_array_key),
         )
     ]
 
@@ -412,7 +412,7 @@ def test_global_pointer_access(
             section=0,
             offset=0,
             decorated_name="g_actorInfo",
-            data_type=type_helper.compare.types.resolve(lego_actor_info_pointer_key),
+            data_type=type_helper.compare.types.get(lego_actor_info_pointer_key),
         )
     ]
 

@@ -5,7 +5,7 @@ from reccmp.cvdump.types import (
     CvdumpTypeKey,
     CvdumpTypesParser,
     FieldListItem,
-    ResolvedType,
+    TypeInfo,
     TypeKind,
 )
 
@@ -26,16 +26,16 @@ class MockTypesDb(CvdumpTypesParser):
         super().__init__()
         self.structs = {struct.key: struct for struct in structs}
 
-    def resolve(self, type_key: CvdumpTypeKey) -> ResolvedType:
+    def get(self, type_key: CvdumpTypeKey) -> TypeInfo:
         if type_key.is_scalar():
-            return super().resolve(type_key)
+            return super().get(type_key)
 
         try:
             struct = self.structs[type_key]
         except KeyError as ex:
             raise CvdumpKeyError(type_key) from ex
 
-        return ResolvedType(type_key, TypeKind.STRUCT, struct.size, None)
+        return TypeInfo(type_key, TypeKind.STRUCT, struct.size, None)
 
     def members(self, type_key: CvdumpTypeKey) -> list[FieldListItem]:
         return self.structs[type_key].members

@@ -33,7 +33,7 @@ def disjoint_members(
     If any members overlap, choose the member with the largest footprint at each offset.
     """
     members = types.members(key)
-    sizes = [types.resolve(m.type).size or 0 for m in members]
+    sizes = [types.get(m.type).size or 0 for m in members]
 
     order = sorted(range(len(members)), key=lambda i: (members[i].offset, -sizes[i]))
 
@@ -55,7 +55,7 @@ def composite_layout(
     This is intended for `datacmp` comparison. The Ghidra import should use disjoint_members().
     For simplicity, this function will handle union types, but because no inheritance is possible,
     no members are added."""
-    if types.resolve(key).kind == TypeKind.UNION:
+    if types.get(key).kind == TypeKind.UNION:
         return disjoint_members(types, key)
 
     items: list[FieldListItem] = [
@@ -79,7 +79,7 @@ def get_scalars(
 ) -> Iterator[FieldListItem]:
     """Reduce the given type to a list of scalars so we can
     compare each component value."""
-    t = types.resolve(key)
+    t = types.get(key)
     match t.kind:
         case TypeKind.SCALAR:
             yield FieldListItem(offset, name, t.key)
@@ -93,7 +93,7 @@ def get_scalars(
             yield from get_scalars(types, types.element_type(t.key), offset, name)
 
         case TypeKind.ARRAY:
-            element = types.resolve(types.element_type(t.key))
+            element = types.get(types.element_type(t.key))
             assert element.size, "Encountered an array whose type has no size"
             assert t.size is not None
 
@@ -133,7 +133,7 @@ def get_name_for_offset(
 ) -> str:
     """Limited to arrays for now. Enable to close GH #462."""
     try:
-        if types.resolve(type_key).kind != TypeKind.ARRAY:
+        if types.get(type_key).kind != TypeKind.ARRAY:
             return f"+{offset}" if offset > 0 else ""
     except CvdumpKeyError:
         return f"+{offset}" if offset > 0 else ""
@@ -144,12 +144,12 @@ def get_name_for_offset(
     depth = 0
     while depth < 2:
         try:
-            t = types.resolve(type_key)
+            t = types.get(type_key)
         except CvdumpKeyError:
             break
 
         if t.kind == TypeKind.ARRAY:
-            element = types.resolve(types.element_type(t.key))
+            element = types.get(types.element_type(t.key))
             assert element.size
 
             array_idx = offset // element.size

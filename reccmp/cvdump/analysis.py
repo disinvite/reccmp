@@ -11,7 +11,7 @@ from .types import (
     CvdumpKeyError,
     CvdumpIntegrityError,
     CvdumpTypesParser,
-    ResolvedType,
+    TypeInfo,
 )
 
 
@@ -74,7 +74,7 @@ class CvdumpNode:
     addr: int | None = None
     symbol_entry: SymbolsEntry | None = None
     # Preliminary - only used for non-static variables at the moment
-    data_type: ResolvedType | None = None
+    data_type: TypeInfo | None = None
 
     @classmethod
     def from_node_key(cls, key: NodeKey):
@@ -199,7 +199,7 @@ class CvdumpAnalysis:
                 # Check our types database for type information.
                 # If we did not parse the TYPES section, we can only
                 # get information for built-in "T_" types.
-                g_info = parser.types.resolve(glo.type)
+                g_info = parser.types.get(glo.type)
 
                 # mypy coercion.
                 current_size = node_dict[key].confirmed_size or 0
@@ -243,7 +243,7 @@ class CvdumpAnalysis:
                     node_dict[key].decorated_name = f"{v.name}___{sym.name}"
                     node_dict[key].friendly_name = v.name
                     try:
-                        v_info = parser.types.resolve(v.type)
+                        v_info = parser.types.get(v.type)
                         node_dict[key].confirmed_size = v_info.size
                         node_dict[key].data_type = v_info
                     except (CvdumpKeyError, CvdumpIntegrityError):

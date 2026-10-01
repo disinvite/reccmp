@@ -419,7 +419,7 @@ def simplify_scalars(
 
 
 def gapless(parser: CvdumpTypesParser, key: TK) -> list[DataOffset]:
-    size = parser.resolve(key).size
+    size = parser.get(key).size
     assert size is not None
     return fill_gaps(to_data_offsets(get_scalars(parser, key)), size)
 
@@ -453,19 +453,19 @@ def test_basic_parsing(parser: CvdumpTypesParser):
 def test_scalar_types(parser: CvdumpTypesParser):
     """Full tests on the scalar_* methods are in another file.
     Here we are just testing the passthrough of the "T_" types."""
-    assert parser.resolve(CVInfoTypeEnum.T_CHAR).name == "T_CHAR"
-    assert parser.resolve(CVInfoTypeEnum.T_CHAR).size == 1
+    assert parser.get(CVInfoTypeEnum.T_CHAR).name == "T_CHAR"
+    assert parser.get(CVInfoTypeEnum.T_CHAR).size == 1
 
-    assert parser.resolve(CVInfoTypeEnum.T_32PVOID).name is None
-    assert parser.resolve(CVInfoTypeEnum.T_32PVOID).size == 4
+    assert parser.get(CVInfoTypeEnum.T_32PVOID).name is None
+    assert parser.get(CVInfoTypeEnum.T_32PVOID).size == 4
 
 
 def test_resolve_forward_ref(parser: CvdumpTypesParser):
     # Non-forward ref
-    assert parser.resolve(TK(0x22D5)).name == "MxVariable"
+    assert parser.get(TK(0x22D5)).name == "MxVariable"
     # Forward ref
-    assert parser.resolve(TK(0x14DB)).name == "MxString"
-    assert parser.resolve(TK(0x14DB)).size == 16
+    assert parser.get(TK(0x14DB)).name == "MxString"
+    assert parser.get(TK(0x14DB)).size == 16
 
 
 def test_members(parser: CvdumpTypesParser):
@@ -672,7 +672,7 @@ def test_2d_array(parser: CvdumpTypesParser):
 
 def test_enum(parser: CvdumpTypesParser):
     """LF_ENUM should equal 4-byte int"""
-    assert parser.resolve(TK(0x3CC2)).size == 4
+    assert parser.get(TK(0x3CC2)).size == 4
     assert simplify_scalars(get_scalars(parser, TK(0x3CC2))) == [
         (0, "", CVInfoTypeEnum.T_INT4)
     ]
@@ -685,7 +685,7 @@ def test_enum(parser: CvdumpTypesParser):
 
 def test_lf_pointer(parser: CvdumpTypesParser):
     """LF_POINTER is just a wrapper for scalar pointer type"""
-    assert parser.resolve(TK(0x3FAB)).size == 4
+    assert parser.get(TK(0x3FAB)).size == 4
 
     assert simplify_scalars(get_scalars(parser, TK(0x3FAB))) == [
         (0, "", CVInfoTypeEnum.T_32PVOID)
@@ -694,8 +694,8 @@ def test_lf_pointer(parser: CvdumpTypesParser):
 
 def test_lf_pointer_kind(parser: CvdumpTypesParser):
     """LF_POINTER and primitive pointers are both POINTER."""
-    assert parser.resolve(TK(0x3FAB)).kind == TypeKind.POINTER
-    assert parser.resolve(CVInfoTypeEnum.T_32PVOID).kind == TypeKind.POINTER
+    assert parser.get(TK(0x3FAB)).kind == TypeKind.POINTER
+    assert parser.get(CVInfoTypeEnum.T_32PVOID).kind == TypeKind.POINTER
 
 
 def test_element_type(parser: CvdumpTypesParser):
@@ -713,11 +713,11 @@ def test_enum_variants_rejects_class(parser: CvdumpTypesParser):
 
 
 def test_accessor_rejects_forward_ref(parser: CvdumpTypesParser):
-    """Accessors other than resolve() raise if given a forward ref."""
+    """Accessors other than get() raise if given a forward ref."""
     with pytest.raises(CvdumpKeyError):
         parser.members(TK(0x14DB))
 
-    assert parser.members(parser.resolve(TK(0x14DB)).key) is not None
+    assert parser.members(parser.get(TK(0x14DB)).key) is not None
 
 
 def test_function(parser: CvdumpTypesParser):
@@ -728,7 +728,7 @@ def test_function(parser: CvdumpTypesParser):
         class_type=None,
         this_adjust=0,
     )
-    assert parser.resolve(TK(0x1019)).kind == TypeKind.FUNCTION
+    assert parser.get(TK(0x1019)).kind == TypeKind.FUNCTION
     with pytest.raises(CvdumpTypeError):
         parser.function(TK(0x4060))
 
@@ -742,7 +742,7 @@ def test_lf_pointer_type(parser: CvdumpTypesParser):
 def test_key_not_exist(parser: CvdumpTypesParser):
     """Accessing a non-existent type id should raise our exception"""
     with pytest.raises(CvdumpKeyError):
-        parser.resolve(TK(0xBEEF))
+        parser.get(TK(0xBEEF))
 
     with pytest.raises(CvdumpKeyError):
         list(get_scalars(parser, TK(0xBEEF)))
@@ -751,7 +751,7 @@ def test_key_not_exist(parser: CvdumpTypesParser):
 def test_broken_forward_ref(parser: CvdumpTypesParser):
     """Raise an exception if we cannot follow a forward reference"""
     # Verify forward reference on MxCore
-    parser.resolve(TK(0x1220))
+    parser.get(TK(0x1220))
 
     # Delete the MxCore LF_CLASS
     del parser._raw[TK(0x4060)]
@@ -759,18 +759,18 @@ def test_broken_forward_ref(parser: CvdumpTypesParser):
 
     # Forward ref via 0x1220 will fail
     with pytest.raises(CvdumpKeyError):
-        parser.resolve(TK(0x1220))
+        parser.get(TK(0x1220))
 
 
 def test_null_forward_ref(parser: CvdumpTypesParser):
     """A forward ref with no target resolves to itself, with no size."""
     # Test MxString forward reference
-    parser.resolve(TK(0x14DB))
+    parser.get(TK(0x14DB))
 
     # Delete the UDT for MxString
     del parser._keys[TK(0x14DB)]["udt"]
 
-    t = parser.resolve(TK(0x14DB))
+    t = parser.get(TK(0x14DB))
     assert t.key == TK(0x14DB)
     assert t.size is None
     assert t.name == "MxString"
@@ -792,7 +792,7 @@ def test_broken_array_element_ref(parser: CvdumpTypesParser):
 def test_lf_modifier(parser: CvdumpTypesParser):
     """Is this an alias for another type?"""
     # Modifies float
-    assert parser.resolve(TK(0x1028)).size == 4
+    assert parser.get(TK(0x1028)).size == 4
     assert simplify_scalars(get_scalars(parser, TK(0x1028))) == [
         (0, "", CVInfoTypeEnum.T_REAL32)
     ]
@@ -1107,7 +1107,7 @@ def test_enum_forward_ref(empty_parser: CvdumpTypesParser):
     # Using non-standard T_CHAR(0010) base type to demonstrate the problem.
     # The main concern is to not use T_NOTYPE as the basis of the enum.
     # Previously we assumed all but a few specific types had size 4.
-    assert empty_parser.resolve(TK(0x11A6)).size == 1
+    assert empty_parser.get(TK(0x11A6)).size == 1
 
 
 MSVC700_POINTER_CONTAINING_CLASS_TYPE_OF_POINTED_TO = """
@@ -1284,7 +1284,7 @@ def test_unknown_primitive_type(empty_parser: CvdumpTypesParser):
     Our list of primitive types should be comprehensive and the caller has
     the option to catch the exception and continue on."""
     with pytest.raises(CvdumpKeyError):
-        empty_parser.resolve(TK(0x555))
+        empty_parser.get(TK(0x555))
 
     with pytest.raises(CvdumpKeyError):
         list(get_scalars(empty_parser, TK(0x555)))

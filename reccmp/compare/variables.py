@@ -287,7 +287,7 @@ def get_compare_items(
     type_key = CvdumpTypeKey(data_type)
 
     try:
-        size = types.resolve(type_key).size
+        size = types.get(type_key).size
         # This is a valid type, but it has no size.
         # (e.g. forward ref we cannot resolve)
         if size is None:

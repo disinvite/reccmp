@@ -21,7 +21,7 @@ from ghidra.program.model.data import (
     ComponentOffsetSettingsDefinition,
 )
 
-from reccmp.cvdump.types import ClassInfo, CvdumpKeyError, ResolvedType, TypeKind
+from reccmp.cvdump.types import ClassInfo, CvdumpKeyError, TypeInfo, TypeKind
 from reccmp.compare.type_layout import disjoint_members
 from reccmp.cvdump.cvinfo import CVInfoTypeEnum, CvdumpTypeKey
 
@@ -90,7 +90,7 @@ class PdbTypeImporter:
             This value should always be `False` when the referenced type is not a class.
         """
         try:
-            type_pdb = self.types.resolve(type_index)
+            type_pdb = self.types.get(type_index)
         except CvdumpKeyError as e:
             raise TypeNotFoundError(
                 f"Failed to find referenced type '{type_index:#x}'"
@@ -141,7 +141,7 @@ class PdbTypeImporter:
             self.api, get_scalar_ghidra_type(type_key)
         )
 
-    def _import_forward_ref_without_target(self, type_pdb: ResolvedType) -> DataType:
+    def _import_forward_ref_without_target(self, type_pdb: TypeInfo) -> DataType:
         try:
             # Example: HWND__, needs to be created manually
             assert type_pdb.name is not None
@@ -152,7 +152,7 @@ class PdbTypeImporter:
                 f"{type_pdb.key}: forward ref without target, needs to be created manually: {type_pdb}"
             ) from e
 
-    def _import_array(self, type_pdb: ResolvedType) -> DataType:
+    def _import_array(self, type_pdb: TypeInfo) -> DataType:
         inner_type = self.import_pdb_type_into_ghidra(
             self.types.element_type(type_pdb.key)
         )
@@ -167,7 +167,7 @@ class PdbTypeImporter:
 
         return ArrayDataType(inner_type, array_length, 0)
 
-    def _import_union(self, type_pdb: ResolvedType) -> DataType:
+    def _import_union(self, type_pdb: TypeInfo) -> DataType:
         raw_name = type_pdb.name
         assert raw_name is not None
         expected_size = type_pdb.size
@@ -186,7 +186,7 @@ class PdbTypeImporter:
                 f"Writing union types is not supported. Please add by hand: {type_pdb}"
             ) from e
 
-    def _import_enum(self, type_pdb: ResolvedType) -> DataType:
+    def _import_enum(self, type_pdb: TypeInfo) -> DataType:
         underlying_type = self.import_pdb_type_into_ghidra(
             self.types.element_type(type_pdb.key)
         )
@@ -208,7 +208,7 @@ class PdbTypeImporter:
 
     def _import_class_or_struct(
         self,
-        type_in_pdb: ResolvedType,
+        type_in_pdb: TypeInfo,
         as_base_class: bool = False,
     ) -> DataType:
         class_size = type_in_pdb.size

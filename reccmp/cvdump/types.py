@@ -75,7 +75,7 @@ LEAF_KINDS: dict[str, TypeKind] = {
 }
 
 
-class ResolvedType(NamedTuple):
+class TypeInfo(NamedTuple):
     key: CvdumpTypeKey
     kind: TypeKind
     size: int | None
@@ -154,9 +154,7 @@ class CvdumpTypesParser:
     def _resolved_leaf(self, type_key: CvdumpTypeKey) -> CvdumpParsedType:
         leaf = self.from_key(type_key)
         if leaf.get("is_forward_ref", False):
-            raise CvdumpKeyError(
-                f"Type {type_key} is a forward ref. Call resolve() first."
-            )
+            raise CvdumpKeyError(f"Type {type_key} is a forward ref. Call get() first.")
 
         return leaf
 
@@ -182,11 +180,11 @@ class CvdumpTypesParser:
         return self.from_key(leaf["field_list_type"])
 
     # pylint:disable=too-many-return-statements
-    def resolve(self, type_key: CvdumpTypeKey) -> ResolvedType:
+    def get(self, type_key: CvdumpTypeKey) -> TypeInfo:
         """Returns vital information (name, size, kind) for the type key.
         All processing should start here. Forward references are resolved if possible.
         The returned `key` value should be used in place of the input argument.
-        If we cannot resolve the forward reference, return a `ResolvedType` with null size.
+        If we cannot resolve the forward reference, return a `TypeInfo` with null size.
         """
         leaf: CvdumpParsedType | None = None
 
@@ -204,40 +202,40 @@ class CvdumpTypesParser:
                 if kind is None:
                     raise CvdumpIntegrityError(f"Null forward ref for type {type_key}")
 
-                return ResolvedType(type_key, kind, None, leaf.get("name"))
+                return TypeInfo(type_key, kind, None, leaf.get("name"))
 
             type_key = forward_ref
 
         if type_key.is_scalar():
             cvinfo = self._primitive(type_key)
             if cvinfo.pointer is not None:
-                return ResolvedType(type_key, TypeKind.POINTER, cvinfo.size, None)
+                return TypeInfo(type_key, TypeKind.POINTER, cvinfo.size, None)
 
-            return ResolvedType(type_key, TypeKind.SCALAR, cvinfo.size, cvinfo.name)
+            return TypeInfo(type_key, TypeKind.SCALAR, cvinfo.size, cvinfo.name)
 
         assert leaf is not None
         kind = LEAF_KINDS.get(leaf["type"])
         match kind:
             case TypeKind.POINTER:
                 # TODO: Assumes 32-bit pointers.
-                return ResolvedType(type_key, kind, 4, None)
+                return TypeInfo(type_key, kind, 4, None)
 
             case TypeKind.ARRAY:
-                return ResolvedType(type_key, kind, leaf["size"], None)
+                return TypeInfo(type_key, kind, leaf["size"], None)
 
             case TypeKind.STRUCT | TypeKind.UNION:
-                return ResolvedType(type_key, kind, leaf["size"], leaf.get("name"))
+                return TypeInfo(type_key, kind, leaf["size"], leaf.get("name"))
 
             case TypeKind.ENUM:
-                size = self.resolve(leaf["underlying_type"]).size
-                return ResolvedType(type_key, kind, size, leaf.get("name"))
+                size = self.get(leaf["underlying_type"]).size
+                return TypeInfo(type_key, kind, size, leaf.get("name"))
 
             case TypeKind.BITFIELD:
-                size = self.resolve(leaf["bit_type"]).size
-                return ResolvedType(type_key, kind, size, None)
+                size = self.get(leaf["bit_type"]).size
+                return TypeInfo(type_key, kind, size, None)
 
             case TypeKind.FUNCTION:
-                return ResolvedType(type_key, kind, None, None)
+                return TypeInfo(type_key, kind, None, None)
 
         raise CvdumpTypeError(f"{type_key} is {leaf['type']}, cannot resolve")
 

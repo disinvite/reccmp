@@ -2,19 +2,21 @@ import re
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple
-from struct import unpack, error as StructError
+from typing import Iterable, NamedTuple
+from struct import calcsize, unpack, error as StructError
 from typing_extensions import Self
 from reccmp.formats import Image
 from reccmp.formats.exceptions import InvalidVirtualReadError
 from reccmp.compare.db import EntityDb, ReccmpMatch
-from reccmp.cvdump.cvinfo import CvdumpTypeKey
+from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap
 from reccmp.cvdump.types import (
     CvdumpTypesParser,
     CvdumpKeyError,
     CvdumpIntegrityError,
+    FieldListItem,
 )
 from reccmp.types import ImageId
+from .type_layout import get_name_for_offset, get_scalars
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +128,51 @@ class DataBlock(NamedTuple):
 class DataOffset(NamedTuple):
     offset: int
     name: str
+    fmt: str
+    """Format character for struct.unpack"""
     pointer: bool
+
+
+def to_data_offsets(scalars: Iterable[FieldListItem]) -> list[DataOffset]:
+    """Add the struct.unpack format char for each scalar."""
+    output: list[DataOffset] = []
+    for scalar in scalars:
+        cvinfo = CvdumpTypeMap[scalar.type]
+        output.append(
+            DataOffset(
+                scalar.offset, scalar.name, cvinfo.fmt, cvinfo.pointer is not None
+            )
+        )
+
+    return output
+
+
+def fill_gaps(scalars: list[DataOffset], total_size: int) -> list[DataOffset]:
+    """Fill any gap in the list of scalars with unsigned chars,
+    so the list covers every byte of the type."""
+    output: list[DataOffset] = []
+    next_offset = 0
+    for scalar in scalars:
+        output.extend(
+            DataOffset(i, "(padding)", "B", False)
+            for i in range(next_offset, scalar.offset)
+        )
+        output.append(scalar)
+        next_offset = scalar.offset + calcsize(f"<{scalar.fmt}")
+
+    output.extend(
+        DataOffset(i, "(padding)", "B", False) for i in range(next_offset, total_size)
+    )
+    return output
+
+
+def get_format_string(scalars: list[DataOffset]) -> str:
+    """Create a string for use with struct.unpack"""
+    format_string = "".join(s.fmt for s in scalars)
+    if len(format_string) > 0:
+        return "<" + format_string
+
+    return ""
 
 
 class ComparedOffset(NamedTuple):
@@ -214,7 +260,7 @@ def pointer_display(
         else:
             type_key = entity.get("data_type")
             if type_key:
-                suffix = types.get_name_for_offset(CvdumpTypeKey(type_key), offset)
+                suffix = get_name_for_offset(types, CvdumpTypeKey(type_key), offset)
                 name = entity.match_name(suffix)
             else:
                 name = entity.match_name(f"+{offset}")
@@ -225,6 +271,53 @@ def pointer_display(
     # This variable did not match if we do not have
     # the pointer target in our DB.
     return f"Unknown pointer 0x{addr:x}"
+
+
+def get_compare_items(
+    types: CvdumpTypesParser, var: ReccmpMatch
+) -> tuple[int | None, list[DataOffset]]:
+    """Return the size of the variable and its components for comparison.
+    For a primitive type, this is a list with one item. For a struct, these are the struct members.
+    Prefer to use the size for the variable's type, then any size from either address space.
+    If we cannot produce any items to compare, we will diff the raw bytes."""
+    data_type = var.get("data_type")
+    if not data_type:
+        return var.any_size(), []
+
+    type_key = CvdumpTypeKey(data_type)
+
+    try:
+        size = types.resolve(type_key).size
+        # This is a valid type, but it has no size.
+        # (e.g. forward ref we cannot resolve)
+        if size is None:
+            return var.any_size(), []
+
+        scalars = to_data_offsets(get_scalars(types, type_key))
+
+    except (CvdumpKeyError, CvdumpIntegrityError):
+        # This may occur even when nothing is wrong, so permit a raw comparison here.
+        # For example: we do not handle bitfields and this complicates fieldlist parsing
+        # where they are used. (GH #299)
+        logger.error(
+            "Could not materialize type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
+            type_key,
+            var.name,
+            var.orig_addr,
+        )
+        return var.any_size(), []
+
+    if not scalars:
+        # An empty struct has been observed to have a size of 1.
+        logger.info(
+            "No struct members for type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
+            type_key,
+            var.name,
+            var.orig_addr,
+        )
+        return size, []
+
+    return size, fill_gaps(scalars, size)
 
 
 @dataclass
@@ -269,43 +362,9 @@ class VariableComparator:
     def compare_variable(self, var: ReccmpMatch) -> ComparisonItem:
         # pylint: disable=too-many-locals
         assert var.name is not None
-        type_key = CvdumpTypeKey(var.get("data_type")) if var.get("data_type") else None
-
-        # Start by assuming we can only compare the raw bytes
-        data_size = var.any_size()
-        raw_only = True
-
-        if type_key is not None:
-            try:
-                # If we are type-aware, we can get the precise
-                # data size for the variable.
-                data_type = self.types.get(type_key)
-                assert data_type.size is not None
-                data_size = data_type.size
-
-                # Make sure we can retrieve struct or array members.
-                if self.types.get_format_string(type_key):
-                    raw_only = False
-                else:
-                    logger.info(
-                        "No struct members for type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
-                        type_key,
-                        var.name,
-                        var.orig_addr,
-                    )
-
-            except (CvdumpKeyError, CvdumpIntegrityError):
-                # This may occur even when nothing is wrong, so permit a raw comparison here.
-                # For example: we do not handle bitfields and this complicates fieldlist parsing
-                # where they are used. (GH #299)
-                logger.error(
-                    "Could not materialize type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
-                    type_key,
-                    var.name,
-                    var.orig_addr,
-                )
-
+        data_size, compare_items = get_compare_items(self.types, var)
         assert data_size is not None
+        raw_only = not compare_items
 
         try:
             orig_block = DataBlock.read(var.orig_addr, data_size, self.orig_bin)
@@ -321,17 +380,13 @@ class VariableComparator:
             # (i.e. if this is a static or non-public variable)
             # then we can only compare the raw bytes.
             compare_items = [
-                DataOffset(offset=i, name="", pointer=False) for i in range(data_size)
+                DataOffset(offset=i, name="", fmt="B", pointer=False)
+                for i in range(data_size)
             ]
             orig_data = tuple(orig_block.data)
             recomp_data = tuple(recomp_block.data)
         else:
-            assert type_key is not None
-            compare_items = [
-                DataOffset(offset=sc.offset, name=sc.name or "", pointer=sc.is_pointer)
-                for sc in self.types.get_scalars_gapless(type_key)
-            ]
-            format_str = self.types.get_format_string(type_key)
+            format_str = get_format_string(compare_items)
 
             try:
                 orig_data = unpack(format_str, orig_block.data)

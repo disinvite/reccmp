@@ -1,4 +1,5 @@
-"""Functions that apply rules that are common to all type database implementations."""
+"""Functions that return the layout of a struct according to our requirements.
+These are intended to work with any implementation of a type database."""
 
 from typing import Iterator
 from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap, CVInfoTypeEnum
@@ -32,7 +33,7 @@ def disjoint_members(
     """Returns members of a struct or union sorted by offset with overlap members removed.
     A struct that contains an anonymous (inline) union will have overlapping members, so this
     processing is needed for any situation where the caller needs a cohesive list.
-    If any members overlap, choose the member with the largest footprint at each offset.
+    If two members overlap at the same offset, choose the member with the largest footprint.
     """
     members = types.members(key)
     sizes = [types.get(m.type).size or 0 for m in members]

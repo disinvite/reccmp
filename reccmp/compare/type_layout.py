@@ -14,6 +14,8 @@ from reccmp.cvdump.types import (
 def join_member_names(parent: str, child: str) -> str:
     """Helper method to combine parent/child member names."""
 
+    # If one of the strings is empty, return the one we have.
+    # (Done for convenience. Expanding embedded base class structs does not add a parent.)
     if not parent or not child:
         return parent or child
 
@@ -63,7 +65,6 @@ def composite_layout(
         for base, base_offset in types.base_classes(key).items()
     ]
     if types.class_info(key).has_vftable:
-        # For our purposes, any pointer type will do
         # TODO: Assumes 32-bit pointers.
         items.append(
             FieldListItem(offset=0, type=CVInfoTypeEnum.T_32PVOID, name="vftable")
@@ -77,8 +78,7 @@ def composite_layout(
 def get_scalars(
     types: CvdumpTypesParser, key: CvdumpTypeKey, offset: int = 0, name: str = ""
 ) -> Iterator[FieldListItem]:
-    """Reduce the given type to a list of scalars so we can
-    compare each component value."""
+    """Reduce the given complex type to a list of primitive member types."""
     t = types.get(key)
     match t.kind:
         case TypeKind.SCALAR:
@@ -115,39 +115,42 @@ def get_scalars(
                 )
 
 
+def _padding(start: int, end: int) -> Iterator[FieldListItem]:
+    for i in range(start, end):
+        yield FieldListItem(i, "", CVInfoTypeEnum.T_UCHAR)
+
+
 def get_scalars_gapless(
     types: CvdumpTypesParser, key: CvdumpTypeKey
 ) -> list[FieldListItem]:
-    """Reduce the given type to a list of scalars and fill any gap with unsigned chars,
-    so the list covers every byte of the type. The list is empty if the type has no scalars.
-    """
-    scalars = list(get_scalars(types, key))
-    if not scalars:
-        return []
-
-    size = types.get(key).size
-    assert size is not None
-
+    """Reduce the given complex type to a list of primitive member types.
+    Gaps between the declared members are filled with explicit padding bytes."""
     output: list[FieldListItem] = []
     next_offset = 0
-    for scalar in scalars:
-        output.extend(
-            FieldListItem(i, "(padding)", CVInfoTypeEnum.T_UCHAR)
-            for i in range(next_offset, scalar.offset)
-        )
+    for scalar in get_scalars(types, key):
+        output.extend(_padding(next_offset, scalar.offset))
         output.append(scalar)
         next_offset = scalar.offset + CvdumpTypeMap[scalar.type].size
 
-    output.extend(
-        FieldListItem(i, "(padding)", CVInfoTypeEnum.T_UCHAR)
-        for i in range(next_offset, size)
-    )
+    size = types.get(key).size
+    assert size is not None
+    output.extend(_padding(next_offset, size))
     return output
 
 
 def get_format_string(scalars: list[FieldListItem]) -> str:
-    """Create a string for use with struct.unpack"""
-    format_string = "".join(CvdumpTypeMap[s.type].fmt for s in scalars)
+    """Create a struct.unpack format string from the list of primitive types.
+    Gaps between the declared members are skipped using the 'x' character so
+    that the alignment is correct."""
+    parts: list[str] = []
+    next_offset = 0
+    for scalar in scalars:
+        if scalar.offset > next_offset:
+            parts.append(f"{scalar.offset - next_offset}x")
+        parts.append(CvdumpTypeMap[scalar.type].fmt)
+        next_offset = scalar.offset + CvdumpTypeMap[scalar.type].size
+
+    format_string = "".join(parts)
     if len(format_string) > 0:
         return "<" + format_string
 

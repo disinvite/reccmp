@@ -227,51 +227,52 @@ def pointer_display(
     return f"Unknown pointer 0x{addr:x}"
 
 
-def get_compare_items(
-    types: CvdumpTypesParser, var: ReccmpMatch
-) -> tuple[int | None, list[FieldListItem]]:
-    """Return the size of the variable and its components for comparison.
-    For a primitive type, this is a list with one item. For a struct, these are the struct members.
+class VariableLayout(NamedTuple):
+    size: int
+    members: list[FieldListItem]
+    raw: bool
+
+
+def get_variable_layout(types: CvdumpTypesParser, var: ReccmpMatch) -> VariableLayout:
+    """Return the components of the given variable.
+    For a primitive type, this is a list with one item.
+    For a struct, these are the struct members, including member from base classes.
+    The size
     Prefer to use the size for the variable's type, then any size from either address space.
-    If we cannot produce any items to compare, we will diff the raw bytes."""
+    If we cannot produce any items from the type, the list has one item per byte
+    and raw_only is set."""
     data_type = var.get("data_type")
-    if not data_type:
-        return var.any_size(), []
+    if data_type:
+        type_key = CvdumpTypeKey(data_type)
 
-    type_key = CvdumpTypeKey(data_type)
+        try:
+            size = types.get(type_key).size
+            # If None, this is a valid type, but it has no size.
+            # (e.g. forward ref we cannot resolve)
+            if size is not None:
+                return VariableLayout(size, get_scalars_gapless(types, type_key), False)
 
-    try:
-        size = types.get(type_key).size
-        # This is a valid type, but it has no size.
-        # (e.g. forward ref we cannot resolve)
-        if size is None:
-            return var.any_size(), []
+        except (CvdumpKeyError, CvdumpIntegrityError):
+            # This may occur even when nothing is wrong, so permit a raw comparison here.
+            # For example: we do not handle bitfields and this complicates fieldlist parsing
+            # where they are used. (GH #299)
+            logger.error(
+                "Could not materialize type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
+                type_key,
+                var.name,
+                var.orig_addr,
+            )
 
-        scalars = get_scalars_gapless(types, type_key)
-
-    except (CvdumpKeyError, CvdumpIntegrityError):
-        # This may occur even when nothing is wrong, so permit a raw comparison here.
-        # For example: we do not handle bitfields and this complicates fieldlist parsing
-        # where they are used. (GH #299)
-        logger.error(
-            "Could not materialize type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
-            type_key,
-            var.name,
-            var.orig_addr,
-        )
-        return var.any_size(), []
-
-    if not scalars:
-        # An empty struct has been observed to have a size of 1.
-        logger.info(
-            "No struct members for type '0x%x' used by variable '%s' (0x%x). Comparing raw data.",
-            type_key,
-            var.name,
-            var.orig_addr,
-        )
-        return size, []
-
-    return size, scalars
+    # If there is no specific type information available
+    # (i.e. if this is a static or non-public variable)
+    # then we can only compare the raw bytes.
+    size = var.any_size()
+    assert size is not None
+    raw_items = [
+        FieldListItem(offset=i, name="", type=CVInfoTypeEnum.T_UCHAR)
+        for i in range(size)
+    ]
+    return VariableLayout(size, raw_items, True)
 
 
 @dataclass
@@ -316,31 +317,23 @@ class VariableComparator:
     def compare_variable(self, var: ReccmpMatch) -> ComparisonItem:
         # pylint: disable=too-many-locals
         assert var.name is not None
-        data_size, compare_items = get_compare_items(self.types, var)
-        assert data_size is not None
-        raw_only = not compare_items
+        layout = get_variable_layout(self.types, var)
 
         try:
-            orig_block = DataBlock.read(var.orig_addr, data_size, self.orig_bin)
+            orig_block = DataBlock.read(var.orig_addr, layout.size, self.orig_bin)
         except InvalidVirtualReadError as ex:
             # Reading from orig can fail if the recomp variable is too large
             return create_comparison_item(var, error=repr(ex))
 
         # Reading from recomp should never fail, so if it does, raising an exception is correct
-        recomp_block = DataBlock.read(var.recomp_addr, data_size, self.recomp_bin)
+        recomp_block = DataBlock.read(var.recomp_addr, layout.size, self.recomp_bin)
 
-        if raw_only:
-            # If there is no specific type information available
-            # (i.e. if this is a static or non-public variable)
-            # then we can only compare the raw bytes.
-            compare_items = [
-                FieldListItem(offset=i, name="", type=CVInfoTypeEnum.T_UCHAR)
-                for i in range(data_size)
-            ]
+        if layout.raw:
+            # Splits `bytes` to `tuple[int]`.
             orig_data = tuple(orig_block.data)
             recomp_data = tuple(recomp_block.data)
         else:
-            format_str = get_format_string(compare_items)
+            format_str = get_format_string(layout.members)
 
             try:
                 orig_data = unpack(format_str, orig_block.data)
@@ -349,7 +342,7 @@ class VariableComparator:
                 return create_comparison_item(var, error=f"Failed to unpack data: {e}")
 
         compared = []
-        for orig_val, recomp_val, member in zip(orig_data, recomp_data, compare_items):
+        for orig_val, recomp_val, member in zip(orig_data, recomp_data, layout.members):
             if CvdumpTypeMap[member.type].pointer is not None:
                 match = self.is_pointer_match(orig_val, recomp_val)
 
@@ -390,5 +383,5 @@ class VariableComparator:
         return create_comparison_item(
             var,
             compared=compared,
-            raw_only=raw_only,
+            raw_only=layout.raw,
         )

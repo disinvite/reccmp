@@ -240,32 +240,27 @@ class CvdumpTypesParser:
         raise CvdumpTypeError(f"{type_key} is {leaf['type']}, cannot resolve")
 
     def element_type(self, type_key: CvdumpTypeKey) -> CvdumpTypeKey:
-        """Returns the underlying type of the given type.
-        For a pointer, return the pointee type.
-        For an array, return the element type.
-        For an enum or bitfield, return the type footprint."""
+        """Return the type being referenced by the pointer or array."""
         if type_key.is_scalar():
-            pointer = self._primitive(type_key).pointer
-            if pointer is None:
+            pointee_type = self._primitive(type_key).pointer
+            if pointee_type is None:
                 raise CvdumpTypeError(f"{type_key} is not a pointer")
 
-            return pointer
+            return pointee_type
 
-        leaf = self._resolved_leaf(type_key)
-        match leaf["type"]:
-            case "LF_POINTER":
-                return leaf["element_type"]
+        leaf = self._expect_leaf(type_key, "LF_POINTER", "LF_ARRAY")
+        if leaf["type"] == "LF_ARRAY":
+            return leaf["array_type"]
 
-            case "LF_ARRAY":
-                return leaf["array_type"]
+        return leaf["element_type"]
 
-            case "LF_ENUM":
-                return leaf["underlying_type"]
+    def underlying_type(self, type_key: CvdumpTypeKey) -> CvdumpTypeKey:
+        """Returns the type footprint of the given enum or bitfield."""
+        leaf = self._expect_leaf(type_key, "LF_ENUM", "LF_BITFIELD")
+        if leaf["type"] == "LF_BITFIELD":
+            return leaf["bit_type"]
 
-            case "LF_BITFIELD":
-                return leaf["bit_type"]
-
-        raise CvdumpTypeError(f"Type {type_key} is {leaf['type']}")
+        return leaf["underlying_type"]
 
     def members(self, type_key: CvdumpTypeKey) -> list[FieldListItem]:
         """Returns members of a struct or union. Order is not guaranteed. Callers should sort.

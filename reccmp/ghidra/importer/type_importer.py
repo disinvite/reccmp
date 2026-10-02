@@ -188,7 +188,7 @@ class PdbTypeImporter:
 
     def _import_enum(self, type_pdb: TypeInfo) -> DataType:
         underlying_type = self.import_pdb_type_into_ghidra(
-            self.types.element_type(type_pdb.key)
+            self.types.underlying_type(type_pdb.key)
         )
 
         type_name = type_pdb.name

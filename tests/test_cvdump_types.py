@@ -703,9 +703,14 @@ def test_element_type(parser: CvdumpTypesParser):
     assert parser.element_type(TK(0x3FAB)) == TK(0x3FAA)
     assert parser.element_type(CVInfoTypeEnum.T_32PVOID) == CVInfoTypeEnum.T_VOID
     assert parser.element_type(TK(0x103B)) == CVInfoTypeEnum.T_REAL32
-    assert parser.element_type(TK(0x3CC2)) == CVInfoTypeEnum.T_INT4
     with pytest.raises(CvdumpTypeError):
         parser.element_type(TK(0x4060))
+
+
+def test_underlying_type(parser: CvdumpTypesParser):
+    assert parser.underlying_type(TK(0x3CC2)) == CVInfoTypeEnum.T_INT4
+    with pytest.raises(CvdumpTypeError):
+        parser.underlying_type(TK(0x4060))
 
 
 def test_enum_variants_rejects_class(parser: CvdumpTypesParser):

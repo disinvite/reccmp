@@ -90,7 +90,7 @@ def get_scalars(
             yield FieldListItem(offset, name, pointer)
 
         case TypeKind.ENUM | TypeKind.BITFIELD:
-            yield from get_scalars(types, types.element_type(t.key), offset, name)
+            yield from get_scalars(types, types.underlying_type(t.key), offset, name)
 
         case TypeKind.ARRAY:
             element = types.get(types.element_type(t.key))

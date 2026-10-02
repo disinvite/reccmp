@@ -12,7 +12,6 @@ from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap, CVInfoTypeEnum
 from reccmp.cvdump.types import (
     CvdumpTypesParser,
     CvdumpKeyError,
-    CvdumpIntegrityError,
     FieldListItem,
 )
 from reccmp.types import ImageId
@@ -252,7 +251,7 @@ def get_variable_layout(types: CvdumpTypesParser, var: ReccmpMatch) -> VariableL
             if size is not None:
                 return VariableLayout(size, get_scalars_gapless(types, type_key), False)
 
-        except (CvdumpKeyError, CvdumpIntegrityError):
+        except CvdumpKeyError:
             # This may occur even when nothing is wrong, so permit a raw comparison here.
             # For example: we do not handle bitfields and this complicates fieldlist parsing
             # where they are used. (GH #299)

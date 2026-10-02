@@ -4,7 +4,6 @@ These are intended to work with any implementation of a type database."""
 from typing import Iterator
 from reccmp.cvdump.cvinfo import CvdumpTypeKey, CvdumpTypeMap, CVInfoTypeEnum
 from reccmp.cvdump.types import (
-    CvdumpIntegrityError,
     CvdumpKeyError,
     CvdumpTypesParser,
     FieldListItem,
@@ -108,7 +107,7 @@ def get_scalars(
 
         case TypeKind.STRUCT | TypeKind.UNION:
             if t.size is None:
-                raise CvdumpIntegrityError(f"Forward ref {t.key} has no target")
+                raise CvdumpKeyError(f"Forward ref {t.key} has no target")
 
             for m in composite_layout(types, t.key):
                 yield from get_scalars(

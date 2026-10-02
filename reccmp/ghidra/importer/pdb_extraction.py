@@ -5,7 +5,7 @@ from reccmp.formats.exceptions import InvalidVirtualAddressError
 from reccmp.cvdump.symbols import SymbolsEntry
 from reccmp.compare import Compare
 from reccmp.compare.db import ReccmpMatch
-from reccmp.cvdump.types import CvdumpKeyError, CvdumpTypeError
+from reccmp.cvdump.types import CvdumpKeyError, CvdumpValueError
 from reccmp.cvdump.cvinfo import CvdumpTypeKey, CVInfoTypeEnum
 
 logger = logging.getLogger(__file__)
@@ -73,7 +73,7 @@ class PdbFunctionExtractor:
 
         try:
             function_info = self.compare.types.function(function_type_key)
-        except (CvdumpKeyError, CvdumpTypeError):
+        except (CvdumpKeyError, CvdumpValueError):
             logger.error(
                 "Could not find function type %s for function %s", fn.func_type, fn.name
             )

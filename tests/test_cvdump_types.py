@@ -20,7 +20,7 @@ from reccmp.cvdump.types import (
     CvdumpTypeKey as TK,
     CvdumpTypesParser,
     CvdumpKeyError,
-    CvdumpTypeError,
+    CvdumpValueError,
     FunctionInfo,
     TypeKind,
 )
@@ -703,18 +703,18 @@ def test_element_type(parser: CvdumpTypesParser):
     assert parser.element_type(TK(0x3FAB)) == TK(0x3FAA)
     assert parser.element_type(CVInfoTypeEnum.T_32PVOID) == CVInfoTypeEnum.T_VOID
     assert parser.element_type(TK(0x103B)) == CVInfoTypeEnum.T_REAL32
-    with pytest.raises(CvdumpTypeError):
+    with pytest.raises(CvdumpValueError):
         parser.element_type(TK(0x4060))
 
 
 def test_underlying_type(parser: CvdumpTypesParser):
     assert parser.underlying_type(TK(0x3CC2)) == CVInfoTypeEnum.T_INT4
-    with pytest.raises(CvdumpTypeError):
+    with pytest.raises(CvdumpValueError):
         parser.underlying_type(TK(0x4060))
 
 
 def test_enum_variants_rejects_class(parser: CvdumpTypesParser):
-    with pytest.raises(CvdumpTypeError):
+    with pytest.raises(CvdumpValueError):
         parser.enum_variants(TK(0x5594))
 
 
@@ -735,7 +735,7 @@ def test_function(parser: CvdumpTypesParser):
         this_adjust=0,
     )
     assert parser.get(TK(0x1019)).kind == TypeKind.FUNCTION
-    with pytest.raises(CvdumpTypeError):
+    with pytest.raises(CvdumpValueError):
         parser.function(TK(0x4060))
 
 

@@ -29,16 +29,12 @@ from .type_leaves import (
 logger = logging.getLogger(__name__)
 
 
-class CvdumpTypeError(Exception):
-    pass
+class CvdumpValueError(ValueError):
+    """The type key is incorrect for this operation."""
 
 
 class CvdumpKeyError(KeyError):
-    pass
-
-
-class CvdumpIntegrityError(Exception):
-    pass
+    """The type key does not exist in the database."""
 
 
 def get_primitive(key: CvdumpTypeKey) -> CvInfoType:
@@ -77,9 +73,13 @@ LEAF_KINDS: dict[str, TypeKind] = {
 
 class TypeInfo(NamedTuple):
     key: CvdumpTypeKey
+    """The unique identifier from the PDB."""
     kind: TypeKind
+    """The category for this data type."""
     size: int | None
+    """Total size of this type in bytes."""
     name: str | None
+    """Optional name for this complex type."""
 
 
 @dataclass
@@ -163,11 +163,11 @@ class CvdumpTypesParser:
     ) -> CvdumpParsedType:
         """Make sure that the given type key is backed by a specific leaf type."""
         if type_key.is_scalar():
-            raise CvdumpTypeError(f"{type_key} is scalar, expected {str(leaf_types)}")
+            raise CvdumpValueError(f"{type_key} is scalar, expected {str(leaf_types)}")
 
         leaf = self._resolved_leaf(type_key)
         if leaf["type"] not in leaf_types:
-            raise CvdumpTypeError(
+            raise CvdumpValueError(
                 f"{type_key} is {leaf['type']}, expected {str(leaf_types)}"
             )
 
@@ -188,6 +188,9 @@ class CvdumpTypesParser:
         """
         leaf: CvdumpParsedType | None = None
 
+        # Follow any number of forward reference indirection hops.
+        # TODO: Fix shortcut: LF_MODIFIER is considered a forward reference.
+        # No consumer uses the `const` or `volatile` modifier options.
         while not type_key.is_scalar():
             leaf = self.from_key(type_key)
             if not leaf.get("is_forward_ref", False):
@@ -200,7 +203,7 @@ class CvdumpTypesParser:
                 # Example: HWND__
                 kind = LEAF_KINDS.get(leaf["type"])
                 if kind is None:
-                    raise CvdumpIntegrityError(f"Null forward ref for type {type_key}")
+                    raise CvdumpKeyError(f"Null forward ref for type {type_key}")
 
                 return TypeInfo(type_key, kind, None, leaf.get("name"))
 
@@ -237,14 +240,14 @@ class CvdumpTypesParser:
             case TypeKind.FUNCTION:
                 return TypeInfo(type_key, kind, None, None)
 
-        raise CvdumpTypeError(f"{type_key} is {leaf['type']}, cannot resolve")
+        raise CvdumpValueError(f"{type_key} is {leaf['type']}, cannot resolve")
 
     def element_type(self, type_key: CvdumpTypeKey) -> CvdumpTypeKey:
         """Return the type being referenced by the pointer or array."""
         if type_key.is_scalar():
             pointee_type = self._primitive(type_key).pointer
             if pointee_type is None:
-                raise CvdumpTypeError(f"{type_key} is not a pointer")
+                raise CvdumpValueError(f"{type_key} is not a pointer")
 
             return pointee_type
 

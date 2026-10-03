@@ -41,13 +41,13 @@ jobs:
     - name: Download saved report
       shell: bash
       run: |
-        wget https://github.com/isledecomp/isle/releases/download/continuous/${{ matrix.target }}PROGRESS-dev.json
+        wget https://github.com/isledecomp/isle/releases/download/continuous/${{ matrix.target }}PROGRESS.json
 
     - name: Diff against saved report
       shell: bash
       working-directory: ./companion/source
       run: |
-        reccmp-reccmp --target ${{ matrix.target }} --diff ../../${{ matrix.target }}PROGRESS-dev.json 2>&1 | tee diff.txt
+        reccmp-reccmp --target ${{ matrix.target }} --diff ../../${{ matrix.target }}PROGRESS.json 2>&1 | tee diff.txt
         ! grep -q 'Traceback (most recent call last)' diff.txt
         ! grep -q 'Could not open JSON report file' diff.txt
 

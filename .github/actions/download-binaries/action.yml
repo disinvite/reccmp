@@ -12,6 +12,8 @@ runs:
       wget https://github.com/isledecomp/isle/releases/download/continuous/ReproBit-Debug-Companion.zip
       unzip -q ReproBit-Debug-Companion.zip -d companion
       mv companion/LEGO1.PDB companion/LEGO1.pdb
+      mv companion/ISLE.PDB companion/ISLE.pdb
+      mv companion/CONFIG.PDB companion/CONFIG.pdb
 
   - name: Upload binaries
     uses: actions/upload-artifact@v7

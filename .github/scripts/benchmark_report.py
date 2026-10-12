@@ -57,12 +57,20 @@ def main():
     parser.add_argument("files", type=Path, nargs="+", help="Files of times in ns")
     args = parser.parse_args()
 
-    times = read_times(args.files)
-    if not times:
+    blocks = [read_times([path]) for path in args.files]
+    if not any(blocks):
         parser.error("no samples")
 
+    medians = [statistics.median(block) for block in blocks if block]
+    keep_medians = set(split_outliers(medians)[0])
+    kept_blocks = [
+        block for block in blocks if block and statistics.median(block) in keep_medians
+    ]
+
+    times = [t for block in kept_blocks for t in block]
     keep, drop = split_outliers(times)
 
+    print(f"blocks:   {len(blocks)} ({len(blocks) - len(kept_blocks)} dropped)")
     print(f"samples:  {len(times)}")
     print(f"outliers: {', '.join(seconds(t) for t in sorted(drop)) or 'none'}")
     print(f"average:  {seconds(statistics.fmean(keep))}")
@@ -70,10 +78,13 @@ def main():
     print(f"minimum:  {seconds(min(keep))}")
     print(f"maximum:  {seconds(max(keep))}")
     print()
-    for i, path in enumerate(args.files, 1):
-        samples = read_times([path])
+    for i, samples in enumerate(blocks, 1):
+        if not samples:
+            print(f"{i:3d}: no samples")
+            continue
+        mark = "" if samples in kept_blocks else " (dropped)"
         print(
-            f"{i:3d}: {len(samples)} samples, {seconds(min(samples))} - {seconds(max(samples))}"
+            f"{i:3d}: {len(samples)} samples, {seconds(min(samples))} - {seconds(max(samples))}, median {seconds(statistics.median(samples))}{mark}"
         )
     print()
     print("\n".join(histogram(keep)))

@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from time import process_time_ns
+from time import perf_counter_ns
 
 from reccmp.compare import Compare
 from reccmp.project.detect import (
@@ -37,11 +37,11 @@ def main() -> int:
     to_report = []
 
     for _ in range(args.runs):
-        start = process_time_ns()
+        start = perf_counter_ns()
         compare = Compare.from_target(target)
-        loaded = process_time_ns()
+        loaded = perf_counter_ns()
         compare.to_report(filename=target.original_path.name)
-        done = process_time_ns()
+        done = perf_counter_ns()
         from_target.append(loaded - start)
         to_report.append(done - loaded)
 

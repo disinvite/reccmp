@@ -4,8 +4,10 @@ from datetime import datetime
 from aiohttp import (
     web,
 )
+from pydantic import TypeAdapter
 from watchfiles import awatch
 from reccmp.compare import Compare
+from reccmp.compare.report import ReccmpComparedEntity
 from reccmp.project.detect import (
     RecCmpTarget,
     argparse_add_project_target_args,
@@ -52,6 +54,7 @@ class AppState:
 
 STATE_KEY = web.AppKey("app_state", AppState)
 WATCHER_KEY = web.AppKey("watcher", asyncio.Task)
+STOP_KEY = web.AppKey("stop", asyncio.Event)
 
 
 async def start_reccmp(app):
@@ -128,7 +131,14 @@ async def handle_addr(request):
     if not ent:
         raise web.HTTPNotFound()
 
-    return web.json_response({"name": ent.name, "accuracy": ent.accuracy})
+    return web.json_response(
+        body=TypeAdapter(ReccmpComparedEntity).dump_json(ent),
+    )
+
+
+async def handle_stop(request):
+    request.app[STOP_KEY].set()
+    return web.HTTPNoContent()
 
 
 async def handle_ready(request):
@@ -160,6 +170,7 @@ async def server_main(args: argparse.Namespace):
 
     app = web.Application(middlewares=[bump_timeout])
     app[STATE_KEY] = AppState(target)
+    app[STOP_KEY] = asyncio.Event()
     app.on_startup.append(start_reccmp)
     app.on_startup.append(start_watching)
 
@@ -169,6 +180,7 @@ async def server_main(args: argparse.Namespace):
             web.get("/ready", handle_ready),
             web.get("/list", handle_list),
             web.get("/rerun", handle_rerun),
+            web.get("/stop", handle_stop),
             web.get("/addr/{addr}", handle_addr, name="get_addr"),
         ]
     )
@@ -179,7 +191,13 @@ async def server_main(args: argparse.Namespace):
 
     try:
         while True:
-            await asyncio.sleep(10)
+            try:
+                await asyncio.wait_for(app[STOP_KEY].wait(), timeout=600)
+                print("Stop requested.")
+                break
+            except asyncio.TimeoutError:
+                pass
+
             # Shutdown after some period of inactivity
             # TODO: tune this value
             if app[STATE_KEY].should_timeout(20):

@@ -73,13 +73,18 @@ jobs:
       run: |
         pip install .
 
-    - name: Install wine
+    - name: Wine setup
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo dpkg --add-architecture i386
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends wine wine32:i386
+
+    - name: Install wine
+      if: runner.os == 'Linux'
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: wine wine32:i386
+        version: 1.0
 
     - name: Restore isle
       uses: actions/download-artifact@v7

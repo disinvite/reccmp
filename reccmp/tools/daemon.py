@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from aiohttp import (
     web,
 )
@@ -9,14 +10,15 @@ from watchfiles import awatch
 from reccmp.compare import Compare
 from reccmp.compare.report import ReccmpComparedEntity
 from reccmp.project.detect import (
+    RecCmpProject,
     RecCmpTarget,
-    argparse_add_project_target_args,
-    argparse_parse_project_target,
+    verify_target_paths,
 )
 from reccmp.project.logging import (
     argparse_add_logging_args,
     argparse_parse_logging,
 )
+from reccmp.remote import get_state_path, read_port, write_state
 
 
 class AppState:
@@ -143,7 +145,9 @@ async def handle_stop(request):
 
 async def handle_ready(request):
     state: AppState = request.app[STATE_KEY]
-    return web.json_response({"ready": state.is_ready})
+    return web.json_response(
+        {"ready": state.is_ready, "target": state.target.target_id}
+    )
 
 
 @web.middleware
@@ -154,9 +158,15 @@ async def bump_timeout(request, handler):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="web")
-    parser.add_argument("--port", type=int, required=False, default=8080)
-
-    argparse_add_project_target_args(parser)
+    parser.add_argument(
+        "--port",
+        type=int,
+        required=False,
+        default=0,
+    )
+    parser.add_argument(
+        "--target", metavar="<target-id>", help="ID of the target", required=True
+    )
     argparse_add_logging_args(parser)
 
     args = parser.parse_args()
@@ -166,7 +176,9 @@ def parse_args() -> argparse.Namespace:
 
 
 async def server_main(args: argparse.Namespace):
-    target = argparse_parse_project_target(args=args)
+    project = RecCmpProject.from_directory(Path.cwd())
+    target = project.get(args.target)
+    verify_target_paths(target)
 
     app = web.Application(middlewares=[bump_timeout])
     app[STATE_KEY] = AppState(target)
@@ -189,6 +201,11 @@ async def server_main(args: argparse.Namespace):
     site = web.TCPSite(runner, host="127.0.0.1", port=args.port)
     await site.start()
 
+    # Save the port so clients can find this daemon.
+    port = runner.addresses[0][1]
+    state_path = get_state_path(project, target.target_id)
+    write_state(state_path, target.target_id, port)
+
     try:
         while True:
             try:
@@ -210,6 +227,9 @@ async def server_main(args: argparse.Namespace):
     finally:
         print("Exiting...")
         await runner.cleanup()
+        # Leave the file alone if another daemon has replaced it.
+        if read_port(state_path) == port:
+            state_path.unlink(missing_ok=True)
 
     # await asyncio.Event().wait()
     # web.run_app(app, host="127.0.0.1", port=args.port)

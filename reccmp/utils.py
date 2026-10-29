@@ -7,12 +7,14 @@ import logging
 from pystache import Renderer  # type: ignore[import-untyped]
 from reccmp.assets import get_asset_file
 import reccmp.color
+from reccmp.compare.diff import raw_diff_to_udiff
 from reccmp.compare.report import (
     ReccmpStatusReport,
     ReccmpComparedEntity,
     serialize_reccmp_report,
     format_address,
 )
+from reccmp.types import EntityType
 
 
 def safe_denominator(v: int) -> int:
@@ -248,6 +250,39 @@ def percent_string(
             reccmp.color.Style.RESET_ALL,
         ]
     )
+
+
+def print_match_verbose(match: ReccmpComparedEntity, show_both_addrs: bool = False):
+    percenttext = percent_string(match.effective_accuracy, match.is_effective_match)
+
+    if show_both_addrs and match.recomp_addr is not None:
+        addrs = (
+            f"{format_address(match.orig_addr)} / {format_address(match.recomp_addr)}"
+        )
+    else:
+        addrs = format_address(match.orig_addr)
+
+    grouped_diff = match.type != EntityType.VTABLE
+    assert match.rdiff is not None
+    udiff = raw_diff_to_udiff(match.rdiff, grouped=grouped_diff)
+
+    if match.effective_accuracy == 1.0:
+        ok_text = reccmp.color.Fore.GREEN + "✨ OK! ✨" + reccmp.color.Style.RESET_ALL
+        if match.accuracy == 1.0:
+            print(f"{addrs}: {match.name} 100% match.\n\n{ok_text}\n\n")
+        else:
+            print_combined_diff(udiff, show_both=show_both_addrs)
+
+            print(
+                f"\n{addrs}: {match.name} 100% effective match (differs, but only in ways that don't affect behavior).\n\n{ok_text}\n\n"
+            )
+
+    else:
+        print_combined_diff(udiff, show_both=show_both_addrs)
+
+        print(
+            f"\n{match.name} is only {percenttext} similar to the original, diff above"
+        )
 
 
 def diff_json_display(

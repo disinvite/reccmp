@@ -5,21 +5,23 @@ from pathlib import Path
 import argparse
 import logging
 import os
+import time
+from urllib.error import URLError
 
 import colorama
+from pydantic import TypeAdapter
 import reccmp
 from reccmp.utils import (
     gen_svg,
-    print_combined_diff,
     diff_json,
     percent_string,
+    print_match_verbose,
     safe_denominator,
     write_html_report,
 )
 
 from reccmp.compare import Compare
 from reccmp.compare.db import ReccmpEntity
-from reccmp.compare.diff import raw_diff_to_udiff
 from reccmp.compare.report import (
     ReccmpStatusReport,
     ReccmpComparedEntity,
@@ -35,10 +37,13 @@ from reccmp.project.logging import (
     argparse_parse_logging,
 )
 from reccmp.project.detect import (
+    RecCmpProject,
     RecCmpProjectException,
     argparse_add_project_target_args,
     argparse_parse_project_target,
+    verify_target_paths,
 )
+from reccmp.remote import connect, http_get
 
 logger = logging.getLogger()
 colorama.just_fix_windows_console()
@@ -49,39 +54,6 @@ def gen_json(json_file: str, json_str: str):
 
     with open(json_file, "w", encoding="utf-8") as f:
         f.write(json_str)
-
-
-def print_match_verbose(match: ReccmpComparedEntity, show_both_addrs: bool = False):
-    percenttext = percent_string(match.effective_accuracy, match.is_effective_match)
-
-    if show_both_addrs and match.recomp_addr is not None:
-        addrs = (
-            f"{format_address(match.orig_addr)} / {format_address(match.recomp_addr)}"
-        )
-    else:
-        addrs = format_address(match.orig_addr)
-
-    grouped_diff = match.type != EntityType.VTABLE
-    assert match.rdiff is not None
-    udiff = raw_diff_to_udiff(match.rdiff, grouped=grouped_diff)
-
-    if match.effective_accuracy == 1.0:
-        ok_text = reccmp.color.Fore.GREEN + "✨ OK! ✨" + reccmp.color.Style.RESET_ALL
-        if match.accuracy == 1.0:
-            print(f"{addrs}: {match.name} 100% match.\n\n{ok_text}\n\n")
-        else:
-            print_combined_diff(udiff, show_both=show_both_addrs)
-
-            print(
-                f"\n{addrs}: {match.name} 100% effective match (differs, but only in ways that don't affect behavior).\n\n{ok_text}\n\n"
-            )
-
-    else:
-        print_combined_diff(udiff, show_both=show_both_addrs)
-
-        print(
-            f"\n{match.name} is only {percenttext} similar to the original, diff above"
-        )
 
 
 def print_match_oneline(match: ReccmpComparedEntity, show_both_addrs: bool = False):
@@ -176,12 +148,76 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Exclude LIBRARY annotations from the analysis",
     )
+    remote_group = parser.add_argument_group(title="Remote viewing")
+    remote_group.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Get results from a reccmp-daemon for the target, starting it if needed",
+    )
+    remote_group.add_argument(
+        "--port",
+        type=int,
+        metavar="<port>",
+        help="Port for the daemon (default: the saved port, or one chosen by the daemon)",
+    )
+    remote_group.add_argument(
+        "--restart",
+        action="store_true",
+        help="Stop the server if it is running, then start a new one",
+    )
     argparse_add_logging_args(parser)
 
     args = parser.parse_args()
     argparse_parse_logging(args)
 
+    if not args.daemon and (args.port is not None or args.restart):
+        parser.error("--port and --restart require --daemon")
+
+    if args.daemon and args.target is None:
+        parser.error("--daemon requires --target")
+
     return args
+
+
+def remote_main(args: argparse.Namespace) -> int:
+    if args.verbose is None:
+        logger.error("Only --verbose is supported with --daemon")
+        return 1
+
+    try:
+        project = RecCmpProject.from_directory(Path.cwd())
+        verify_target_paths(project.get(args.target))
+    except RecCmpProjectException as e:
+        logger.error("%s", e.args[0])
+        return 1
+
+    base_url = connect(project, args.target, port=args.port, restart=args.restart)
+    if base_url is None:
+        logger.error("Could not start reccmp-daemon")
+        return 1
+
+    print()
+
+    for retry in range(10):
+        try:
+            status, body = http_get(f"{base_url}/addr/{args.verbose}")
+        except (URLError, TimeoutError):
+            status, body = (0, b"")
+
+        if status == 200:
+            match = TypeAdapter(ReccmpComparedEntity).validate_json(body)
+            print_match_verbose(match, show_both_addrs=args.print_rec_addr)
+            return 0
+
+        if status == 404:
+            logger.error("Failed to find a match at address 0x%x", args.verbose)
+            return 1
+
+        print(f"Server is not ready. Waiting a second. ({retry + 1})")
+        time.sleep(1)
+
+    logger.error("Max retries reached. Server may be stuck.")
+    return 1
 
 
 def dump_all_matched_functions(report: ReccmpStatusReport):
@@ -225,6 +261,9 @@ def dump_all_matched_functions(report: ReccmpStatusReport):
 
 def main() -> int:
     args = parse_args()
+
+    if args.daemon:
+        return remote_main(args)
 
     try:
         target = argparse_parse_project_target(args)

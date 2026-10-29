@@ -13,7 +13,12 @@ from .config import (
     UserFileTarget,
 )
 
-from .common import RECCMP_USER_CONFIG, RECCMP_BUILD_CONFIG, RECCMP_PROJECT_CONFIG
+from .common import (
+    RECCMP_USER_CONFIG,
+    RECCMP_BUILD_CONFIG,
+    RECCMP_PROJECT_CONFIG,
+    RECCMP_DIRECTORY,
+)
 from .error import (
     RecCmpProjectException,
     RecCmpProjectNotFoundException,
@@ -326,6 +331,19 @@ class RecCmpProject:
         logger.debug("Using project config: %s", self.user_config_path)
         return UserFile.from_file(self.user_config_path)
 
+    def get_reccmp_directory(self) -> Path:
+        """Return the .reccmp directory next to reccmp-project.yml, creating it if needed.
+        Its .gitignore excludes everything in the directory from git."""
+        assert self.project_config_path is not None
+        directory = self.project_config_path.parent / RECCMP_DIRECTORY
+        directory.mkdir(exist_ok=True)
+
+        gitignore_path = directory / ".gitignore"
+        if not gitignore_path.exists():
+            gitignore_path.write_text("*\n", encoding="utf-8")
+
+        return directory
+
     @classmethod
     def from_directory(cls, directory: Path) -> "RecCmpProject":
         project = cls()
@@ -502,6 +520,12 @@ def argparse_parse_project_target(
     else:
         target = args.paths_target
 
+    verify_target_paths(target)
+    return target
+
+
+def verify_target_paths(target: RecCmpTarget):
+    """Raise RecCmpProjectException if any of the target's files or directories does not exist."""
     if not target.original_path.is_file():
         raise RecCmpProjectException(
             f"Original binary {target.original_path} does not exist"
@@ -522,7 +546,6 @@ def argparse_parse_project_target(
             raise RecCmpProjectException(
                 f"Source code search path '{source_path}' does not exist"
             )
-    return target
 
 
 class DetectWhat(enum.Enum):

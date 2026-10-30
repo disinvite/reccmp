@@ -120,6 +120,8 @@ def write_html_report(
         "components/pageNumberOf.js",
         "components/pageSelect.js",
         "components/prevPageButton.js",
+        "components/progressPercent.js",
+        "components/reportFilename.js",
         "components/resultCount.js",
         "components/showRecomp.js",
         "components/searchbar.js",
@@ -132,6 +134,7 @@ def write_html_report(
 
     # Convert the report to a JSON string to insert in the HTML template.
     report_str = serialize_reccmp_report(report, diff_included=True)
+    reccmp_js = reccmp_js.replace("/* RECCMP_REPORT_JSON */", report_str)
 
     favicon = ""
     if icon:
@@ -139,7 +142,7 @@ def write_html_report(
 
     output_data = Renderer().render_path(
         get_asset_file("template.html"),
-        {"report": report_str, "reccmp_js": reccmp_js, "favicon": favicon},
+        {"reccmp_js": reccmp_js, "favicon": favicon},
     )
 
     with open(html_file, "w", encoding="utf-8") as htmlfile:

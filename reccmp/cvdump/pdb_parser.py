@@ -123,12 +123,6 @@ def _register_name(reg: int) -> str:
     return _REGISTER_NAMES.get(reg, f"reg{reg}")
 
 
-def _iter_records(data: bytes):
-    # TODO: CodeViewRecord.from_bytes reads past the end of the buffer if
-    # alignment moves the offset to len(data). The zero padding ends iteration.
-    return CodeViewRecord.from_bytes(data + b"\x00" * 4)
-
-
 def _read_name(data: bytes, offset: int, record_type: int) -> str:
     if record_type in _PASCAL_NAME_TYPES:
         name, _ = read_pascal_string(data, offset)
@@ -285,7 +279,7 @@ class PdbParser:
         Here they are read from the symbol record stream in stream order.
         TODO: Read the hash table instead. The record stream can have public symbols
         that are not in the hash table, so this may be true for globals too."""
-        for record in _iter_records(data):
+        for record in CodeViewRecord.from_bytes(data, align=True):
             if record.type in _GLOBAL_DATA_TYPES or record.type in _LOCAL_DATA_TYPES:
                 section, offset, typ, name = _read_data_sym(
                     data, record.offset, record.type
@@ -305,7 +299,7 @@ class PdbParser:
         current_function: SymbolsEntry | None = None
         block_level = 0
 
-        for record in _iter_records(data):
+        for record in CodeViewRecord.from_bytes(data):
             rtype = record.type
 
             if rtype in _GLOBAL_PROC_TYPES or rtype in _LOCAL_PROC_TYPES:

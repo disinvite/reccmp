@@ -13,13 +13,9 @@ class CodeViewRecord:
     size: int
 
     @classmethod
-    def from_bytes(cls, buf: bytes, align: bool = True) -> Iterator["CodeViewRecord"]:
+    def from_bytes(cls, buf: bytes, align: bool = False) -> Iterator["CodeViewRecord"]:
         offset = 0
         while offset < len(buf):
-            # Maintain 4-byte alignment.
-            if align and (offset % 4 != 0):
-                offset += 4 - offset % 4
-
             record_size, record_type = unpack_from("<2H", buf, offset=offset)
             if record_size == 0:
                 break
@@ -35,3 +31,7 @@ class CodeViewRecord:
 
             yield cls(offset, record_type, record_size)
             offset += record_size
+
+            # Maintain 4-byte alignment.
+            if align and (offset % 4 != 0):
+                offset += 4 - offset % 4

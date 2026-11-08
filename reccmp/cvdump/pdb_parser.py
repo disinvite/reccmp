@@ -4,7 +4,7 @@ from struct import iter_unpack, unpack_from
 from reccmp.formats.pdb import MSFContainer, StreamIndex
 from reccmp.formats.pdb.codeview import CodeViewRecord
 from reccmp.formats.pdb.common import read_pascal_string, read_sz_string
-from reccmp.formats.pdb.dbi import DBIHeader, DebugInfomation, SectionContribution
+from reccmp.formats.pdb.dbi import DebugInfomation
 from reccmp.formats.pdb.tpi import TPIHeader
 from .cvinfo import CvdumpTypeKey
 from .parser import (
@@ -19,9 +19,6 @@ from .types import CvdumpTypesParser
 
 # TPI version for MSVC 4.1. cvdump converts 16-bit types if the version is this or lower.
 _TPI_IMPV41 = 19951122
-
-# Section contribution substream version for MSVC 6+ (DBISCImpv, dbi.h)
-_DBI_SC_IMPV = 0xEFFE0000 + 19970605
 
 # Symbol record types. The 16t types are from MSVC 4.x PDBs. The ST types have
 # 32-bit type indices and pascal string names. The rest have zero-terminated names.
@@ -189,9 +186,8 @@ class PdbParser:
         self.is_16bit_type_pool = header.version <= _TPI_IMPV41
 
     def _read_dbi(self):
-        dbi = self._msf.get_stream(StreamIndex.DBI)
-        header, offset = DBIHeader.from_bytes(dbi)
-        info = DebugInfomation.from_bytes(dbi)
+        info = DebugInfomation.from_bytes(self._msf.get_stream(StreamIndex.DBI))
+        header = info.header
 
         for i, module in enumerate(info.modules, start=1):
             self.modules.append(
@@ -202,10 +198,17 @@ class PdbParser:
                 )
             )
 
-        self._read_section_contributions(
-            dbi[offset + header.module_info_size :][: header.section_contribution_size],
-            header,
-        )
+        for sc in info.section_contributions:
+            self.sizerefs.append(
+                SizeRefEntry(
+                    # cvdump numbers the modules from 1.
+                    module=sc.moduleindex + 1,
+                    section=sc.section,
+                    offset=sc.offset,
+                    size=sc.size,
+                )
+            )
+
         symbol_records = self._msf.get_stream(header.symbol_stream_id)
         self._read_publics(
             self._msf.get_stream(header.public_stream_id), symbol_records
@@ -221,30 +224,6 @@ class PdbParser:
             self._read_module_symbols(stream[4 : module.symbol_size])
             self._read_c11_lines(stream[module.symbol_size :][: module.c11_lines_size])
             # TODO: C13 lines
-
-    def _read_section_contributions(self, data: bytes, header: DBIHeader):
-        offset = 0
-        new = False
-        if header.version != 0:
-            (sc_version,) = unpack_from("<I", data)
-            offset += 4
-            if sc_version != _DBI_SC_IMPV:
-                # TODO: DBISCImpv2
-                return
-            new = True
-
-        while offset < len(data):
-            sc, offset = SectionContribution.from_bytes(data, offset, new=new)
-            self.sizerefs.append(
-                SizeRefEntry(
-                    # cvdump numbers the modules from 1.
-                    module=sc.moduleindex + 1,
-                    # TODO: SectionContribution reads the old 16-bit section and its padding as one 32-bit value.
-                    section=sc.section & 0xFFFF,
-                    offset=sc.offset,
-                    size=sc.size,
-                )
-            )
 
     def _read_publics(self, data: bytes, symbol_records: bytes):
         """The public symbol stream has a hash table and an address map, both of

@@ -3,6 +3,9 @@ from struct import unpack_from
 from .common import align_to, read_sz_string
 from .debug import debug_print
 
+# Section contribution substream version for MSVC 6+ (DBISCImpv, dbi.h)
+_DBI_SC_IMPV = 0xEFFE0000 + 19970605
+
 
 @dataclass(frozen=True)
 class DBIHeader:
@@ -89,7 +92,7 @@ class SectionContribution:
             offset += 28
         else:
             section, sc_offset, size, characteristics, moduleindex = unpack_from(
-                "<2IiIH2x", data, offset=offset
+                "<H2xIiIH2x", data, offset=offset
             )
             data_crc = 0
             reloc_crc = 0
@@ -161,17 +164,42 @@ class ModuleInfo:
 class DebugInfomation:
     header: DBIHeader
     modules: tuple[ModuleInfo, ...]
+    section_contributions: tuple[SectionContribution, ...]
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "DebugInfomation":
         header, offset = DBIHeader.from_bytes(data)
+        sc_data = data[offset + header.module_info_size :][
+            : header.section_contribution_size
+        ]
         new_modi = header.version >= 19970606
         modules = []
         while offset < header.module_info_size:
             module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
             modules.append(module)
 
-        return cls(header, tuple(modules))
+        return cls(header, tuple(modules), _read_section_contributions(sc_data, header))
+
+
+def _read_section_contributions(
+    data: bytes, header: DBIHeader
+) -> tuple[SectionContribution, ...]:
+    offset = 0
+    new = False
+    if header.version != 0:
+        (sc_version,) = unpack_from("<I", data)
+        offset += 4
+        if sc_version != _DBI_SC_IMPV:
+            # TODO: DBISCImpv2
+            return ()
+        new = True
+
+    contributions = []
+    while offset < len(data):
+        sc, offset = SectionContribution.from_bytes(data, offset, new=new)
+        contributions.append(sc)
+
+    return tuple(contributions)
 
 
 def parse_modules(data: bytes):

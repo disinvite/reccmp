@@ -172,7 +172,7 @@ class PdbParser:
 
         self.is_16bit_type_pool: bool | None = None
 
-        self._msf = MSFContainer(data)
+        self._msf = MSFContainer.from_bytes(data)
         self._read_types()
         self._read_dbi()
 

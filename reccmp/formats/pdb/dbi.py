@@ -1,10 +1,19 @@
 from dataclasses import dataclass
+from enum import Enum, auto
 from struct import unpack_from
 from .common import align_to, read_sz_string
 from .debug import debug_print
 
-# Section contribution substream version for MSVC 6+ (DBISCImpv, dbi.h)
+# Section contribution substream versions (DBISCImpv and DBISCImpv2, dbi.h)
 _DBI_SC_IMPV = 0xEFFE0000 + 19970605
+_DBI_SC_IMPV2 = 0xEFFE0000 + 20140516
+
+
+class SectionContributionVersion(Enum):
+    # Struct names from dbicommon.h
+    SC40 = auto()
+    SC = auto()
+    SC2 = auto()
 
 
 @dataclass(frozen=True)
@@ -77,9 +86,24 @@ class SectionContribution:
 
     @classmethod
     def from_bytes(
-        cls, data: bytes, offset: int = 0, *, new: bool = False
+        cls,
+        data: bytes,
+        offset: int = 0,
+        *,
+        version: SectionContributionVersion = SectionContributionVersion.SC40,
     ) -> tuple["SectionContribution", int]:
-        if new:
+        if version == SectionContributionVersion.SC2:
+            (
+                section,
+                sc_offset,
+                size,
+                characteristics,
+                moduleindex,
+                data_crc,
+                reloc_crc,
+            ) = unpack_from("<H2x2iIH2x2I4x", data, offset=offset)
+            offset += 32
+        elif version == SectionContributionVersion.SC:
             (
                 section,
                 sc_offset,
@@ -129,7 +153,15 @@ class ModuleInfo:
     ) -> tuple["ModuleInfo", int]:
         offset = align_to(offset, 4)
         offset += 4  # skip unused
-        sc, offset = SectionContribution.from_bytes(data, offset=offset, new=new)
+        sc, offset = SectionContribution.from_bytes(
+            data,
+            offset=offset,
+            version=(
+                SectionContributionVersion.SC
+                if new
+                else SectionContributionVersion.SC40
+            ),
+        )
 
         if new:
             stream_id, symbol_size, c11_lines_size, c13_lines_size = unpack_from(
@@ -178,25 +210,29 @@ class DebugInfomation:
             module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
             modules.append(module)
 
-        return cls(header, tuple(modules), _read_section_contributions(sc_data, header))
+        return cls(header, tuple(modules), _read_section_contributions(sc_data))
 
 
-def _read_section_contributions(
-    data: bytes, header: DBIHeader
-) -> tuple[SectionContribution, ...]:
-    offset = 0
-    new = False
-    if header.version != 0:
-        (sc_version,) = unpack_from("<I", data)
-        offset += 4
-        if sc_version != _DBI_SC_IMPV:
-            # TODO: DBISCImpv2
-            return ()
-        new = True
+def _read_section_contributions(data: bytes) -> tuple[SectionContribution, ...]:
+    if not data:
+        return ()
+
+    # If the header does not match any known magic numbers,
+    # assume the substream format is SC40, starting at offset=0.
+    (sc_version,) = unpack_from("<I", data)
+    if sc_version == _DBI_SC_IMPV2:
+        version = SectionContributionVersion.SC2
+        offset = 4
+    elif sc_version == _DBI_SC_IMPV:
+        version = SectionContributionVersion.SC
+        offset = 4
+    else:
+        version = SectionContributionVersion.SC40
+        offset = 0
 
     contributions = []
     while offset < len(data):
-        sc, offset = SectionContribution.from_bytes(data, offset, new=new)
+        sc, offset = SectionContribution.from_bytes(data, offset, version=version)
         contributions.append(sc)
 
     return tuple(contributions)

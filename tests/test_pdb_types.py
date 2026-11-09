@@ -3,7 +3,7 @@ from reccmp.formats.pdb.tpi import (
     LfArray,
     LfEnum,
     TypeLookup,
-    get_udt_definitions,
+    resolve_forward_refs,
 )
 
 
@@ -71,18 +71,17 @@ ISLEAPP_FWDREF = (
 )
 ISLEAPP_1 = b"\x16\x00\x04\x00/\x00\xc2\x10\x02\x00\x00\x00\x00\x00\x8c\x00\x07IsleApp"
 ISLEAPP_2 = b"\x16\x00\x04\x00/\x00\x9b\x1d\x02\x00\x00\x00\x00\x00\x8c\x00\x07IsleApp"
-ANON_ENUM = b'"\x00\x07\x00\n\x00t\x00G\x10\x08\x00\x15MxDSAction::__unnamed\xf2\xf1'
 
 
-def test_udt_skips_forward_ref():
+def test_forward_ref_resolves_to_definition():
     types = {0x1011: ISLEAPP_FWDREF, 0x10C3: ISLEAPP_1}
-    assert get_udt_definitions(types) == {"IsleApp": 0x10C3}
+    assert resolve_forward_refs(types) == {0x1011: 0x10C3}
 
 
-def test_udt_last_definition_wins():
-    types = {0x10C3: ISLEAPP_1, 0x1D9C: ISLEAPP_2}
-    assert get_udt_definitions(types) == {"IsleApp": 0x1D9C}
+def test_forward_ref_resolves_to_last_definition():
+    types = {0x1011: ISLEAPP_FWDREF, 0x10C3: ISLEAPP_1, 0x1D9C: ISLEAPP_2}
+    assert resolve_forward_refs(types) == {0x1011: 0x1D9C}
 
 
-def test_udt_skips_anonymous():
-    assert not get_udt_definitions({0x1048: ANON_ENUM})
+def test_forward_ref_without_definition():
+    assert not resolve_forward_refs({0x1011: ISLEAPP_FWDREF})

@@ -434,20 +434,50 @@ class LfEnum(CodeViewLeaf):
 
 @dataclass(frozen=True)
 class LfArglist(CodeViewLeaf):
-    """lfArgList_16t, cvinfo.h"""
+    """lfArgList_16t / lfArgList, cvinfo.h"""
 
     args: tuple[int, ...]
 
     @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "LfArglist":
-        leaf_type, _ = unpack_from("<2H", data, offset=offset)
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
         offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
 
-        (count,) = unpack_from("<H", data, offset=offset)
-        offset += 2
-        arg_data = data[offset : offset + 2 * count]
-        args = tuple(arg for arg, in iter_unpack("<H", arg_data))
+        if is32:
+            (count,) = unpack_from("<I", data, offset=offset)
+            offset += 4
+            arg_data = data[offset : offset + 4 * count]
+            args = tuple(arg for arg, in iter_unpack("<I", arg_data))
+        else:
+            (count,) = unpack_from("<H", data, offset=offset)
+            offset += 2
+            arg_data = data[offset : offset + 2 * count]
+            args = tuple(arg for arg, in iter_unpack("<H", arg_data))
+
         return cls(leaf_type, args)
+
+
+@dataclass(frozen=True)
+class LfBitfield(CodeViewLeaf):
+    """lfBitfield_16t / lfBitfield, cvinfo.h"""
+
+    length: int
+    position: int
+    type: int
+
+    @classmethod
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "LfBitfield":
+        (leaf_type,) = unpack_from("<2xH", data, offset=offset)
+        offset += 4
+        is32 = leaf_type & 0x1000 == 0x1000
+
+        if is32:
+            bit_type, length, position = unpack_from("<I2B", data, offset=offset)
+        else:
+            length, position, bit_type = unpack_from("<2BH", data, offset=offset)
+
+        return cls(leaf_type, length, position, bit_type)
 
 
 def _is_anonymous_udt(name: str) -> bool:
@@ -457,12 +487,13 @@ def _is_anonymous_udt(name: str) -> bool:
     )
 
 
-def get_udt_definitions(types: Mapping[int, bytes]) -> dict[str, int]:
-    """Map each class, struct, union, and enum name to the type index of its
-    definition. Use this to resolve a forward reference by its name.
+def resolve_forward_refs(types: Mapping[int, bytes]) -> dict[int, int]:
+    """Map the type index of each class, struct, union, and enum forward ref
+    to the type index of its definition. Forward refs with no definition are left out.
     If there is more than one definition with the same name, the last one wins.
     This matches QueryTiForUDT, tpi.cpp."""
     udts: dict[str, int] = {}
+    forward_refs: list[tuple[int, str]] = []
 
     for ti, data in types.items():
         (leaf_type,) = unpack_from("<H", data, offset=2)
@@ -481,16 +512,17 @@ def get_udt_definitions(types: Mapping[int, bytes]) -> dict[str, int]:
             case _:
                 continue
 
-        # Skip forward refs and scoped definitions. See REC::fIsGlobalDefnUdt.
-        if prop & (PropAttr.FWDREF.value | PropAttr.SCOPED.value):
+        # Scoped types are not found by name. See REC::fIsGlobalDefnUdt.
+        if prop & PropAttr.SCOPED.value:
             continue
 
-        if _is_anonymous_udt(leaf.name):
-            continue
+        if prop & PropAttr.FWDREF.value:
+            forward_refs.append((ti, leaf.name))
 
-        udts[leaf.name] = ti
+        elif not _is_anonymous_udt(leaf.name):
+            udts[leaf.name] = ti
 
-    return udts
+    return {ti: udts[name] for ti, name in forward_refs if name in udts}
 
 
 def parse_types(data: bytes):

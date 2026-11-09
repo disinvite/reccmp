@@ -1,7 +1,8 @@
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum, Flag
 from struct import calcsize, iter_unpack, unpack_from
-from typing import Any, Iterator
+from typing import Any
 from .codeview import CodeViewRecord
 from .common import read_packed_value, read_pascal_string
 from .fieldlist import LfFieldList
@@ -35,6 +36,27 @@ class TPIHeader:
 
             case _:
                 raise ValueError("TPI header format not supported")
+
+
+class TypeLookup(Mapping[int, bytes]):
+    def __init__(self, data: bytes) -> None:
+        self.header = TPIHeader.from_bytes(data)
+        leaves = data[self.header.header_size :][: self.header.size]
+        self._leaves = tuple(
+            leaves[record.offset : record.offset + record.size]
+            for record in CodeViewRecord.from_bytes(leaves)
+        )
+
+    def __getitem__(self, ti: int) -> bytes:
+        if not self.header.id_start <= ti < self.header.id_start + len(self._leaves):
+            raise KeyError(ti)
+        return self._leaves[ti - self.header.id_start]
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(range(self.header.id_start, self.header.id_start + len(self)))
+
+    def __len__(self) -> int:
+        return len(self._leaves)
 
 
 class PtrType(Enum):
@@ -426,6 +448,49 @@ class LfArglist(CodeViewLeaf):
         arg_data = data[offset : offset + 2 * count]
         args = tuple(arg for arg, in iter_unpack("<H", arg_data))
         return cls(leaf_type, args)
+
+
+def _is_anonymous_udt(name: str) -> bool:
+    """fUDTAnon, tm.cpp"""
+    return name in ("<unnamed-tag>", "__unnamed") or name.endswith(
+        ("::<unnamed-tag>", "::__unnamed")
+    )
+
+
+def get_udt_definitions(types: Mapping[int, bytes]) -> dict[str, int]:
+    """Map each class, struct, union, and enum name to the type index of its
+    definition. Use this to resolve a forward reference by its name.
+    If there is more than one definition with the same name, the last one wins.
+    This matches QueryTiForUDT, tpi.cpp."""
+    udts: dict[str, int] = {}
+
+    for ti, data in types.items():
+        (leaf_type,) = unpack_from("<H", data, offset=2)
+        leaf: LfClass | LfUnion | LfEnum
+
+        match leaf_type:
+            case 4 | 5 | 0x1004 | 0x1005:
+                leaf = LfClass.from_bytes(data)
+                prop = leaf.raw_prop_attr
+            case 6 | 0x1006:
+                leaf = LfUnion.from_bytes(data)
+                prop = leaf.prop
+            case 7 | 0x1007:
+                leaf = LfEnum.from_bytes(data)
+                prop = leaf.prop
+            case _:
+                continue
+
+        # Skip forward refs and scoped definitions. See REC::fIsGlobalDefnUdt.
+        if prop & (PropAttr.FWDREF.value | PropAttr.SCOPED.value):
+            continue
+
+        if _is_anonymous_udt(leaf.name):
+            continue
+
+        udts[leaf.name] = ti
+
+    return udts
 
 
 def parse_types(data: bytes):

@@ -16,7 +16,8 @@ from reccmp.formats import (
     TextFile,
     detect_image,
 )
-from reccmp.cvdump import Cvdump, CvdumpTypesParser, CvdumpAnalysis
+from reccmp.cvdump import CvdumpTypesParser, CvdumpAnalysis
+from reccmp.cvdump.hybrid import HybridCvdump as Cvdump
 from reccmp.analysis import find_pointers
 from reccmp.types import EntityType, ImageId
 from reccmp.compare.event import (
@@ -126,7 +127,7 @@ class Compare:
         # For now, just redirect match alerts to the logger.
         self.report = create_logging_wrapper(logger)
 
-        self.types = CvdumpTypesParser()
+        self.types = pdb_file.types
 
         self.function_comparator = FunctionComparator(
             self._db,

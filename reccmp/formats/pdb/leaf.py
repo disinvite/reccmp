@@ -22,6 +22,10 @@ class LeafEnum(IntEnum):
     LF_MFUNCTION_16t = 0x0009
 
     # leaf indices starting records but referenced only from type records
+    LF_ARGLIST_16t = 0x0201
+    LF_FIELDLIST_16t = 0x0204
+    LF_BITFIELD_16t = 0x0206
+
     LF_BCLASS_16t = 0x0400
     LF_VBCLASS_16t = 0x0401
     LF_IVBCLASS_16t = 0x0402
@@ -45,6 +49,10 @@ class LeafEnum(IntEnum):
     LF_MFUNCTION = 0x1009
 
     # leaf indices starting records but referenced only from type records
+    LF_ARGLIST = 0x1201
+    LF_FIELDLIST = 0x1203
+    LF_BITFIELD = 0x1205
+
     LF_BCLASS = 0x1400
     LF_VBCLASS = 0x1401
     LF_IVBCLASS = 0x1402

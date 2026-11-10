@@ -1,10 +1,12 @@
 # pylint:disable=invalid-name
+from functools import cached_property
 from pathlib import PureWindowsPath
 from struct import iter_unpack, unpack_from
+from typing import Iterator
 from reccmp.formats.pdb import MSFContainer, StreamIndex
 from reccmp.formats.pdb.codeview import CodeViewRecord
 from reccmp.formats.pdb.common import read_pascal_string, read_sz_string
-from reccmp.formats.pdb.dbi import DebugInfomation
+from reccmp.formats.pdb.dbi import DebugInfomation, ModuleInfo
 from reccmp.formats.pdb.tpi import TPIHeader
 from .cvinfo import CvdumpTypeKey
 from .parser import (
@@ -156,86 +158,120 @@ def _read_proc_sym(data: bytes, offset: int, record_type: int):
     return (seg, off, size, typ, flags, _read_name(data, offset, record_type))
 
 
-class PdbParser:
-    # pylint: disable=too-many-instance-attributes
-    def __init__(self, data: bytes) -> None:
-        self.lines: dict[PureWindowsPath, list[LineValue]] = {}
-        self.publics: list[PublicsEntry] = []
-        self.sizerefs: list[SizeRefEntry] = []
-        self.globals: list[GdataEntry] = []
-        self.modules: list[ModuleEntry] = []
-        self.symbols: list[SymbolsEntry] = []
+def _gsi_hash_offsets(data: bytes) -> list[int]:
+    """Returns the symbol record offsets from a GSI hash table, in the order
+    of the hash buckets. This is the order cvdump uses. See GSI1::readHash, gsi.cpp."""
+    # The newer format starts with GSIHashHdr, signature -1.
+    if data[:4] == b"\xff\xff\xff\xff":
+        (hr_size,) = unpack_from("<8xI", data)
+        records = data[16:][:hr_size]
+    else:
+        # The records are followed by 4096 + 1 bucket offsets.
+        records = data[: len(data) - 4 * 4097]
 
+    # HRFile, gsi.h. The offset is one more than the record offset.
+    return [off - 1 for off, _ in iter_unpack("<2i", records)]
+
+
+class PdbParser:
+    """Each attribute is read from the PDB the first time it is used."""
+
+    def __init__(self, data: bytes) -> None:
         # TODO: The leaves in reccmp.formats.pdb.tpi are not converted to the
         # format used by CvdumpTypesParser, so this only knows the primitive types.
         self.types = CvdumpTypesParser()
 
-        self.is_16bit_type_pool: bool | None = None
-
         self._msf = MSFContainer.from_bytes(data)
-        self._read_types()
-        self._read_dbi()
 
     @classmethod
     def from_file(cls, filename: str) -> "PdbParser":
         with open(filename, "rb") as f:
             return cls(f.read())
 
-    def _read_types(self):
+    @cached_property
+    def is_16bit_type_pool(self) -> bool:
         header = TPIHeader.from_bytes(self._msf.get_stream(StreamIndex.TPI))
-        self.is_16bit_type_pool = header.version <= _TPI_IMPV41
+        return header.version <= _TPI_IMPV41
 
-    def _read_dbi(self):
-        info = DebugInfomation.from_bytes(self._msf.get_stream(StreamIndex.DBI))
-        header = info.header
+    @cached_property
+    def _dbi(self) -> DebugInfomation:
+        return DebugInfomation.from_bytes(self._msf.get_stream(StreamIndex.DBI))
 
-        for i, module in enumerate(info.modules, start=1):
-            self.modules.append(
-                ModuleEntry(
-                    id=i,
-                    lib=module.obj_name if module.obj_name != module.name else "",
-                    obj=module.name,
-                )
+    @cached_property
+    def _symbol_records(self) -> bytes:
+        return self._msf.get_stream(self._dbi.header.symbol_stream_id)
+
+    @cached_property
+    def modules(self) -> list[ModuleEntry]:
+        return [
+            ModuleEntry(
+                id=i,
+                lib=module.obj_name if module.obj_name != module.name else None,
+                obj=module.name,
             )
+            for i, module in enumerate(self._dbi.modules, start=1)
+        ]
 
-        for sc in info.section_contributions:
-            self.sizerefs.append(
-                SizeRefEntry(
-                    # cvdump numbers the modules from 1.
-                    module=sc.moduleindex + 1,
-                    section=sc.section,
-                    offset=sc.offset,
-                    size=sc.size,
-                )
+    @cached_property
+    def sizerefs(self) -> list[SizeRefEntry]:
+        return [
+            SizeRefEntry(
+                # cvdump numbers the modules from 1.
+                module=sc.moduleindex + 1,
+                section=sc.section,
+                offset=sc.offset,
+                size=sc.size,
             )
+            for sc in self._dbi.section_contributions
+        ]
 
-        symbol_records = self._msf.get_stream(header.symbol_stream_id)
-        self._read_publics(
-            self._msf.get_stream(header.public_stream_id), symbol_records
-        )
-        self._read_globals(symbol_records)
+    @cached_property
+    def publics(self) -> list[PublicsEntry]:
+        public_stream = self._msf.get_stream(self._dbi.header.public_stream_id)
+        return list(self._read_publics(public_stream, self._symbol_records))
 
-        for module in info.modules:
-            if module.stream_id == -1:
-                continue
+    @cached_property
+    def globals(self) -> list[GdataEntry]:
+        global_stream = self._msf.get_stream(self._dbi.header.global_stream_id)
+        return list(self._read_globals(global_stream, self._symbol_records))
 
-            stream = self._msf.get_stream(module.stream_id)
+    def _module_streams(self) -> Iterator[tuple[ModuleInfo, bytes]]:
+        for module in self._dbi.modules:
+            if module.stream_id != -1:
+                yield (module, self._msf.get_stream(module.stream_id))
+
+    @cached_property
+    def symbols(self) -> list[SymbolsEntry]:
+        return [
+            symbol
+            for module, stream in self._module_streams()
             # The symbol size includes the 4-byte CV signature.
-            self._read_module_symbols(stream[4 : module.symbol_size])
-            self._read_c11_lines(stream[module.symbol_size :][: module.c11_lines_size])
+            for symbol in self._read_module_symbols(stream[4 : module.symbol_size])
+        ]
+
+    @cached_property
+    def lines(self) -> dict[PureWindowsPath, list[LineValue]]:
+        lines: dict[PureWindowsPath, list[LineValue]] = {}
+        for module, stream in self._module_streams():
+            self._read_c11_lines(
+                stream[module.symbol_size :][: module.c11_lines_size], lines
+            )
             # TODO: C13 lines
 
-    def _read_publics(self, data: bytes, symbol_records: bytes):
+        return lines
+
+    def _read_publics(
+        self, data: bytes, symbol_records: bytes
+    ) -> Iterator[PublicsEntry]:
         """The public symbol stream has a hash table and an address map, both of
         which point into the symbol record stream. The record stream can have
         public symbols that are in neither one, so we cannot read it directly.
-        cvdump lists the publics in hash table order. Here they are in address map order.
-        """
+        The address map can have publics that are not in the hash table.
+        cvdump lists the publics in hash table order, so we do the same."""
         # PSGSIHDR, gsi.h
-        sym_hash_size, addr_map_size = unpack_from("<2I", data)
-        addr_map = data[28 + sym_hash_size :][:addr_map_size]
+        (sym_hash_size,) = unpack_from("<I", data)
 
-        for (record_offset,) in iter_unpack("<I", addr_map):
+        for record_offset in _gsi_hash_offsets(data[28:][:sym_hash_size]):
             (record_type,) = unpack_from("<2xH", symbol_records, offset=record_offset)
             if record_type not in _PUBLIC_TYPES:
                 continue
@@ -243,37 +279,33 @@ class PdbParser:
             section, offset, flags, name = _read_data_sym(
                 symbol_records, record_offset, record_type
             )
-            self.publics.append(
-                PublicsEntry(
-                    type="S_PUB32",
-                    section=section,
-                    offset=offset,
-                    flags=flags,
-                    name=name,
-                )
+            yield PublicsEntry(
+                type="S_PUB32",
+                section=section,
+                offset=offset,
+                flags=flags,
+                name=name,
             )
 
-    def _read_globals(self, data: bytes):
-        """cvdump lists the globals in hash table order from the global symbol stream.
-        Here they are read from the symbol record stream in stream order.
-        TODO: Read the hash table instead. The record stream can have public symbols
-        that are not in the hash table, so this may be true for globals too."""
-        for record in CodeViewRecord.from_bytes(data, align=True):
-            if record.type in _GLOBAL_DATA_TYPES or record.type in _LOCAL_DATA_TYPES:
+    def _read_globals(self, data: bytes, symbol_records: bytes) -> Iterator[GdataEntry]:
+        """The global symbol stream is a hash table that points into the symbol
+        record stream. cvdump lists the globals in hash table order, so we do the same.
+        """
+        for record_offset in _gsi_hash_offsets(data):
+            (record_type,) = unpack_from("<2xH", symbol_records, offset=record_offset)
+            if record_type in _GLOBAL_DATA_TYPES or record_type in _LOCAL_DATA_TYPES:
                 section, offset, typ, name = _read_data_sym(
-                    data, record.offset, record.type
+                    symbol_records, record_offset, record_type
                 )
-                self.globals.append(
-                    GdataEntry(
-                        section=section,
-                        offset=offset,
-                        type=CvdumpTypeKey(typ),
-                        name=name,
-                        is_global=record.type in _GLOBAL_DATA_TYPES,
-                    )
+                yield GdataEntry(
+                    section=section,
+                    offset=offset,
+                    type=CvdumpTypeKey(typ),
+                    name=name,
+                    is_global=record_type in _GLOBAL_DATA_TYPES,
                 )
 
-    def _read_module_symbols(self, data: bytes):
+    def _read_module_symbols(self, data: bytes) -> Iterator[SymbolsEntry]:
         """Mirrors the logic in CvdumpSymbolsParser."""
         current_function: SymbolsEntry | None = None
         block_level = 0
@@ -295,7 +327,8 @@ class PdbParser:
                     # CV_PFLAG_NOFPO
                     frame_pointer_present=bool(flags & 1),
                 )
-                self.symbols.append(current_function)
+                # The entry is filled in by the records that follow.
+                yield current_function
 
             elif rtype in _BPREL_TYPES:
                 if current_function is None:
@@ -361,7 +394,9 @@ class PdbParser:
                     )
                 )
 
-    def _read_c11_lines(self, data: bytes):
+    def _read_c11_lines(
+        self, data: bytes, lines_by_file: dict[PureWindowsPath, list[LineValue]]
+    ):
         """sstSrcModule from the CodeView 4 spec."""
         if not data:
             return
@@ -374,7 +409,7 @@ class PdbParser:
             line_offsets = unpack_from(f"<{n_segs}I", data, offset=file_offset + 4)
             name_offset = file_offset + 4 + 12 * n_segs
             filename, _ = read_pascal_string(data, name_offset)
-            lines = self.lines.setdefault(PureWindowsPath(filename), [])
+            lines = lines_by_file.setdefault(PureWindowsPath(filename), [])
 
             for line_offset in line_offsets:
                 section, n_pairs = unpack_from("<2H", data, offset=line_offset)

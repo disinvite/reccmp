@@ -89,7 +89,7 @@ class GdataEntry(NamedTuple):
 
 class ModuleEntry(NamedTuple):
     id: int
-    lib: str
+    lib: str | None
     obj: str
 
 

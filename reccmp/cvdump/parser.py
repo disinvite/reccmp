@@ -36,7 +36,7 @@ _data_regex = re.compile(
 
 # e.g. 0003 "CMakeFiles/isle.dir/ISLE/res/isle.rc.res"
 # e.g. 0004 "C:\work\lego-island\isle\3rdparty\smartheap\SHLW32MT.LIB" "check.obj"
-_module_regex = re.compile(r"(?P<id>\w{4})(?: \"(?P<lib>.+?)\")?(?: \"(?P<obj>.+?)\")")
+_module_regex = re.compile(r"(?P<id>\w{4})(?: \"(?P<lib>.*?)\")?(?: \"(?P<obj>.+?)\")")
 
 # cvdump prints this at the top of the TYPES section when the PDB has a 16-bit
 # type pool (TPI header version <= impv41), which identifies an MSVC 4.x-era PDB.

@@ -3,6 +3,7 @@
 from reccmp.cvdump.parser import (
     CvdumpParser,
     GdataEntry,
+    ModuleEntry,
 )
 from reccmp.cvdump.cvinfo import CVInfoTypeEnum
 
@@ -36,3 +37,27 @@ def test_globals():
         name="fSystemSet",
         is_global=False,
     )
+
+
+MODULES_SAMPLE = r"""
+0001 "GolDP.exp"
+00F8 "C:\tools\MSVC600-8168\vc98\lib\LIBCMT.lib" "build\intel\mt_obj\trnsctrl.obj"
+00F9 "" "* Linker *"
+"""
+
+
+def test_modules():
+    """An empty library name is read as an empty string, and a module with
+    no library name has lib=None."""
+    parser = CvdumpParser()
+    parser.read_section("MODULES", MODULES_SAMPLE)
+
+    assert parser.modules == [
+        ModuleEntry(id=0x0001, lib=None, obj="GolDP.exp"),
+        ModuleEntry(
+            id=0x00F8,
+            lib=r"C:\tools\MSVC600-8168\vc98\lib\LIBCMT.lib",
+            obj=r"build\intel\mt_obj\trnsctrl.obj",
+        ),
+        ModuleEntry(id=0x00F9, lib="", obj="* Linker *"),
+    ]

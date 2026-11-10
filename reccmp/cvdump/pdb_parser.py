@@ -251,12 +251,20 @@ class PdbParser:
 
     @cached_property
     def lines(self) -> dict[PureWindowsPath, list[LineValue]]:
-        lines: dict[PureWindowsPath, list[LineValue]] = {}
-        for module, stream in self._module_streams():
-            self._read_c11_lines(
-                stream[module.symbol_size :][: module.c11_lines_size], lines
+        file_blocks = [
+            file_block
+            for module, stream in self._module_streams()
+            for file_block in self._read_c11_lines(
+                stream[module.symbol_size :][: module.c11_lines_size]
             )
             # TODO: C13 lines
+        ]
+
+        lines: dict[PureWindowsPath, list[LineValue]] = {
+            path: [] for path, _ in file_blocks
+        }
+        for path, file_lines in file_blocks:
+            lines[path].extend(file_lines)
 
         return lines
 
@@ -395,9 +403,10 @@ class PdbParser:
                 )
 
     def _read_c11_lines(
-        self, data: bytes, lines_by_file: dict[PureWindowsPath, list[LineValue]]
-    ):
-        """sstSrcModule from the CodeView 4 spec."""
+        self, data: bytes
+    ) -> Iterator[tuple[PureWindowsPath, list[LineValue]]]:
+        """sstSrcModule from the CodeView 4 spec.
+        Yields the filename and lines for each file block."""
         if not data:
             return
 
@@ -407,17 +416,18 @@ class PdbParser:
         for file_offset in file_offsets:
             (n_segs,) = unpack_from("<H", data, offset=file_offset)
             line_offsets = unpack_from(f"<{n_segs}I", data, offset=file_offset + 4)
-            name_offset = file_offset + 4 + 12 * n_segs
-            filename, _ = read_pascal_string(data, name_offset)
-            lines = lines_by_file.setdefault(PureWindowsPath(filename), [])
+            filename, _ = read_pascal_string(data, file_offset + 4 + 12 * n_segs)
 
+            lines: list[LineValue] = []
             for line_offset in line_offsets:
                 section, n_pairs = unpack_from("<2H", data, offset=line_offset)
                 addr_start = line_offset + 4
                 line_start = addr_start + 4 * n_pairs
-                addrs = iter_unpack("<I", data[addr_start:line_start])
-                line_nos = iter_unpack("<H", data[line_start:][: 2 * n_pairs])
+                addrs = unpack_from(f"<{n_pairs}I", data, offset=addr_start)
+                line_nos = unpack_from(f"<{n_pairs}H", data, offset=line_start)
                 lines.extend(
                     LineValue(line_no, section, addr)
-                    for (addr,), (line_no,) in zip(addrs, line_nos)
+                    for addr, line_no in zip(addrs, line_nos)
                 )
+
+            yield (PureWindowsPath(filename), lines)

@@ -4,6 +4,9 @@ from struct import unpack_from
 from .common import align_to, read_sz_string
 from .debug import debug_print
 
+# DBI header version (DBIImpvV60, dbi.h)
+_DBI_IMPV_V60 = 19970606
+
 # Section contribution substream versions (DBISCImpv and DBISCImpv2, dbi.h)
 _DBI_SC_IMPV = 0xEFFE0000 + 19970605
 _DBI_SC_IMPV2 = 0xEFFE0000 + 20140516
@@ -201,12 +204,13 @@ class DebugInfomation:
     @classmethod
     def from_bytes(cls, data: bytes) -> "DebugInfomation":
         header, offset = DBIHeader.from_bytes(data)
-        sc_data = data[offset + header.module_info_size :][
-            : header.section_contribution_size
-        ]
-        new_modi = header.version >= 19970606
+        modi_end = offset + header.module_info_size
+        sc_data = data[modi_end:][: header.section_contribution_size]
+
+        new_modi = header.version >= _DBI_IMPV_V60
         modules = []
-        while offset < header.module_info_size:
+        # Each module record is aligned to 4 bytes, including padding after the last one.
+        while align_to(offset, 4) < modi_end:
             module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
             modules.append(module)
 
@@ -248,7 +252,8 @@ def parse_modules(data: bytes):
     # debug_print(dbi, offset=offset, size=header.module_info_size)
 
     idx = 1
-    while offset < header.module_info_size:
+    modi_end = offset + header.module_info_size
+    while align_to(offset, 4) < modi_end:
         # start = offset
         module, offset = ModuleInfo.from_bytes(data, offset=offset, new=new_modi)
         # print()

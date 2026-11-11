@@ -3,7 +3,7 @@ from functools import cached_property
 from pathlib import PureWindowsPath
 from struct import iter_unpack, unpack_from
 from typing import Iterator
-from reccmp.formats.pdb import MSFContainer, StreamIndex
+from reccmp.formats.pdb import StreamIndex, open_pdb
 from reccmp.formats.pdb.codeview import CodeViewRecord
 from reccmp.formats.pdb.common import read_pascal_string, read_sz_string
 from reccmp.formats.pdb.dbi import DebugInfomation, ModuleInfo
@@ -181,7 +181,7 @@ class PdbParser:
         # format used by CvdumpTypesParser, so this only knows the primitive types.
         self.types = CvdumpTypesParser()
 
-        self._msf = MSFContainer.from_bytes(data)
+        self._msf = open_pdb(data)
 
     @classmethod
     def from_file(cls, filename: str) -> "PdbParser":

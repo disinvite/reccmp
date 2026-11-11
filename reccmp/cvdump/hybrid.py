@@ -1,4 +1,4 @@
-from reccmp.formats.pdb import MSFContainer, StreamIndex
+from reccmp.formats.pdb import StreamIndex, open_pdb
 from reccmp.formats.pdb.tpi import TPIHeader
 from .parser import CvdumpParser
 from .pdb_parser import PdbParser
@@ -40,7 +40,7 @@ class HybridCvdump(Cvdump):
             parser.modules = pdb.modules
 
         if DumpOpt.TYPES in self.options:
-            data = MSFContainer.from_bytes(pdb_data).get_stream(StreamIndex.TPI)
+            data = open_pdb(pdb_data).get_stream(StreamIndex.TPI)
             parser.types = PdbTypesParser(data)
             parser.is_16bit_type_pool = (
                 TPIHeader.from_bytes(data).version <= _TPI_IMPV41

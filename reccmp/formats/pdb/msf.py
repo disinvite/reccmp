@@ -1,8 +1,7 @@
 import math
-from dataclasses import dataclass
 from enum import IntEnum
-from struct import calcsize, unpack_from
-from typing import Iterable, Iterator, NamedTuple
+from struct import calcsize, iter_unpack, unpack_from
+from typing import Iterable, NamedTuple, Protocol, Sequence
 
 
 class StreamIndex(IntEnum):
@@ -14,24 +13,13 @@ class StreamIndex(IntEnum):
     DBI = 3
 
 
-class MSFMagic:
-    # szHdrOld = b"Microsoft C/C++ program database 1.00\r\n\x1a\x4a\x47\x00\x00" # char[0x2c]
-    szHdrMagic = (
-        b"Microsoft C/C++ program database 2.00\r\n\x1a\x4a\x47\x00\x00"  # char[0x2c]
-    )
-    szBigHdrMagic = b"Microsoft C/C++ MSF 7.00\r\n\x1a\x44\x53\x00"  # char[0x1e]
-
-
-@dataclass(frozen=True)
-class MSFHeader:
-    magic: bytes
-    page_size: int
-    fpm_page_no: int  # free page map
-    num_pages: int
-    stream_dir_size: int
-    # Page numbers for block map. For MSF 7.00, these are the pages that
-    # hold the list of block map page numbers.
-    block_maps: tuple[int, ...]
+PDB_100_MAGIC = (
+    b"Microsoft C/C++ program database 1.00\r\n\x1a\x4a\x47\x00\x00"  # char[0x2c]
+)
+MSF_200_MAGIC = (
+    b"Microsoft C/C++ program database 2.00\r\n\x1a\x4a\x47\x00\x00"  # char[0x2c]
+)
+MSF_700_MAGIC = b"Microsoft C/C++ MSF 7.00\r\n\x1a\x44\x53\x00"  # char[0x1e]
 
 
 class MSFStream(NamedTuple):
@@ -39,133 +27,99 @@ class MSFStream(NamedTuple):
     pages: tuple[int, ...]
 
 
-class MSFContainer:
-    data: bytes
-    header: MSFHeader
-    stream_dir: tuple[MSFStream, ...]
+def _join_pages(data: bytes, page_size: int, pages: Iterable[int]) -> bytes:
+    """Combine the given pages into a contiguous block."""
+    return b"".join(data[page_size * page : page_size * (page + 1)] for page in pages)
 
-    # Struct format from the magic string through the stream directory size.
-    _HEADER_FMT: str
-    # Page number type.
-    _PAGE_NO_FMT: str
-    # Stream count at the start of the stream directory.
-    _STREAM_COUNT_FMT: str
-    # Size of each entry in the stream size array.
-    _STREAM_SIZE_STRIDE: int
+
+def _read_directory(
+    directory: bytes, page_size: int, count_fmt: str, size_fmt: str, page_fmt: str
+) -> list[MSFStream]:
+    (n_streams,) = unpack_from(count_fmt, directory)
+    offset = calcsize(count_fmt)
+    sizes_end = offset + n_streams * calcsize(size_fmt)
+    sizes = [size for size, in iter_unpack(size_fmt, directory[offset:sizes_end])]
+
+    # Nil streams (size -1) have no pages.
+    counts = [math.ceil(max(size, 0) / page_size) for size in sizes]
+    pages = unpack_from(f"<{sum(counts)}{page_fmt}", directory, offset=sizes_end)
+
+    streams = []
+    start = 0
+    for size, count in zip(sizes, counts):
+        streams.append(MSFStream(size, pages[start : start + count]))
+        start += count
+
+    return streams
+
+
+def _read_msf_200(data: bytes) -> tuple[int, list[MSFStream]]:
+    page_size, dir_size = unpack_from("<44xI4xI", data)
+    dir_pages = unpack_from(f"<{math.ceil(dir_size / page_size)}H", data, offset=0x3C)
+    directory = _join_pages(data, page_size, dir_pages)
+    # The stream count is followed by a reserved word.
+    # Each stream size is followed by a reserved dword.
+    return page_size, _read_directory(directory, page_size, "<H2x", "<i4x", "H")
+
+
+def _read_msf_700(data: bytes) -> tuple[int, list[MSFStream]]:
+    page_size, dir_size = unpack_from("<32xI8xI", data)
+    n_dir_pages = math.ceil(dir_size / page_size)
+    # The header lists the pages that hold the directory's page list.
+    map_pages = unpack_from(
+        f"<{math.ceil(n_dir_pages * 4 / page_size)}I", data, offset=0x34
+    )
+    dir_pages = unpack_from(f"<{n_dir_pages}I", _join_pages(data, page_size, map_pages))
+    directory = _join_pages(data, page_size, dir_pages)
+    return page_size, _read_directory(directory, page_size, "<I", "<i", "I")
+
+
+class MSFContainer:
+    def __init__(
+        self, data: bytes, page_size: int, streams: Sequence[MSFStream]
+    ) -> None:
+        self.data = data
+        self.page_size = page_size
+        self.streams = tuple(streams)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "MSFContainer":
+        if data.startswith(MSF_200_MAGIC):
+            return cls(data, *_read_msf_200(data))
+
+        if data.startswith(MSF_700_MAGIC):
+            return cls(data, *_read_msf_700(data))
+
+        raise ValueError("Not an MSF file")
+
+    def get_stream(self, stream_id: int) -> bytes:
+        size, pages = self.streams[stream_id]
+        return _join_pages(self.data, self.page_size, pages)[:size]
+
+
+class PDB100File:
+    """PDB 1.00 (MSVC 2.x era) predates the MSF format. It only contains type records (TPI stream).
+    We take some liberties here to make it compatible with the newer MSF format PDBs.
+    Reference: `struct RTPDB10HDR` from `virtualbox/include/iprt/formats/pdb.h`."""
 
     def __init__(self, data: bytes) -> None:
         self.data = data
-        self.header = self._read_header()
-        block_map_data = self.combine_pages(self._directory_pages())
-        self.stream_dir = tuple(self._read_stream_directory(block_map_data))
-
-    @staticmethod
-    def from_bytes(data: bytes) -> "MSFContainer":
-        if data.startswith(MSFMagic.szHdrMagic):
-            return SmallMSFContainer(data)
-
-        if data.startswith(MSFMagic.szBigHdrMagic):
-            return BigMSFContainer(data)
-
-        raise ValueError  # TODO: exception
-
-    def _n_header_pages(self, stream_dir_size: int, page_size: int) -> int:
-        """Number of page numbers in the header."""
-        raise NotImplementedError
-
-    def _directory_pages(self) -> tuple[int, ...]:
-        """Page numbers for the stream directory."""
-        raise NotImplementedError
-
-    def _read_header(self) -> MSFHeader:
-        magic_str, page_size, fpm_page_no, num_pages, stream_dir_size = unpack_from(
-            self._HEADER_FMT, self.data
-        )
-        n_block_maps = self._n_header_pages(stream_dir_size, page_size)
-        block_maps: tuple[int, ...] = unpack_from(
-            f"<{n_block_maps}{self._PAGE_NO_FMT}",
-            self.data,
-            offset=calcsize(self._HEADER_FMT),
-        )
-
-        return MSFHeader(
-            magic=magic_str,
-            page_size=page_size,
-            fpm_page_no=fpm_page_no,
-            num_pages=num_pages,
-            stream_dir_size=stream_dir_size,
-            block_maps=block_maps,
-        )
-
-    def _read_stream_directory(self, block_map_data: bytes) -> Iterator[MSFStream]:
-        offset = 0
-
-        (n_streams,) = unpack_from(
-            self._STREAM_COUNT_FMT, block_map_data, offset=offset
-        )
-        offset += 4
-
-        stream_sizes = []
-
-        for _ in range(n_streams):
-            (stream_size,) = unpack_from("<i", block_map_data, offset=offset)
-            stream_sizes.append(stream_size)
-            offset += self._STREAM_SIZE_STRIDE
-
-        page_no_size = calcsize(self._PAGE_NO_FMT)
-
-        for size in stream_sizes:
-            if size < 0:
-                # Nil stream
-                yield MSFStream(size, ())
-                continue
-
-            n_pages = math.ceil(size / self.header.page_size)
-            pages = unpack_from(
-                f"<{n_pages}{self._PAGE_NO_FMT}", block_map_data, offset=offset
-            )
-            yield MSFStream(size, pages)
-            offset += page_no_size * n_pages
-
-    def get_page(self, page_no: int) -> bytes:
-        return self.data[
-            self.header.page_size * page_no : self.header.page_size * (page_no + 1)
-        ]
 
     def get_stream(self, stream_id: int) -> bytes:
-        size, pages = self.stream_dir[stream_id]
-        return self.combine_pages(pages)[:size]
+        if stream_id != StreamIndex.TPI:
+            raise KeyError(stream_id)
 
-    def combine_pages(self, pages: Iterable[int]):
-        """Combine all pages for a stream into a contiguous block."""
-        return b"".join((self.get_page(page) for page in pages))
-
-
-class SmallMSFContainer(MSFContainer):
-    _HEADER_FMT = "44sI2HI4x"
-    _PAGE_NO_FMT = "H"
-    # Skip reserved word.
-    _STREAM_COUNT_FMT = "<H2x"
-    # Skip reserved dword after each size.
-    _STREAM_SIZE_STRIDE = 8
-
-    def _n_header_pages(self, stream_dir_size: int, page_size: int) -> int:
-        return math.ceil(stream_dir_size / page_size)
-
-    def _directory_pages(self) -> tuple[int, ...]:
-        return self.header.block_maps
+        # Semi-hack: splice the file's version constant into the spot where newer formats place the TPI version.
+        # This makes the version visible to the TPI reader so we can vary its behavior.
+        return self.data[0x2C:0x30] + self.data[0x38:]
 
 
-class BigMSFContainer(MSFContainer):
-    _HEADER_FMT = "30s4I4x"
-    _PAGE_NO_FMT = "I"
-    _STREAM_COUNT_FMT = "<I"
-    _STREAM_SIZE_STRIDE = 4
+class PDBStreams(Protocol):
+    def get_stream(self, stream_id: int) -> bytes: ...
 
-    def _n_header_pages(self, stream_dir_size: int, page_size: int) -> int:
-        # The header lists the pages that hold the directory's page list.
-        return math.ceil(math.ceil(stream_dir_size / page_size) * 4 / page_size)
 
-    def _directory_pages(self) -> tuple[int, ...]:
-        n_pages = math.ceil(self.header.stream_dir_size / self.header.page_size)
-        return unpack_from(f"<{n_pages}I", self.combine_pages(self.header.block_maps))
+def open_pdb(data: bytes) -> PDBStreams:
+    if data.startswith(PDB_100_MAGIC):
+        return PDB100File(data)
+
+    return MSFContainer.from_bytes(data)

@@ -22,6 +22,12 @@ class TPIHeader:
     def from_bytes(cls, data: bytes) -> "TPIHeader":
         (version,) = unpack_from("<I", data)
         match version:
+            # n.b. The TPI stream in a real PDB 1.00 file has no version data.
+            # This is mocked by PDB100File.
+            case 920924:
+                id_start, id_end, size = unpack_from("<HHI", data, offset=4)
+                return cls(version, id_start, id_end, size, header_size=12)
+
             # MSVC 4.1+
             case 19951122:
                 id_start, id_end, size = unpack_from("<HHI", data, offset=4)
@@ -38,14 +44,26 @@ class TPIHeader:
                 raise ValueError("TPI header format not supported")
 
 
+def _strip_record_prefixes(leaves: bytes) -> Iterator[bytes]:
+    """Skip 16-bit hash in PDB 1.00 type records (struct RTPDB10HASHEDTI)."""
+    offset = 0
+    while offset < len(leaves):
+        (size,) = unpack_from("<H", leaves, offset=offset + 2)
+        yield leaves[offset + 2 : offset + 4 + size]
+        offset += 4 + size
+
+
 class TypeLookup(Mapping[int, bytes]):
     def __init__(self, data: bytes) -> None:
         self.header = TPIHeader.from_bytes(data)
         leaves = data[self.header.header_size :][: self.header.size]
-        self._leaves = tuple(
-            leaves[record.offset : record.offset + record.size]
-            for record in CodeViewRecord.from_bytes(leaves)
-        )
+        if self.header.version == 920924:
+            self._leaves = tuple(_strip_record_prefixes(leaves))
+        else:
+            self._leaves = tuple(
+                leaves[record.offset : record.offset + record.size]
+                for record in CodeViewRecord.from_bytes(leaves)
+            )
 
     def __getitem__(self, ti: int) -> bytes:
         if not self.header.id_start <= ti < self.header.id_start + len(self._leaves):

@@ -1,12 +1,13 @@
 import logging
-from struct import unpack_from
+from struct import calcsize, unpack_from
 from reccmp.formats.pdb.common import (
     read_packed_value,
     read_pascal_string,
     read_sz_string,
 )
+from reccmp.formats.pdb.fieldlist import MethodProp
 from reccmp.formats.pdb.leaf import LeafEnum
-from reccmp.formats.pdb.tpi import TypeLookup, resolve_forward_refs
+from reccmp.formats.pdb.tpi import PropAttr, TypeLookup, resolve_forward_refs
 from .cvinfo import CvdumpTypeKey
 from .type_leaves import (
     CvdumpParsedType,
@@ -49,9 +50,6 @@ CALL_TYPE_NAMES = (
     "Vector Near",
 )
 
-# CV_prop_t, cvinfo.h
-PROP_FWDREF = 0x0080
-
 
 def _skip_pascal_string(data: bytes, offset: int) -> int:
     return offset + data[offset] + 1
@@ -61,21 +59,21 @@ def _read_udt(
     data: bytes,
     leaf_type: TypeLeafString,
     is32: bool,
-    size_offset: int,
+    fmt: str,
     udt: int | None,
 ) -> CvdumpParsedType:
     """For LF_CLASS, LF_STRUCTURE, and LF_UNION. The size field is at a different
     offset for classes and unions, but the fields before it are the same."""
     if is32:
-        prop, field = unpack_from("<HI", data, offset=6)
+        prop, field = unpack_from(fmt, data)
     else:
-        field, prop = unpack_from("<2H", data, offset=6)
+        field, prop = unpack_from(fmt, data)
 
-    size, offset = read_packed_value(data, size_offset)
+    size, offset = read_packed_value(data, calcsize(fmt))
     name, _ = read_pascal_string(data, offset)
     obj: CvdumpParsedType = {"type": leaf_type, "name": name, "size": size}
 
-    if prop & PROP_FWDREF:
+    if prop & PropAttr.FWDREF.value:
         obj["is_forward_ref"] = True
         if udt is not None:
             obj["udt"] = CvdumpTypeKey(udt)
@@ -87,11 +85,13 @@ def _read_udt(
 
 def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
     if is32:
-        prop, utype, field = unpack_from("<H2I", data, offset=6)
-        name, _ = read_pascal_string(data, 16)
+        fmt = "<6xH2I"
+        prop, utype, field = unpack_from(fmt, data)
     else:
-        utype, field, prop = unpack_from("<3H", data, offset=6)
-        name, _ = read_pascal_string(data, 12)
+        fmt = "<6x3H"
+        utype, field, prop = unpack_from(fmt, data)
+
+    name, _ = read_pascal_string(data, calcsize(fmt))
 
     obj: CvdumpParsedType = {
         "type": TypeLeafString.ENUM,
@@ -100,7 +100,7 @@ def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
         "field_list_type": CvdumpTypeKey(field),
     }
 
-    if prop & PROP_FWDREF:
+    if prop & PropAttr.FWDREF.value:
         obj["is_forward_ref"] = True
         if udt is not None:
             obj["udt"] = CvdumpTypeKey(udt)
@@ -108,7 +108,6 @@ def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
     return obj
 
 
-# pylint:disable=too-many-branches,too-many-statements
 def _read_fieldlist(data: bytes) -> CvdumpParsedType:
     obj: CvdumpParsedType = {"type": TypeLeafString.FIELDLIST}
     members: list[FieldListItem] = []
@@ -128,19 +127,21 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
         offset += 2
 
         match sub_type:
-            case LeafEnum.LF_BCLASS_16t:
-                (index,) = unpack_from("<H", data, offset=offset)
-                base_offset, offset = read_packed_value(data, offset + 4)
+            case LeafEnum.LF_BCLASS_16t | LeafEnum.LF_BCLASS:
+                fmt = "<2xI" if sub_type & 0x1000 else "<H2x"
+                (index,) = unpack_from(fmt, data, offset=offset)
+                base_offset, offset = read_packed_value(data, offset + calcsize(fmt))
                 super_classes[CvdumpTypeKey(index)] = base_offset
 
-            case LeafEnum.LF_BCLASS:
-                (index,) = unpack_from("<2xI", data, offset=offset)
-                base_offset, offset = read_packed_value(data, offset + 6)
-                super_classes[CvdumpTypeKey(index)] = base_offset
-
-            case LeafEnum.LF_VBCLASS_16t | LeafEnum.LF_IVBCLASS_16t:
-                (index,) = unpack_from("<H", data, offset=offset)
-                vbpoff, offset = read_packed_value(data, offset + 6)
+            case (
+                LeafEnum.LF_VBCLASS_16t
+                | LeafEnum.LF_IVBCLASS_16t
+                | LeafEnum.LF_VBCLASS
+                | LeafEnum.LF_IVBCLASS
+            ):
+                fmt = "<2xI4x" if sub_type & 0x1000 else "<H4x"
+                (index,) = unpack_from(fmt, data, offset=offset)
+                vbpoff, offset = read_packed_value(data, offset + calcsize(fmt))
                 vbind, offset = read_packed_value(data, offset)
                 if vboffset is None:
                     vboffset = vbpoff
@@ -148,47 +149,25 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                     VirtualBaseClass(
                         type=CvdumpTypeKey(index),
                         index=vbind,
-                        direct=sub_type == LeafEnum.LF_VBCLASS_16t,
+                        direct=sub_type
+                        in (LeafEnum.LF_VBCLASS_16t, LeafEnum.LF_VBCLASS),
                     )
                 )
 
-            case LeafEnum.LF_VBCLASS | LeafEnum.LF_IVBCLASS:
-                (index,) = unpack_from("<2xI", data, offset=offset)
-                vbpoff, offset = read_packed_value(data, offset + 10)
-                vbind, offset = read_packed_value(data, offset)
-                if vboffset is None:
-                    vboffset = vbpoff
-                vbases.append(
-                    VirtualBaseClass(
-                        type=CvdumpTypeKey(index),
-                        index=vbind,
-                        direct=sub_type == LeafEnum.LF_VBCLASS,
-                    )
+            case LeafEnum.LF_ENUMERATE_ST | LeafEnum.LF_ENUMERATE:
+                read_name = (
+                    read_sz_string
+                    if sub_type == LeafEnum.LF_ENUMERATE
+                    else read_pascal_string
                 )
-
-            case LeafEnum.LF_ENUMERATE_ST:
                 value, offset = read_packed_value(data, offset + 2)
-                name, offset = read_pascal_string(data, offset)
+                name, offset = read_name(data, offset)
                 variants.append(EnumItem(name=name, value=value))
 
-            case LeafEnum.LF_ENUMERATE:
-                value, offset = read_packed_value(data, offset + 2)
-                name, offset = read_sz_string(data, offset)
-                variants.append(EnumItem(name=name, value=value))
-
-            case LeafEnum.LF_MEMBER_16t:
-                (index,) = unpack_from("<H", data, offset=offset)
-                field_offset, offset = read_packed_value(data, offset + 4)
-                name, offset = read_pascal_string(data, offset)
-                members.append(
-                    FieldListItem(
-                        offset=field_offset, name=name, type=CvdumpTypeKey(index)
-                    )
-                )
-
-            case LeafEnum.LF_MEMBER_ST:
-                (index,) = unpack_from("<2xI", data, offset=offset)
-                field_offset, offset = read_packed_value(data, offset + 6)
+            case LeafEnum.LF_MEMBER_16t | LeafEnum.LF_MEMBER_ST:
+                fmt = "<2xI" if sub_type & 0x1000 else "<H2x"
+                (index,) = unpack_from(fmt, data, offset=offset)
+                field_offset, offset = read_packed_value(data, offset + calcsize(fmt))
                 name, offset = read_pascal_string(data, offset)
                 members.append(
                     FieldListItem(
@@ -222,7 +201,10 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 offset += 4 if sub_type == LeafEnum.LF_ONEMETHOD_16t else 6
                 # Introducing virtual and pure introducing virtual methods
                 # have the vtable offset.
-                if (attr >> 2) & 7 in (4, 6):
+                if (attr >> 2) & 7 in (
+                    MethodProp.INTRODUCING_VIRTUAL,
+                    MethodProp.PURE_INTRO,
+                ):
                     offset += 4
                 offset = _skip_pascal_string(data, offset)
 
@@ -247,102 +229,144 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
     return obj
 
 
-# pylint:disable=too-many-return-statements
+def _read_modifier(data: bytes, is32: bool) -> CvdumpParsedType:
+    (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
+    return {
+        "type": TypeLeafString.MODIFIER,
+        "is_forward_ref": True,  # TODO: #574
+        "modifies": CvdumpTypeKey(index),
+    }
+
+
+def _read_pointer(data: bytes, is32: bool) -> CvdumpParsedType:
+    (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
+    return {
+        "type": TypeLeafString.POINTER,
+        "element_type": CvdumpTypeKey(index),
+    }
+
+
+def _read_array(data: bytes, is32: bool) -> CvdumpParsedType:
+    fmt = "<4xI4x" if is32 else "<4xH2x"
+    (elemtype,) = unpack_from(fmt, data)
+    size, _ = read_packed_value(data, calcsize(fmt))
+    return {
+        "type": TypeLeafString.ARRAY,
+        "array_type": CvdumpTypeKey(elemtype),
+        "size": size,
+    }
+
+
+def _read_class(
+    data: bytes, leaf_type: TypeLeafString, is32: bool, udt: int | None
+) -> CvdumpParsedType:
+    """For LF_CLASS and LF_STRUCTURE."""
+    fmt = "<6xHI8x" if is32 else "<6x2H4x"
+    return _read_udt(data, leaf_type, is32, fmt, udt)
+
+
+def _read_union(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
+    fmt = "<6xHI" if is32 else "<6x2H"
+    return _read_udt(data, TypeLeafString.UNION, is32, fmt, udt)
+
+
+def _read_procedure(data: bytes, is32: bool) -> CvdumpParsedType:
+    if is32:
+        return_type, call_type, arglist = unpack_from("<IB3xI", data, offset=4)
+    else:
+        return_type, call_type, arglist = unpack_from("<HB3xH", data, offset=4)
+
+    return {
+        "type": TypeLeafString.PROCEDURE,
+        "return_type": CvdumpTypeKey(return_type),
+        "call_type": CALL_TYPE_NAMES[call_type],
+        "arg_list_type": CvdumpTypeKey(arglist),
+    }
+
+
+def _read_mfunction(data: bytes, is32: bool) -> CvdumpParsedType:
+    fmt = "<2I4xB3xII" if is32 else "<2H2xB3xHI"
+    return_type, class_type, call_type, arglist, this_adjust = unpack_from(
+        fmt, data, offset=4
+    )
+    return {
+        "type": TypeLeafString.MFUNCTION,
+        "return_type": CvdumpTypeKey(return_type),
+        "class_type": CvdumpTypeKey(class_type),
+        "call_type": CALL_TYPE_NAMES[call_type],
+        "arg_list_type": CvdumpTypeKey(arglist),
+        "this_adjust": this_adjust,
+    }
+
+
+def _read_arglist(data: bytes, is32: bool) -> CvdumpParsedType:
+    if is32:
+        (count,) = unpack_from("<I", data, offset=4)
+        args = unpack_from(f"<{count}I", data, offset=8)
+    else:
+        (count,) = unpack_from("<H", data, offset=4)
+        args = unpack_from(f"<{count}H", data, offset=6)
+
+    obj: CvdumpParsedType = {"type": TypeLeafString.ARGLIST, "argcount": count}
+    if args:
+        obj["args"] = [CvdumpTypeKey(arg) for arg in args]
+    return obj
+
+
+def _read_bitfield(data: bytes, is32: bool) -> CvdumpParsedType:
+    (bit_type,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
+    return {
+        "type": TypeLeafString.BITFIELD,
+        "bit_type": CvdumpTypeKey(bit_type),
+    }
+
+
 def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
     (leaf_type,) = unpack_from("<H", data, offset=2)
     is32 = leaf_type & 0x1000 == 0x1000
+    obj: CvdumpParsedType
 
     match leaf_type:
         case LeafEnum.LF_MODIFIER_16t | LeafEnum.LF_MODIFIER:
-            (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
-            # Treated as a forward ref, same as CvdumpTypesParser.
-            return {
-                "type": TypeLeafString.MODIFIER,
-                "is_forward_ref": True,
-                "modifies": CvdumpTypeKey(index),
-            }
+            obj = _read_modifier(data, is32)
 
         case LeafEnum.LF_POINTER_16t | LeafEnum.LF_POINTER:
-            (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
-            return {
-                "type": TypeLeafString.POINTER,
-                "element_type": CvdumpTypeKey(index),
-            }
+            obj = _read_pointer(data, is32)
 
         case LeafEnum.LF_ARRAY_16t | LeafEnum.LF_ARRAY_ST:
-            (elemtype,) = unpack_from("<I" if is32 else "<H", data, offset=4)
-            size, _ = read_packed_value(data, 12 if is32 else 8)
-            return {
-                "type": TypeLeafString.ARRAY,
-                "array_type": CvdumpTypeKey(elemtype),
-                "size": size,
-            }
+            obj = _read_array(data, is32)
 
         case LeafEnum.LF_CLASS_16t | LeafEnum.LF_CLASS_ST:
-            return _read_udt(data, TypeLeafString.CLASS, is32, 20 if is32 else 14, udt)
+            obj = _read_class(data, TypeLeafString.CLASS, is32, udt)
 
         case LeafEnum.LF_STRUCTURE_16t | LeafEnum.LF_STRUCTURE_ST:
-            return _read_udt(
-                data, TypeLeafString.STRUCTURE, is32, 20 if is32 else 14, udt
-            )
+            obj = _read_class(data, TypeLeafString.STRUCTURE, is32, udt)
 
         case LeafEnum.LF_UNION_16t | LeafEnum.LF_UNION_ST:
-            return _read_udt(data, TypeLeafString.UNION, is32, 12 if is32 else 10, udt)
+            obj = _read_union(data, is32, udt)
 
         case LeafEnum.LF_ENUM_16t | LeafEnum.LF_ENUM_ST:
-            return _read_enum(data, is32, udt)
+            obj = _read_enum(data, is32, udt)
 
         case LeafEnum.LF_PROCEDURE_16t | LeafEnum.LF_PROCEDURE:
-            if is32:
-                return_type, call_type, arglist = unpack_from("<IB3xI", data, offset=4)
-            else:
-                return_type, call_type, arglist = unpack_from("<HB3xH", data, offset=4)
-
-            return {
-                "type": TypeLeafString.PROCEDURE,
-                "return_type": CvdumpTypeKey(return_type),
-                "call_type": CALL_TYPE_NAMES[call_type],
-                "arg_list_type": CvdumpTypeKey(arglist),
-            }
+            obj = _read_procedure(data, is32)
 
         case LeafEnum.LF_MFUNCTION_16t | LeafEnum.LF_MFUNCTION:
-            fmt = "<2I4xB3xII" if is32 else "<2H2xB3xHI"
-            return_type, class_type, call_type, arglist, this_adjust = unpack_from(
-                fmt, data, offset=4
-            )
-            return {
-                "type": TypeLeafString.MFUNCTION,
-                "return_type": CvdumpTypeKey(return_type),
-                "class_type": CvdumpTypeKey(class_type),
-                "call_type": CALL_TYPE_NAMES[call_type],
-                "arg_list_type": CvdumpTypeKey(arglist),
-                "this_adjust": this_adjust,
-            }
+            obj = _read_mfunction(data, is32)
 
         case LeafEnum.LF_ARGLIST_16t | LeafEnum.LF_ARGLIST:
-            if is32:
-                (count,) = unpack_from("<I", data, offset=4)
-                args = unpack_from(f"<{count}I", data, offset=8)
-            else:
-                (count,) = unpack_from("<H", data, offset=4)
-                args = unpack_from(f"<{count}H", data, offset=6)
-
-            obj: CvdumpParsedType = {"type": TypeLeafString.ARGLIST, "argcount": count}
-            if args:
-                obj["args"] = [CvdumpTypeKey(arg) for arg in args]
-            return obj
+            obj = _read_arglist(data, is32)
 
         case LeafEnum.LF_FIELDLIST_16t | LeafEnum.LF_FIELDLIST:
-            return _read_fieldlist(data)
+            obj = _read_fieldlist(data)
 
         case LeafEnum.LF_BITFIELD_16t | LeafEnum.LF_BITFIELD:
-            (bit_type,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
-            return {
-                "type": TypeLeafString.BITFIELD,
-                "bit_type": CvdumpTypeKey(bit_type),
-            }
+            obj = _read_bitfield(data, is32)
 
-    return None
+        case _:
+            return None
+
+    return obj
 
 
 class PdbTypesParser(CvdumpTypesParser):

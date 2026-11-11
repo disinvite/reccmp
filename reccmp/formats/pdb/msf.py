@@ -65,7 +65,7 @@ def _read_msf_200(data: bytes) -> tuple[int, list[MSFStream]]:
 def _read_msf_700(data: bytes) -> tuple[int, list[MSFStream]]:
     page_size, dir_size = unpack_from("<32xI8xI", data)
     n_dir_pages = math.ceil(dir_size / page_size)
-    # The header lists the pages that hold the directory's page list.
+    # In "big" MSF containers, the directory page list can span multiple pages.
     map_pages = unpack_from(
         f"<{math.ceil(n_dir_pages * 4 / page_size)}I", data, offset=0x34
     )
@@ -98,7 +98,7 @@ class MSFContainer:
 
 
 class PDB100File:
-    """PDB 1.00 (MSVC 2.x era) predates the MSF format. It only contains type records (TPI stream).
+    """PDB 1.00 (MSVC 1.x era) predates the MSF format. It only contains type records (TPI stream).
     We take some liberties here to make it compatible with the newer MSF format PDBs.
     Reference: `struct RTPDB10HDR` from `virtualbox/include/iprt/formats/pdb.h`."""
 

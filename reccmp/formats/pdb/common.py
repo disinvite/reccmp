@@ -36,10 +36,7 @@ def read_pascal_string(data: bytes, offset: int) -> tuple[str, int]:
 
 
 def read_sz_string(data: bytes, offset: int) -> tuple[str, int]:
-    start = offset
+    end = data.index(0, offset)
 
-    # offset = data.index(0, offset)
-    while data[offset] != 0:
-        offset += 1
-
-    return (data[start:offset].decode("ascii"), offset + 1)
+    # TODO: Working around bad data for `iforce2.lib`, but differently than cvdump.exe.
+    return (data[offset:end].decode("ascii", errors="ignore"), end + 1)

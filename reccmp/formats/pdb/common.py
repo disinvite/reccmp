@@ -35,6 +35,21 @@ def read_pascal_string(data: bytes, offset: int) -> tuple[str, int]:
     return (value, offset + strlen + 1)
 
 
+def read_map(data: bytes, offset: int = 0) -> list[tuple[int, int]]:
+    """Read the (key, value) pairs of a Map with 32-bit keys and values.
+    Map::save, map.h"""
+    (count,) = unpack_from("<I", data, offset=offset)
+    offset += 8  # skip hash table size
+
+    # Skip the isetPresent and isetDeleted bit vectors (ISet::save, iset.h).
+    for _ in range(2):
+        (n_words,) = unpack_from("<I", data, offset=offset)
+        offset += 4 + 4 * n_words
+
+    pairs = unpack_from(f"<{2 * count}I", data, offset=offset)
+    return list(zip(pairs[::2], pairs[1::2]))
+
+
 def read_sz_string(data: bytes, offset: int) -> tuple[str, int]:
     end = data.index(0, offset)
 

@@ -1,12 +1,8 @@
-from reccmp.formats.pdb import StreamIndex, open_pdb
-from reccmp.formats.pdb.tpi import TPIHeader
+from reccmp.formats.pdb import open_pdb
 from .parser import CvdumpParser
 from .pdb_parser import PdbParser
 from .pdb_types import PdbTypesParser
 from .runner import Cvdump, DumpOpt
-
-# TPI version for MSVC 4.1. cvdump converts 16-bit types if the version is this or lower.
-_TPI_IMPV41 = 19951122
 
 
 class HybridCvdump(Cvdump):
@@ -40,10 +36,7 @@ class HybridCvdump(Cvdump):
             parser.modules = pdb.modules
 
         if DumpOpt.TYPES in self.options:
-            data = open_pdb(pdb_data).get_stream(StreamIndex.TPI)
-            parser.types = PdbTypesParser(data)
-            parser.is_16bit_type_pool = (
-                TPIHeader.from_bytes(data).version <= _TPI_IMPV41
-            )
+            parser.types = PdbTypesParser(open_pdb(pdb_data))
+            parser.is_16bit_type_pool = pdb.is_16bit_type_pool
 
         return parser

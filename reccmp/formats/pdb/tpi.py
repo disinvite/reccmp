@@ -4,19 +4,26 @@ from enum import Enum, Flag
 from struct import calcsize, iter_unpack, unpack_from
 from typing import Any
 from .codeview import CodeViewRecord
-from .common import read_packed_value, read_pascal_string
+from .common import read_map, read_packed_value, read_pascal_string
 from .fieldlist import LfFieldList
 from .debug import debug_print
 from .leaf import CodeViewLeaf
+from .msf import PDBStreams, StreamIndex
+from .names import NameTable, read_named_streams
 
 
 @dataclass(frozen=True)
 class TPIHeader:
+    # pylint: disable=too-many-instance-attributes
     version: int
     id_start: int
     id_end: int
     size: int
     header_size: int
+    # TpiHash, tpi.h. Only in the MSVC 5+ header.
+    hash_stream: int | None = None
+    hash_adj_offset: int = 0
+    hash_adj_size: int = 0
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "TPIHeader":
@@ -38,7 +45,18 @@ class TPIHeader:
                 header_size, id_start, id_end, size = unpack_from(
                     "<IIII", data, offset=4
                 )
-                return cls(version, id_start, id_end, size, header_size=header_size)
+                (hash_stream,) = unpack_from("<H", data, offset=20)
+                hash_adj_offset, hash_adj_size = unpack_from("<ii", data, offset=48)
+                return cls(
+                    version,
+                    id_start,
+                    id_end,
+                    size,
+                    header_size=header_size,
+                    hash_stream=hash_stream,
+                    hash_adj_offset=hash_adj_offset,
+                    hash_adj_size=hash_adj_size,
+                )
 
             case _:
                 raise ValueError("TPI header format not supported")
@@ -505,11 +523,28 @@ def _is_anonymous_udt(name: str) -> bool:
     )
 
 
-def resolve_forward_refs(types: Mapping[int, bytes]) -> dict[int, int]:
+def read_hash_heads(pdb: PDBStreams) -> dict[str, int]:
+    """Map UDT name to the type index the linker put at the head of its hash chain.
+    TPI1::fInitHashToPchnMap, tpi.cpp"""
+    header = TPIHeader.from_bytes(pdb.get_stream(StreamIndex.TPI))
+    if header.hash_stream is None or header.hash_adj_size <= 0:
+        return {}
+
+    hash_data = pdb.get_stream(header.hash_stream)
+    adjusters = read_map(hash_data, header.hash_adj_offset)
+
+    named_streams = read_named_streams(pdb.get_stream(StreamIndex.PDB))
+    names = NameTable(pdb.get_stream(named_streams["/names"]))
+    return {names[ni]: ti for ni, ti in adjusters}
+
+
+def resolve_forward_refs(
+    types: Mapping[int, bytes], hash_heads: Mapping[str, int] | None = None
+) -> dict[int, int]:
     """Map the type index of each class, struct, union, and enum forward ref
     to the type index of its definition. Forward refs with no definition are left out.
-    If there is more than one definition with the same name, the last one wins.
-    This matches QueryTiForUDT, tpi.cpp."""
+    If there is more than one definition with the same name, the one in hash_heads wins.
+    Otherwise the last one wins. This matches QueryTiForUDT, tpi.cpp."""
     udts: dict[str, int] = {}
     forward_refs: list[tuple[int, str]] = []
 
@@ -539,6 +574,9 @@ def resolve_forward_refs(types: Mapping[int, bytes]) -> dict[int, int]:
 
         elif not _is_anonymous_udt(leaf.name):
             udts[leaf.name] = ti
+
+    if hash_heads:
+        udts.update(hash_heads)
 
     return {ti: udts[name] for ti, name in forward_refs if name in udts}
 

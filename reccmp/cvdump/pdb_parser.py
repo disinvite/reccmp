@@ -194,15 +194,20 @@ class PdbParser:
         return header.version <= _TPI_IMPV41
 
     @cached_property
-    def _dbi(self) -> DebugInfomation:
-        return DebugInfomation.from_bytes(self._msf.get_stream(StreamIndex.DBI))
+    def _dbi(self) -> DebugInfomation | None:
+        data = self._msf.get_stream(StreamIndex.DBI)
+        return DebugInfomation.from_bytes(data) if data else None
 
     @cached_property
     def _symbol_records(self) -> bytes:
+        assert self._dbi is not None
         return self._msf.get_stream(self._dbi.header.symbol_stream_id)
 
     @cached_property
     def modules(self) -> list[ModuleEntry]:
+        if self._dbi is None:
+            return []
+
         return [
             ModuleEntry(
                 id=i,
@@ -214,6 +219,9 @@ class PdbParser:
 
     @cached_property
     def sizerefs(self) -> list[SizeRefEntry]:
+        if self._dbi is None:
+            return []
+
         return [
             SizeRefEntry(
                 # cvdump numbers the modules from 1.
@@ -227,15 +235,24 @@ class PdbParser:
 
     @cached_property
     def publics(self) -> list[PublicsEntry]:
+        if self._dbi is None:
+            return []
+
         public_stream = self._msf.get_stream(self._dbi.header.public_stream_id)
         return list(self._read_publics(public_stream, self._symbol_records))
 
     @cached_property
     def globals(self) -> list[GdataEntry]:
+        if self._dbi is None:
+            return []
+
         global_stream = self._msf.get_stream(self._dbi.header.global_stream_id)
         return list(self._read_globals(global_stream, self._symbol_records))
 
     def _module_streams(self) -> Iterator[tuple[ModuleInfo, bytes]]:
+        if self._dbi is None:
+            return
+
         for module in self._dbi.modules:
             if module.stream_id != -1:
                 yield (module, self._msf.get_stream(module.stream_id))

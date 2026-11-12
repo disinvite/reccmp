@@ -7,7 +7,13 @@ from reccmp.formats.pdb.common import (
 )
 from reccmp.formats.pdb.fieldlist import MethodProp
 from reccmp.formats.pdb.leaf import LeafEnum
-from reccmp.formats.pdb.tpi import PropAttr, TypeLookup, resolve_forward_refs
+from reccmp.formats.pdb.msf import PDBStreams, StreamIndex
+from reccmp.formats.pdb.tpi import (
+    PropAttr,
+    TypeLookup,
+    read_hash_heads,
+    resolve_forward_refs,
+)
 from .cvinfo import CvdumpTypeKey
 from .type_leaves import (
     CvdumpParsedType,
@@ -372,10 +378,10 @@ def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
 class PdbTypesParser(CvdumpTypesParser):
     """Reads types from the PDB TPI stream instead of cvdump output."""
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, pdb: PDBStreams) -> None:
         super().__init__()
-        self._types = TypeLookup(data)
-        self._forward_refs = resolve_forward_refs(self._types)
+        self._types = TypeLookup(pdb.get_stream(StreamIndex.TPI))
+        self._forward_refs = resolve_forward_refs(self._types, read_hash_heads(pdb))
 
     def _parse_raw(self, leaf_id: CvdumpTypeKey) -> CvdumpParsedType:
         try:

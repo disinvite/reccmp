@@ -7,7 +7,7 @@ from .codeview import CodeViewRecord
 from .common import read_map, read_packed_value, read_pascal_string
 from .fieldlist import LfFieldList
 from .debug import debug_print
-from .leaf import CodeViewLeaf
+from .leaf import CodeViewLeaf, read_leaf_name
 from .msf import PDBStreams, StreamIndex
 from .names import NameTable, read_named_streams
 
@@ -40,8 +40,8 @@ class TPIHeader:
                 id_start, id_end, size = unpack_from("<HHI", data, offset=4)
                 return cls(version, id_start, id_end, size, header_size=16)
 
-            # MSVC 5+
-            case 19961031:
+            # MSVC 5+. impv50, impv70, impv80 in tpi.h
+            case 19961031 | 19990903 | 20040203:
                 header_size, id_start, id_end, size = unpack_from(
                     "<IIII", data, offset=4
                 )
@@ -232,7 +232,7 @@ class LfUnion(CodeViewLeaf):
             offset += 6
 
         length, offset = read_packed_value(data, offset)
-        name, _ = read_pascal_string(data, offset)
+        name, _ = read_leaf_name(data, offset, leaf_type)
 
         return cls(leaf_type, count, field, prop, length, name)
 
@@ -432,7 +432,7 @@ class LfClass(CodeViewLeaf):
         # Pascal string with the name of the class follows the leaf data.
         offset += calcsize(fmt)
         size, offset = read_packed_value(data, offset)
-        name, _ = read_pascal_string(data, offset)
+        name, _ = read_leaf_name(data, offset, leaf_type)
 
         return cls(leaf_type, count, field, attr, derived, vshape, size, name)
 
@@ -463,7 +463,7 @@ class LfEnum(CodeViewLeaf):
             count, utype, index, prop = unpack_from("<4H", data, offset=offset)
             offset += 8
 
-        name, _ = read_pascal_string(data, offset)
+        name, _ = read_leaf_name(data, offset, leaf_type)
 
         return cls(leaf_type, count, prop, utype, index, name)
 
@@ -553,13 +553,13 @@ def resolve_forward_refs(
         leaf: LfClass | LfUnion | LfEnum
 
         match leaf_type:
-            case 4 | 5 | 0x1004 | 0x1005:
+            case 4 | 5 | 0x1004 | 0x1005 | 0x1504 | 0x1505:
                 leaf = LfClass.from_bytes(data)
                 prop = leaf.raw_prop_attr
-            case 6 | 0x1006:
+            case 6 | 0x1006 | 0x1506:
                 leaf = LfUnion.from_bytes(data)
                 prop = leaf.prop
-            case 7 | 0x1007:
+            case 7 | 0x1007 | 0x1507:
                 leaf = LfEnum.from_bytes(data)
                 prop = leaf.prop
             case _:

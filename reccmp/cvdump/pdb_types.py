@@ -1,12 +1,8 @@
 import logging
 from struct import calcsize, unpack_from
-from reccmp.formats.pdb.common import (
-    read_packed_value,
-    read_pascal_string,
-    read_sz_string,
-)
+from reccmp.formats.pdb.common import read_packed_value
 from reccmp.formats.pdb.fieldlist import MethodProp
-from reccmp.formats.pdb.leaf import LeafEnum
+from reccmp.formats.pdb.leaf import LeafEnum, read_leaf_name
 from reccmp.formats.pdb.msf import PDBStreams, StreamIndex
 from reccmp.formats.pdb.tpi import (
     PropAttr,
@@ -57,10 +53,6 @@ CALL_TYPE_NAMES = (
 )
 
 
-def _skip_pascal_string(data: bytes, offset: int) -> int:
-    return offset + data[offset] + 1
-
-
 def _read_udt(
     data: bytes,
     leaf_type: TypeLeafString,
@@ -70,13 +62,14 @@ def _read_udt(
 ) -> CvdumpParsedType:
     """For LF_CLASS, LF_STRUCTURE, and LF_UNION. The size field is at a different
     offset for classes and unions, but the fields before it are the same."""
+    (raw_type,) = unpack_from("<2xH", data)
     if is32:
         prop, field = unpack_from(fmt, data)
     else:
         field, prop = unpack_from(fmt, data)
 
     size, offset = read_packed_value(data, calcsize(fmt))
-    name, _ = read_pascal_string(data, offset)
+    name, _ = read_leaf_name(data, offset, raw_type)
     obj: CvdumpParsedType = {"type": leaf_type, "name": name, "size": size}
 
     if prop & PropAttr.FWDREF.value:
@@ -90,6 +83,7 @@ def _read_udt(
 
 
 def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
+    (raw_type,) = unpack_from("<2xH", data)
     if is32:
         fmt = "<6xH2I"
         prop, utype, field = unpack_from(fmt, data)
@@ -97,7 +91,7 @@ def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
         fmt = "<6x3H"
         utype, field, prop = unpack_from(fmt, data)
 
-    name, _ = read_pascal_string(data, calcsize(fmt))
+    name, _ = read_leaf_name(data, calcsize(fmt), raw_type)
 
     obj: CvdumpParsedType = {
         "type": TypeLeafString.ENUM,
@@ -161,20 +155,15 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 )
 
             case LeafEnum.LF_ENUMERATE_ST | LeafEnum.LF_ENUMERATE:
-                read_name = (
-                    read_sz_string
-                    if sub_type == LeafEnum.LF_ENUMERATE
-                    else read_pascal_string
-                )
                 value, offset = read_packed_value(data, offset + 2)
-                name, offset = read_name(data, offset)
+                name, offset = read_leaf_name(data, offset, sub_type)
                 variants.append(EnumItem(name=name, value=value))
 
-            case LeafEnum.LF_MEMBER_16t | LeafEnum.LF_MEMBER_ST:
+            case LeafEnum.LF_MEMBER_16t | LeafEnum.LF_MEMBER_ST | LeafEnum.LF_MEMBER:
                 fmt = "<2xI" if sub_type & 0x1000 else "<H2x"
                 (index,) = unpack_from(fmt, data, offset=offset)
                 field_offset, offset = read_packed_value(data, offset + calcsize(fmt))
-                name, offset = read_pascal_string(data, offset)
+                name, offset = read_leaf_name(data, offset, sub_type)
                 members.append(
                     FieldListItem(
                         offset=field_offset, name=name, type=CvdumpTypeKey(index)
@@ -182,17 +171,20 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 )
 
             case LeafEnum.LF_STMEMBER_16t | LeafEnum.LF_METHOD_16t:
-                offset = _skip_pascal_string(data, offset + 4)
+                _, offset = read_leaf_name(data, offset + 4, sub_type)
 
             case (
                 LeafEnum.LF_STMEMBER_ST
                 | LeafEnum.LF_METHOD_ST
                 | LeafEnum.LF_NESTTYPE_ST
+                | LeafEnum.LF_STMEMBER
+                | LeafEnum.LF_METHOD
+                | LeafEnum.LF_NESTTYPE
             ):
-                offset = _skip_pascal_string(data, offset + 6)
+                _, offset = read_leaf_name(data, offset + 6, sub_type)
 
             case LeafEnum.LF_NESTTYPE_16t:
-                offset = _skip_pascal_string(data, offset + 2)
+                _, offset = read_leaf_name(data, offset + 2, sub_type)
 
             case LeafEnum.LF_VFUNCTAB_16t:
                 obj["has_vftable"] = True
@@ -202,7 +194,11 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 obj["has_vftable"] = True
                 offset += 6
 
-            case LeafEnum.LF_ONEMETHOD_16t | LeafEnum.LF_ONEMETHOD_ST:
+            case (
+                LeafEnum.LF_ONEMETHOD_16t
+                | LeafEnum.LF_ONEMETHOD_ST
+                | LeafEnum.LF_ONEMETHOD
+            ):
                 (attr,) = unpack_from("<H", data, offset=offset)
                 offset += 4 if sub_type == LeafEnum.LF_ONEMETHOD_16t else 6
                 # Introducing virtual and pure introducing virtual methods
@@ -212,7 +208,7 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                     MethodProp.PURE_INTRO,
                 ):
                     offset += 4
-                offset = _skip_pascal_string(data, offset)
+                _, offset = read_leaf_name(data, offset, sub_type)
 
             case _:
                 logger.error("Unhandled field list leaf type %#x", sub_type)
@@ -339,19 +335,21 @@ def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
         case LeafEnum.LF_POINTER_16t | LeafEnum.LF_POINTER:
             obj = _read_pointer(data, is32)
 
-        case LeafEnum.LF_ARRAY_16t | LeafEnum.LF_ARRAY_ST:
+        case LeafEnum.LF_ARRAY_16t | LeafEnum.LF_ARRAY_ST | LeafEnum.LF_ARRAY:
             obj = _read_array(data, is32)
 
-        case LeafEnum.LF_CLASS_16t | LeafEnum.LF_CLASS_ST:
+        case LeafEnum.LF_CLASS_16t | LeafEnum.LF_CLASS_ST | LeafEnum.LF_CLASS:
             obj = _read_class(data, TypeLeafString.CLASS, is32, udt)
 
-        case LeafEnum.LF_STRUCTURE_16t | LeafEnum.LF_STRUCTURE_ST:
+        case (
+            LeafEnum.LF_STRUCTURE_16t | LeafEnum.LF_STRUCTURE_ST | LeafEnum.LF_STRUCTURE
+        ):
             obj = _read_class(data, TypeLeafString.STRUCTURE, is32, udt)
 
-        case LeafEnum.LF_UNION_16t | LeafEnum.LF_UNION_ST:
+        case LeafEnum.LF_UNION_16t | LeafEnum.LF_UNION_ST | LeafEnum.LF_UNION:
             obj = _read_union(data, is32, udt)
 
-        case LeafEnum.LF_ENUM_16t | LeafEnum.LF_ENUM_ST:
+        case LeafEnum.LF_ENUM_16t | LeafEnum.LF_ENUM_ST | LeafEnum.LF_ENUM:
             obj = _read_enum(data, is32, udt)
 
         case LeafEnum.LF_PROCEDURE_16t | LeafEnum.LF_PROCEDURE:

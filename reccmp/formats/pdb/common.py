@@ -31,7 +31,7 @@ def read_packed_value(data: bytes, offset: int) -> tuple[int, int]:
 
 def read_pascal_string(data: bytes, offset: int) -> tuple[str, int]:
     strlen = data[offset]
-    value = data[offset + 1 : offset + 1 + strlen].decode("ascii")
+    value = data[offset + 1 : offset + 1 + strlen].decode("ascii", errors="ignore")
     return (value, offset + strlen + 1)
 
 

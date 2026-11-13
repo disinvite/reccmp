@@ -91,7 +91,7 @@ class CvdumpSymbolsParser:
     within an `S_COMPILE` symbol.
     """
 
-    _flags_frame_pointer_regex = re.compile(r"\s*Flags: Frame Ptr Present$")
+    _flags_frame_pointer_regex = re.compile(r"\s*Flags: .*Frame Ptr Present")
 
     _register_stack_symbols = ["S_BPREL32", "S_REGISTER"]
 

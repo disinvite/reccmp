@@ -22,6 +22,10 @@ from .types import CvdumpTypesParser
 # TPI version for MSVC 4.1. cvdump converts 16-bit types if the version is this or lower.
 _TPI_IMPV41 = 19951122
 
+# PDBImpvVC98, pdb.h. Later PDBs have zero-terminated filenames in the C11 lines.
+# PDB1::fIsSZPDB, pdb1.h
+_PDB_IMPV_VC98 = 19970604
+
 # Symbol record types. The 16t types are from MSVC 4.x PDBs. The ST types have
 # 32-bit type indices and pascal string names. The rest have zero-terminated names.
 S_REGISTER_16t = 0x0002
@@ -192,6 +196,11 @@ class PdbParser:
     def is_16bit_type_pool(self) -> bool:
         header = TPIHeader.from_bytes(self._msf.get_stream(StreamIndex.TPI))
         return header.version <= _TPI_IMPV41
+
+    @cached_property
+    def _is_sz_format(self) -> bool:
+        (impv,) = unpack_from("<I", self._msf.get_stream(StreamIndex.PDB))
+        return impv > _PDB_IMPV_VC98
 
     @cached_property
     def _dbi(self) -> DebugInfomation | None:
@@ -433,7 +442,11 @@ class PdbParser:
         for file_offset in file_offsets:
             (n_segs,) = unpack_from("<H", data, offset=file_offset)
             line_offsets = unpack_from(f"<{n_segs}I", data, offset=file_offset + 4)
-            filename, _ = read_pascal_string(data, file_offset + 4 + 12 * n_segs)
+            name_offset = file_offset + 4 + 12 * n_segs
+            if self._is_sz_format:
+                filename, _ = read_sz_string(data, name_offset)
+            else:
+                filename, _ = read_pascal_string(data, name_offset)
 
             lines: list[LineValue] = []
             for line_offset in line_offsets:

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import IntEnum
+from .common import read_pascal_string, read_sz_string
 
 
 @dataclass(frozen=True)
@@ -65,3 +66,27 @@ class LeafEnum(IntEnum):
 
     # Types w/ SZ names
     LF_ENUMERATE = 0x1502
+    LF_ARRAY = 0x1503
+    LF_CLASS = 0x1504
+    LF_STRUCTURE = 0x1505
+    LF_UNION = 0x1506
+    LF_ENUM = 0x1507
+    LF_MEMBER = 0x150D
+    LF_STMEMBER = 0x150E
+    LF_METHOD = 0x150F
+    LF_NESTTYPE = 0x1510
+    LF_ONEMETHOD = 0x1511
+
+
+_LF_ST_MAX = 0x1500
+"""LF_ST_MAX in cvinfo.h.
+The leaf ids before this value use pascal style (length prefix) strings.
+The ids that come after use SZ (null-terimated) strings."""
+
+
+def read_leaf_name(data: bytes, offset: int, leaf_type: int) -> tuple[str, int]:
+    """Returns (name, new_offset)"""
+    if leaf_type > _LF_ST_MAX:
+        return read_sz_string(data, offset)
+
+    return read_pascal_string(data, offset)

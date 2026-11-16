@@ -57,33 +57,8 @@ CALL_TYPE_NAMES = (
 )
 
 
-def _read_udt(
-    data: bytes,
-    leaf_type: TypeLeafString,
-    is32: bool,
-    fmt: str,
-) -> CvdumpParsedType:
-    """Class/struct, unions and enums are user-defined types (UDT).
-    Most of their layouts line up, except where noted."""
-    (raw_type,) = unpack_from("<2xH", data)
-    if is32:
-        prop, field = unpack_from(fmt, data)
-    else:
-        field, prop = unpack_from(fmt, data)
-
-    size, offset = read_packed_value(data, calcsize(fmt))
-    name, _ = read_leaf_name(data, offset, raw_type)
-    obj: CvdumpParsedType = {"type": leaf_type, "name": name, "size": size}
-
-    if prop & PropAttr.FWDREF.value:
-        obj["is_forward_ref"] = True
-    else:
-        obj["field_list_type"] = CvdumpTypeKey(field)
-
-    return obj
-
-
 def _read_enum(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfEnum_16t / lfEnum."""
     (raw_type,) = unpack_from("<2xH", data)
     if is32:
         fmt = "<6xH2I"
@@ -108,6 +83,7 @@ def _read_enum(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_fieldlist(data: bytes) -> CvdumpParsedType:
+    """lfFieldList_16t / lfFieldList."""
     obj: CvdumpParsedType = {"type": TypeLeafString.FIELDLIST}
     members: list[FieldListItem] = []
     super_classes: dict[CvdumpTypeKey, int] = {}
@@ -231,6 +207,7 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
 
 
 def _read_modifier(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfModifier_16t / lfModifier."""
     (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
     return {
         "type": TypeLeafString.MODIFIER,
@@ -240,6 +217,7 @@ def _read_modifier(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_pointer(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfPointer_16t / lfPointer."""
     (index,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
     return {
         "type": TypeLeafString.POINTER,
@@ -248,6 +226,7 @@ def _read_pointer(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_array(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfArray_16t / lfArray."""
     fmt = "<4xI4x" if is32 else "<4xH2x"
     (elemtype,) = unpack_from(fmt, data)
     size, _ = read_packed_value(data, calcsize(fmt))
@@ -259,15 +238,48 @@ def _read_array(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_class(data: bytes, leaf_type: TypeLeafString, is32: bool) -> CvdumpParsedType:
-    """For LF_CLASS and LF_STRUCTURE."""
-    fmt = "<6xHI8x" if is32 else "<6x2H4x"
-    return _read_udt(data, leaf_type, is32, fmt)
+    """lfClass_16t / lfClass. We always read the fieldlist so we
+    skip the redundant data here. e.g. `count`, `vshape`, `derived`."""
+    (raw_type,) = unpack_from("<2xH", data)
+    if is32:
+        fmt = "<6xHI8x"
+        prop, field = unpack_from(fmt, data)
+    else:
+        fmt = "<6x2H4x"
+        field, prop = unpack_from(fmt, data)
+
+    size, offset = read_packed_value(data, calcsize(fmt))
+    name, _ = read_leaf_name(data, offset, raw_type)
+    obj: CvdumpParsedType = {"type": leaf_type, "name": name, "size": size}
+
+    if prop & PropAttr.FWDREF.value:
+        obj["is_forward_ref"] = True
+    else:
+        obj["field_list_type"] = CvdumpTypeKey(field)
+
+    return obj
 
 
 def _read_union(data: bytes, is32: bool) -> CvdumpParsedType:
     """lfUnion_16t / lfUnion."""
-    fmt = "<6xHI" if is32 else "<6x2H"
-    return _read_udt(data, TypeLeafString.UNION, is32, fmt)
+    (raw_type,) = unpack_from("<2xH", data)
+    if is32:
+        fmt = "<6xHI"
+        prop, field = unpack_from(fmt, data)
+    else:
+        fmt = "<6x2H"
+        field, prop = unpack_from(fmt, data)
+
+    size, offset = read_packed_value(data, calcsize(fmt))
+    name, _ = read_leaf_name(data, offset, raw_type)
+    obj: CvdumpParsedType = {"type": TypeLeafString.UNION, "name": name, "size": size}
+
+    if prop & PropAttr.FWDREF.value:
+        obj["is_forward_ref"] = True
+    else:
+        obj["field_list_type"] = CvdumpTypeKey(field)
+
+    return obj
 
 
 def _read_procedure(data: bytes, is32: bool) -> CvdumpParsedType:
@@ -318,7 +330,7 @@ def _read_arglist(data: bytes, is32: bool) -> CvdumpParsedType:
 
 def _read_bitfield(data: bytes, is32: bool) -> CvdumpParsedType:
     """lfBitfield_16t / lfBitfield. Reads only the `type` member.
-    The goal is to resolve fieldlists members. In a bitfield, these will all
+    The goal is to resolve fieldlist members. In a bitfield, these will all
     share an offset, so we just need to know the underlying primitive type."""
     (bit_type,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
     return {
@@ -423,8 +435,6 @@ def read_udt_props(
 
 
 class PdbTypesParser(CvdumpTypesParser):
-    """Reads types from the PDB TPI stream instead of cvdump output."""
-
     def __init__(self, pdb: PDBStreams) -> None:
         super().__init__()
         self._types = TypeLookup(pdb.get_stream(StreamIndex.TPI))

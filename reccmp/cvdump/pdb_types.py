@@ -6,9 +6,6 @@ from reccmp.formats.pdb.fieldlist import MethodProp
 from reccmp.formats.pdb.leaf import LeafEnum, read_leaf_name
 from reccmp.formats.pdb.msf import PDBStreams, StreamIndex
 from reccmp.formats.pdb.tpi import (
-    LfClass,
-    LfEnum,
-    LfUnion,
     PropAttr,
     TypeLookup,
     read_hash_heads,
@@ -389,25 +386,34 @@ def read_udt_props(
 
     for ti, data in types.items():
         (leaf_type,) = unpack_from("<H", data, offset=2)
-        leaf: LfClass | LfUnion | LfEnum
+        is32 = leaf_type & 0x1000 == 0x1000
 
         match leaf_type:
-            case 4 | 5 | 0x1004 | 0x1005 | 0x1504 | 0x1505:
-                leaf = LfClass.from_bytes(data)
-                prop = leaf.raw_prop_attr
-            case 6 | 0x1006 | 0x1506:
-                leaf = LfUnion.from_bytes(data)
-                prop = leaf.prop
-            case 7 | 0x1007 | 0x1507:
-                leaf = LfEnum.from_bytes(data)
-                prop = leaf.prop
+            case (
+                LeafEnum.LF_CLASS_16t
+                | LeafEnum.LF_CLASS_ST
+                | LeafEnum.LF_CLASS
+                | LeafEnum.LF_STRUCTURE_16t
+                | LeafEnum.LF_STRUCTURE_ST
+                | LeafEnum.LF_STRUCTURE
+            ):
+                prop_offset = 6 if is32 else 8
+                _, name_offset = read_packed_value(data, 20 if is32 else 14)
+            case LeafEnum.LF_UNION_16t | LeafEnum.LF_UNION_ST | LeafEnum.LF_UNION:
+                prop_offset = 6 if is32 else 8
+                _, name_offset = read_packed_value(data, 12 if is32 else 10)
+            case LeafEnum.LF_ENUM_16t | LeafEnum.LF_ENUM_ST | LeafEnum.LF_ENUM:
+                prop_offset = 6 if is32 else 10
+                name_offset = 16 if is32 else 12
             case _:
                 continue
 
+        (prop,) = unpack_from("<H", data, offset=prop_offset)
+        name, _ = read_leaf_name(data, name_offset, leaf_type)
         is_scoped = bool(prop & PropAttr.SCOPED.value)
-        hash_head = None if is_scoped else hash_heads.get(leaf.name)
+        hash_head = None if is_scoped else hash_heads.get(name)
         udts[CvdumpTypeKey(ti)] = UdtProps(
-            name=leaf.name,
+            name=name,
             is_forward_ref=bool(prop & PropAttr.FWDREF.value),
             is_scoped=is_scoped,
             udt=CvdumpTypeKey(hash_head) if hash_head is not None else None,

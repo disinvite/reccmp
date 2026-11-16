@@ -516,13 +516,6 @@ class LfBitfield(CodeViewLeaf):
         return cls(leaf_type, length, position, bit_type)
 
 
-def _is_anonymous_udt(name: str) -> bool:
-    """fUDTAnon, tm.cpp"""
-    return name in ("<unnamed-tag>", "__unnamed") or name.endswith(
-        ("::<unnamed-tag>", "::__unnamed")
-    )
-
-
 def read_hash_heads(pdb: PDBStreams) -> dict[str, int]:
     """Map UDT name to the type index the linker put at the head of its hash chain.
     TPI1::fInitHashToPchnMap, tpi.cpp"""
@@ -536,49 +529,6 @@ def read_hash_heads(pdb: PDBStreams) -> dict[str, int]:
     named_streams = read_named_streams(pdb.get_stream(StreamIndex.PDB))
     names = NameTable(pdb.get_stream(named_streams["/names"]))
     return {names[ni]: ti for ni, ti in adjusters}
-
-
-def resolve_forward_refs(
-    types: Mapping[int, bytes], hash_heads: Mapping[str, int] | None = None
-) -> dict[int, int]:
-    """Map the type index of each class, struct, union, and enum forward ref
-    to the type index of its definition. Forward refs with no definition are left out.
-    If there is more than one definition with the same name, the one in hash_heads wins.
-    Otherwise the last one wins. This matches QueryTiForUDT, tpi.cpp."""
-    udts: dict[str, int] = {}
-    forward_refs: list[tuple[int, str]] = []
-
-    for ti, data in types.items():
-        (leaf_type,) = unpack_from("<H", data, offset=2)
-        leaf: LfClass | LfUnion | LfEnum
-
-        match leaf_type:
-            case 4 | 5 | 0x1004 | 0x1005 | 0x1504 | 0x1505:
-                leaf = LfClass.from_bytes(data)
-                prop = leaf.raw_prop_attr
-            case 6 | 0x1006 | 0x1506:
-                leaf = LfUnion.from_bytes(data)
-                prop = leaf.prop
-            case 7 | 0x1007 | 0x1507:
-                leaf = LfEnum.from_bytes(data)
-                prop = leaf.prop
-            case _:
-                continue
-
-        # Scoped types are not found by name. See REC::fIsGlobalDefnUdt.
-        if prop & PropAttr.SCOPED.value:
-            continue
-
-        if prop & PropAttr.FWDREF.value:
-            forward_refs.append((ti, leaf.name))
-
-        elif not _is_anonymous_udt(leaf.name):
-            udts[leaf.name] = ti
-
-    if hash_heads:
-        udts.update(hash_heads)
-
-    return {ti: udts[name] for ti, name in forward_refs if name in udts}
 
 
 def parse_types(data: bytes):

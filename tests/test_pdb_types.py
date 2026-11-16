@@ -1,10 +1,16 @@
 # from reccmp.formats.pdb.enum import LeafEnum
+from reccmp.cvdump.pdb_types import read_udt_props
+from reccmp.cvdump.types import build_udt_name_map, resolve_udt_forward_refs
 from reccmp.formats.pdb.tpi import (
     LfArray,
     LfEnum,
     TypeLookup,
-    resolve_forward_refs,
 )
+
+
+def resolve_forward_refs(types: dict[int, bytes]):
+    udts = read_udt_props(types)
+    return resolve_udt_forward_refs(udts, build_udt_name_map(udts, {}))
 
 
 def test_array_16():

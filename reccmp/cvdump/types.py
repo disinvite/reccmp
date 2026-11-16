@@ -2,7 +2,7 @@ import re
 import logging
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import NamedTuple
+from typing import Mapping, NamedTuple
 from .cvinfo import (
     CvInfoType,
     CvdumpTypeKey,
@@ -24,6 +24,7 @@ from .type_leaves import (
     read_modifier,
     read_pointer,
     read_procedure,
+    read_udt_name,
     read_union,
 )
 
@@ -46,6 +47,55 @@ def get_primitive(key: CvdumpTypeKey) -> CvInfoType:
     except KeyError as ex:
         logger.error("Unknown scalar type 0x%x", key)
         raise CvdumpKeyError(key) from ex
+
+
+def _is_anonymous_udt(name: str) -> bool:
+    """fUDTAnon, tm.cpp"""
+    return name in ("<unnamed-tag>", "__unnamed") or name.endswith(
+        ("::<unnamed-tag>", "::__unnamed")
+    )
+
+
+class UdtProps(NamedTuple):
+    """The attributes of a class, struct, union, or enum leaf that decide
+    whether it can be found by name."""
+
+    name: str
+    is_forward_ref: bool
+    is_scoped: bool
+    udt: CvdumpTypeKey | None
+    """The definition cvdump found for this name, if any."""
+
+
+def build_udt_name_map(
+    udts: Mapping[CvdumpTypeKey, UdtProps], overrides: Mapping[str, CvdumpTypeKey]
+) -> dict[str, CvdumpTypeKey]:
+    """Map each UDT name to the key of its definition.
+    If there is more than one definition with the same name, the one in overrides wins.
+    Otherwise the last one wins. This matches QueryTiForUDT, tpi.cpp."""
+    names: dict[str, CvdumpTypeKey] = {}
+
+    for key, udt in udts.items():
+        # Scoped types are not found by name. See REC::fIsGlobalDefnUdt.
+        if udt.is_scoped or udt.is_forward_ref or _is_anonymous_udt(udt.name):
+            continue
+
+        names[udt.name] = key
+
+    names.update(overrides)
+    return names
+
+
+def resolve_udt_forward_refs(
+    udts: Mapping[CvdumpTypeKey, UdtProps], names: Mapping[str, CvdumpTypeKey]
+) -> dict[CvdumpTypeKey, CvdumpTypeKey]:
+    """Map the key of each forward ref to the key of its definition.
+    Forward refs with no definition are left out."""
+    return {
+        key: names[udt.name]
+        for key, udt in udts.items()
+        if udt.is_forward_ref and not udt.is_scoped and udt.name in names
+    }
 
 
 class TypeKind(Enum):
@@ -111,9 +161,19 @@ class CvdumpTypesParser:
 
     MODES_OF_INTEREST = {e.value for e in TypeLeafString}
 
+    UDT_LEAVES = {
+        TypeLeafString.CLASS,
+        TypeLeafString.STRUCTURE,
+        TypeLeafString.UNION,
+        TypeLeafString.ENUM,
+    }
+
     def __init__(self) -> None:
         self._keys: dict[CvdumpTypeKey, CvdumpParsedType] = {}
         self._raw: dict[CvdumpTypeKey, tuple[str, str]] = {}
+        self._udt_props: dict[CvdumpTypeKey, UdtProps] = {}
+        self._udt_by_name: dict[str, CvdumpTypeKey] = {}
+        self._forward_refs: dict[CvdumpTypeKey, CvdumpTypeKey] = {}
         self.alerted_types: set[int] = set()
 
     def from_key(self, type_key: CvdumpTypeKey) -> CvdumpParsedType:
@@ -123,6 +183,13 @@ class CvdumpTypesParser:
             pass
 
         return self._parse_raw(type_key)
+
+    def get_udt_props(self) -> dict[CvdumpTypeKey, UdtProps]:
+        return self._udt_props
+
+    def get_type_by_name(self, name: str) -> CvdumpTypeKey | None:
+        """Returns the key of the class, struct, union, or enum with this name."""
+        return self._udt_by_name.get(name)
 
     def _primitive(self, type_key: CvdumpTypeKey) -> CvInfoType:
         cvinfo = get_primitive(type_key)
@@ -191,7 +258,7 @@ class CvdumpTypesParser:
 
             # For LF_CLASS/LF_STRUCTURE/LF_UNION/LF_ENUM, follow the UDT value.
             # For LF_MODIFIER, it is the type being modified.
-            forward_ref = leaf.get("udt") or leaf.get("modifies")
+            forward_ref = self._forward_refs.get(type_key) or leaf.get("modifies")
             if forward_ref is None:
                 # Example: HWND__
                 kind = LEAF_KINDS.get(leaf["type"])
@@ -372,3 +439,39 @@ class CvdumpTypesParser:
             if leaf_type in self.MODES_OF_INTEREST:
                 leaf_id = CvdumpTypeKey.from_str(leaf_id_str)
                 self._raw[leaf_id] = (leaf, leaf_type)
+
+                if leaf_type in self.UDT_LEAVES:
+                    self._read_udt_attributes(leaf_id, leaf)
+
+        self._udt_by_name = build_udt_name_map(self._udt_props, {})
+
+        # The UDT values from cvdump win over the forward refs we resolve by name.
+        self._forward_refs = resolve_udt_forward_refs(
+            self._udt_props, self._udt_by_name
+        )
+        self._forward_refs.update(
+            (key, udt.udt)
+            for key, udt in self._udt_props.items()
+            if udt.udt is not None and udt.udt != key
+        )
+
+    def _read_udt_attributes(self, leaf_id: CvdumpTypeKey, leaf: str):
+        name, udt = read_udt_name(leaf)
+
+        # Property flags (PRINT_PROP, type7.cpp) come before the name.
+        # cvdump prints the `scoped` property as LOCAL.
+        flags = leaf[: leaf.index(" name = ")]
+        self._udt_props[leaf_id] = UdtProps(
+            name=name,
+            is_forward_ref="FORWARD REF," in flags,
+            is_scoped="LOCAL," in flags,
+            udt=CvdumpTypeKey.from_str(udt) if udt is not None else None,
+        )
+
+    def resolve_forward_refs(self) -> dict[CvdumpTypeKey, CvdumpTypeKey]:
+        """Map each class, struct, union, and enum forward ref to the key of the
+        definition with the same name. Forward refs with no definition are left out.
+        If there is more than one definition, the last one wins.
+        Same rules as PdbTypesParser, without the UDT values from cvdump."""
+        names = build_udt_name_map(self._udt_props, {})
+        return resolve_udt_forward_refs(self._udt_props, names)

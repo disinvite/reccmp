@@ -1,14 +1,17 @@
 import logging
 from struct import calcsize, unpack_from
+from typing import Mapping
 from reccmp.formats.pdb.common import read_packed_value
 from reccmp.formats.pdb.fieldlist import MethodProp
 from reccmp.formats.pdb.leaf import LeafEnum, read_leaf_name
 from reccmp.formats.pdb.msf import PDBStreams, StreamIndex
 from reccmp.formats.pdb.tpi import (
+    LfClass,
+    LfEnum,
+    LfUnion,
     PropAttr,
     TypeLookup,
     read_hash_heads,
-    resolve_forward_refs,
 )
 from .cvinfo import CvdumpTypeKey
 from .type_leaves import (
@@ -19,7 +22,13 @@ from .type_leaves import (
     VirtualBaseClass,
     VirtualBasePointer,
 )
-from .types import CvdumpKeyError, CvdumpTypesParser
+from .types import (
+    CvdumpKeyError,
+    CvdumpTypesParser,
+    UdtProps,
+    build_udt_name_map,
+    resolve_udt_forward_refs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +67,6 @@ def _read_udt(
     leaf_type: TypeLeafString,
     is32: bool,
     fmt: str,
-    udt: int | None,
 ) -> CvdumpParsedType:
     """Class/struct, unions and enums are user-defined types (UDT).
     Most of their layouts line up, except where noted."""
@@ -74,15 +82,13 @@ def _read_udt(
 
     if prop & PropAttr.FWDREF.value:
         obj["is_forward_ref"] = True
-        if udt is not None:
-            obj["udt"] = CvdumpTypeKey(udt)
     else:
         obj["field_list_type"] = CvdumpTypeKey(field)
 
     return obj
 
 
-def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
+def _read_enum(data: bytes, is32: bool) -> CvdumpParsedType:
     (raw_type,) = unpack_from("<2xH", data)
     if is32:
         fmt = "<6xH2I"
@@ -102,8 +108,6 @@ def _read_enum(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
 
     if prop & PropAttr.FWDREF.value:
         obj["is_forward_ref"] = True
-        if udt is not None:
-            obj["udt"] = CvdumpTypeKey(udt)
 
     return obj
 
@@ -259,18 +263,16 @@ def _read_array(data: bytes, is32: bool) -> CvdumpParsedType:
     }
 
 
-def _read_class(
-    data: bytes, leaf_type: TypeLeafString, is32: bool, udt: int | None
-) -> CvdumpParsedType:
+def _read_class(data: bytes, leaf_type: TypeLeafString, is32: bool) -> CvdumpParsedType:
     """For LF_CLASS and LF_STRUCTURE."""
     fmt = "<6xHI8x" if is32 else "<6x2H4x"
-    return _read_udt(data, leaf_type, is32, fmt, udt)
+    return _read_udt(data, leaf_type, is32, fmt)
 
 
-def _read_union(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
+def _read_union(data: bytes, is32: bool) -> CvdumpParsedType:
     """lfUnion_16t / lfUnion."""
     fmt = "<6xHI" if is32 else "<6x2H"
-    return _read_udt(data, TypeLeafString.UNION, is32, fmt, udt)
+    return _read_udt(data, TypeLeafString.UNION, is32, fmt)
 
 
 def _read_procedure(data: bytes, is32: bool) -> CvdumpParsedType:
@@ -330,7 +332,7 @@ def _read_bitfield(data: bytes, is32: bool) -> CvdumpParsedType:
     }
 
 
-def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
+def _read_leaf(data: bytes) -> CvdumpParsedType | None:
     (leaf_type,) = unpack_from("<H", data, offset=2)
     is32 = leaf_type & 0x1000 == 0x1000
     obj: CvdumpParsedType
@@ -346,18 +348,18 @@ def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
             obj = _read_array(data, is32)
 
         case LeafEnum.LF_CLASS_16t | LeafEnum.LF_CLASS_ST | LeafEnum.LF_CLASS:
-            obj = _read_class(data, TypeLeafString.CLASS, is32, udt)
+            obj = _read_class(data, TypeLeafString.CLASS, is32)
 
         case (
             LeafEnum.LF_STRUCTURE_16t | LeafEnum.LF_STRUCTURE_ST | LeafEnum.LF_STRUCTURE
         ):
-            obj = _read_class(data, TypeLeafString.STRUCTURE, is32, udt)
+            obj = _read_class(data, TypeLeafString.STRUCTURE, is32)
 
         case LeafEnum.LF_UNION_16t | LeafEnum.LF_UNION_ST | LeafEnum.LF_UNION:
-            obj = _read_union(data, is32, udt)
+            obj = _read_union(data, is32)
 
         case LeafEnum.LF_ENUM_16t | LeafEnum.LF_ENUM_ST | LeafEnum.LF_ENUM:
-            obj = _read_enum(data, is32, udt)
+            obj = _read_enum(data, is32)
 
         case LeafEnum.LF_PROCEDURE_16t | LeafEnum.LF_PROCEDURE:
             obj = _read_procedure(data, is32)
@@ -380,13 +382,51 @@ def _read_leaf(data: bytes, udt: int | None) -> CvdumpParsedType | None:
     return obj
 
 
+def read_udt_props(types: Mapping[int, bytes]) -> dict[CvdumpTypeKey, UdtProps]:
+    """Read the props of each class, struct, union, and enum leaf."""
+    udts: dict[CvdumpTypeKey, UdtProps] = {}
+
+    for ti, data in types.items():
+        (leaf_type,) = unpack_from("<H", data, offset=2)
+        leaf: LfClass | LfUnion | LfEnum
+
+        match leaf_type:
+            case 4 | 5 | 0x1004 | 0x1005 | 0x1504 | 0x1505:
+                leaf = LfClass.from_bytes(data)
+                prop = leaf.raw_prop_attr
+            case 6 | 0x1006 | 0x1506:
+                leaf = LfUnion.from_bytes(data)
+                prop = leaf.prop
+            case 7 | 0x1007 | 0x1507:
+                leaf = LfEnum.from_bytes(data)
+                prop = leaf.prop
+            case _:
+                continue
+
+        udts[CvdumpTypeKey(ti)] = UdtProps(
+            name=leaf.name,
+            is_forward_ref=bool(prop & PropAttr.FWDREF.value),
+            is_scoped=bool(prop & PropAttr.SCOPED.value),
+            udt=None,
+        )
+
+    return udts
+
+
 class PdbTypesParser(CvdumpTypesParser):
     """Reads types from the PDB TPI stream instead of cvdump output."""
 
     def __init__(self, pdb: PDBStreams) -> None:
         super().__init__()
         self._types = TypeLookup(pdb.get_stream(StreamIndex.TPI))
-        self._forward_refs = resolve_forward_refs(self._types, read_hash_heads(pdb))
+        self._udt_props = read_udt_props(self._types)
+        hash_heads = {
+            name: CvdumpTypeKey(ti) for name, ti in read_hash_heads(pdb).items()
+        }
+        self._udt_by_name = build_udt_name_map(self._udt_props, hash_heads)
+        self._forward_refs = resolve_udt_forward_refs(
+            self._udt_props, self._udt_by_name
+        )
 
     def _parse_raw(self, leaf_id: CvdumpTypeKey) -> CvdumpParsedType:
         try:
@@ -394,7 +434,7 @@ class PdbTypesParser(CvdumpTypesParser):
         except KeyError as ex:
             raise CvdumpKeyError(leaf_id) from ex
 
-        leaf = _read_leaf(data, self._forward_refs.get(leaf_id))
+        leaf = _read_leaf(data)
         if leaf is None:
             raise CvdumpKeyError(leaf_id)
 

@@ -60,8 +60,8 @@ def _read_udt(
     fmt: str,
     udt: int | None,
 ) -> CvdumpParsedType:
-    """For LF_CLASS, LF_STRUCTURE, and LF_UNION. The size field is at a different
-    offset for classes and unions, but the fields before it are the same."""
+    """Class/struct, unions and enums are user-defined types (UDT).
+    Most of their layouts line up, except where noted."""
     (raw_type,) = unpack_from("<2xH", data)
     if is32:
         prop, field = unpack_from(fmt, data)
@@ -268,16 +268,16 @@ def _read_class(
 
 
 def _read_union(data: bytes, is32: bool, udt: int | None) -> CvdumpParsedType:
+    """lfUnion_16t / lfUnion."""
     fmt = "<6xHI" if is32 else "<6x2H"
     return _read_udt(data, TypeLeafString.UNION, is32, fmt, udt)
 
 
 def _read_procedure(data: bytes, is32: bool) -> CvdumpParsedType:
-    if is32:
-        return_type, call_type, arglist = unpack_from("<IB3xI", data, offset=4)
-    else:
-        return_type, call_type, arglist = unpack_from("<HB3xH", data, offset=4)
-
+    """lfProc_16t / lfProc. Skips `parmcount` because we read the arg list.
+    `funcattr` doesn't appear to be useful."""
+    fmt = "<IB3xI" if is32 else "<HB3xH"
+    return_type, call_type, arglist = unpack_from(fmt, data, offset=4)
     return {
         "type": TypeLeafString.PROCEDURE,
         "return_type": CvdumpTypeKey(return_type),
@@ -287,6 +287,9 @@ def _read_procedure(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_mfunction(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfMFunc_16t / lfMFunc. Skips `parmcount` because we read the arg list.
+    `thistype` points to the parent class and may be useful later.
+    `funcattr` doesn't appear to be useful."""
     fmt = "<2I4xB3xII" if is32 else "<2H2xB3xHI"
     return_type, class_type, call_type, arglist, this_adjust = unpack_from(
         fmt, data, offset=4
@@ -302,6 +305,7 @@ def _read_mfunction(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_arglist(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfArgList_16t / lfArgList."""
     if is32:
         (count,) = unpack_from("<I", data, offset=4)
         args = unpack_from(f"<{count}I", data, offset=8)
@@ -316,6 +320,9 @@ def _read_arglist(data: bytes, is32: bool) -> CvdumpParsedType:
 
 
 def _read_bitfield(data: bytes, is32: bool) -> CvdumpParsedType:
+    """lfBitfield_16t / lfBitfield. Reads only the `type` member.
+    The goal is to resolve fieldlists members. In a bitfield, these will all
+    share an offset, so we just need to know the underlying primitive type."""
     (bit_type,) = unpack_from("<I" if is32 else "<2xH", data, offset=4)
     return {
         "type": TypeLeafString.BITFIELD,

@@ -9,8 +9,8 @@ from reccmp.formats.pdb.tpi import (
 
 
 def resolve_forward_refs(types: dict[int, bytes]):
-    udts = read_udt_props(types)
-    return resolve_udt_forward_refs(udts, build_udt_name_map(udts, {}))
+    udts = read_udt_props(types, {})
+    return resolve_udt_forward_refs(udts, build_udt_name_map(udts))
 
 
 def test_array_16():

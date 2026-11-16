@@ -26,8 +26,6 @@ from .types import (
     CvdumpKeyError,
     CvdumpTypesParser,
     UdtProps,
-    build_udt_name_map,
-    resolve_udt_forward_refs,
 )
 
 logger = logging.getLogger(__name__)
@@ -382,8 +380,11 @@ def _read_leaf(data: bytes) -> CvdumpParsedType | None:
     return obj
 
 
-def read_udt_props(types: Mapping[int, bytes]) -> dict[CvdumpTypeKey, UdtProps]:
-    """Read the props of each class, struct, union, and enum leaf."""
+def read_udt_props(
+    types: Mapping[int, bytes], hash_heads: Mapping[str, int]
+) -> dict[CvdumpTypeKey, UdtProps]:
+    """Read the props of each class, struct, union, and enum leaf.
+    The hash head for the name is the `udt` value."""
     udts: dict[CvdumpTypeKey, UdtProps] = {}
 
     for ti, data in types.items():
@@ -403,11 +404,13 @@ def read_udt_props(types: Mapping[int, bytes]) -> dict[CvdumpTypeKey, UdtProps]:
             case _:
                 continue
 
+        is_scoped = bool(prop & PropAttr.SCOPED.value)
+        hash_head = None if is_scoped else hash_heads.get(leaf.name)
         udts[CvdumpTypeKey(ti)] = UdtProps(
             name=leaf.name,
             is_forward_ref=bool(prop & PropAttr.FWDREF.value),
-            is_scoped=bool(prop & PropAttr.SCOPED.value),
-            udt=None,
+            is_scoped=is_scoped,
+            udt=CvdumpTypeKey(hash_head) if hash_head is not None else None,
         )
 
     return udts
@@ -419,14 +422,7 @@ class PdbTypesParser(CvdumpTypesParser):
     def __init__(self, pdb: PDBStreams) -> None:
         super().__init__()
         self._types = TypeLookup(pdb.get_stream(StreamIndex.TPI))
-        self._udt_props = read_udt_props(self._types)
-        hash_heads = {
-            name: CvdumpTypeKey(ti) for name, ti in read_hash_heads(pdb).items()
-        }
-        self._udt_by_name = build_udt_name_map(self._udt_props, hash_heads)
-        self._forward_refs = resolve_udt_forward_refs(
-            self._udt_props, self._udt_by_name
-        )
+        self._set_udts(read_udt_props(self._types, read_hash_heads(pdb)))
 
     def _parse_raw(self, leaf_id: CvdumpTypeKey) -> CvdumpParsedType:
         try:

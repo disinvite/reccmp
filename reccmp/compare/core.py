@@ -55,7 +55,6 @@ from .analyze import (
 )
 from .ingest import (
     load_cvdump,
-    load_cvdump_types,
     load_cvdump_lines,
     load_markers,
     load_data_sources,
@@ -193,7 +192,6 @@ class Compare:
         # Each task creates new entities or overwrites existing data.
         # The tasks are ordered roughly according to the principle
         # of highest-to-lowest confidence of data validity.
-        load_cvdump_types(self.cvdump_analysis, self.types)
         load_cvdump(self.cvdump_analysis, self._db, self.recomp_bin)
         load_cvdump_lines(self.cvdump_analysis, self._lines_db, self.recomp_bin)
 

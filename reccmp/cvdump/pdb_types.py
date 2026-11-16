@@ -99,11 +99,12 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
             continue
 
         (sub_type,) = unpack_from("<H", data, offset=offset)
+        is32 = sub_type & 0x1000 == 0x1000
         offset += 2
 
         match sub_type:
             case LeafEnum.LF_BCLASS_16t | LeafEnum.LF_BCLASS:
-                fmt = "<2xI" if sub_type & 0x1000 else "<H2x"
+                fmt = "<2xI" if is32 else "<H2x"
                 (index,) = unpack_from(fmt, data, offset=offset)
                 base_offset, offset = read_packed_value(data, offset + calcsize(fmt))
                 super_classes[CvdumpTypeKey(index)] = base_offset
@@ -114,18 +115,16 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 | LeafEnum.LF_VBCLASS
                 | LeafEnum.LF_IVBCLASS
             ):
-                fmt = "<2xI4x" if sub_type & 0x1000 else "<H4x"
+                fmt = "<2xI4x" if is32 else "<H4x"
                 (index,) = unpack_from(fmt, data, offset=offset)
                 vbpoff, offset = read_packed_value(data, offset + calcsize(fmt))
                 vbind, offset = read_packed_value(data, offset)
                 if vboffset is None:
                     vboffset = vbpoff
+                direct = sub_type in (LeafEnum.LF_VBCLASS_16t, LeafEnum.LF_VBCLASS)
                 vbases.append(
                     VirtualBaseClass(
-                        type=CvdumpTypeKey(index),
-                        index=vbind,
-                        direct=sub_type
-                        in (LeafEnum.LF_VBCLASS_16t, LeafEnum.LF_VBCLASS),
+                        type=CvdumpTypeKey(index), index=vbind, direct=direct
                     )
                 )
 
@@ -135,7 +134,7 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                 variants.append(EnumItem(name=name, value=value))
 
             case LeafEnum.LF_MEMBER_16t | LeafEnum.LF_MEMBER_ST | LeafEnum.LF_MEMBER:
-                fmt = "<2xI" if sub_type & 0x1000 else "<H2x"
+                fmt = "<2xI" if is32 else "<H2x"
                 (index,) = unpack_from(fmt, data, offset=offset)
                 field_offset, offset = read_packed_value(data, offset + calcsize(fmt))
                 name, offset = read_leaf_name(data, offset, sub_type)
@@ -145,37 +144,41 @@ def _read_fieldlist(data: bytes) -> CvdumpParsedType:
                     )
                 )
 
-            case LeafEnum.LF_STMEMBER_16t | LeafEnum.LF_METHOD_16t:
-                _, offset = read_leaf_name(data, offset + 4, sub_type)
+            case (
+                LeafEnum.LF_STMEMBER_16t
+                | LeafEnum.LF_STMEMBER_ST
+                | LeafEnum.LF_STMEMBER
+            ):
+                # attr, index
+                offset += 6 if is32 else 4
+                _, offset = read_leaf_name(data, offset, sub_type)
+
+            case LeafEnum.LF_METHOD_16t | LeafEnum.LF_METHOD_ST | LeafEnum.LF_METHOD:
+                # count, mlist
+                offset += 6 if is32 else 4
+                _, offset = read_leaf_name(data, offset, sub_type)
 
             case (
-                LeafEnum.LF_STMEMBER_ST
-                | LeafEnum.LF_METHOD_ST
+                LeafEnum.LF_NESTTYPE_16t
                 | LeafEnum.LF_NESTTYPE_ST
-                | LeafEnum.LF_STMEMBER
-                | LeafEnum.LF_METHOD
                 | LeafEnum.LF_NESTTYPE
             ):
-                _, offset = read_leaf_name(data, offset + 6, sub_type)
+                # (pad), index
+                offset += 6 if is32 else 2
+                _, offset = read_leaf_name(data, offset, sub_type)
 
-            case LeafEnum.LF_NESTTYPE_16t:
-                _, offset = read_leaf_name(data, offset + 2, sub_type)
-
-            case LeafEnum.LF_VFUNCTAB_16t:
+            case LeafEnum.LF_VFUNCTAB_16t | LeafEnum.LF_VFUNCTAB:
                 obj["has_vftable"] = True
-                offset += 2
-
-            case LeafEnum.LF_VFUNCTAB:
-                obj["has_vftable"] = True
-                offset += 6
+                offset += 6 if is32 else 2
 
             case (
                 LeafEnum.LF_ONEMETHOD_16t
                 | LeafEnum.LF_ONEMETHOD_ST
                 | LeafEnum.LF_ONEMETHOD
             ):
-                (attr,) = unpack_from("<H", data, offset=offset)
-                offset += 4 if sub_type == LeafEnum.LF_ONEMETHOD_16t else 6
+                fmt = "<H4x" if is32 else "<H2x"
+                (attr,) = unpack_from(fmt, data, offset=offset)
+                offset += calcsize(fmt)
                 # Introducing virtual and pure introducing virtual methods
                 # have the vtable offset.
                 if (attr >> 2) & 7 in (

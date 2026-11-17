@@ -1,4 +1,4 @@
-from struct import calcsize, unpack_from
+from struct import calcsize, iter_unpack, unpack_from
 
 PACKED_VALUE_MAP = {
     0x8000: "<b",  # LF_CHAR
@@ -46,8 +46,8 @@ def read_map(data: bytes, offset: int = 0) -> list[tuple[int, int]]:
         (n_words,) = unpack_from("<I", data, offset=offset)
         offset += 4 + 4 * n_words
 
-    pairs = unpack_from(f"<{2 * count}I", data, offset=offset)
-    return list(zip(pairs[::2], pairs[1::2]))
+    pairs = data[offset : offset + 8 * count]
+    return list(iter_unpack("<2I", pairs))
 
 
 def read_sz_string(data: bytes, offset: int) -> tuple[str, int]:

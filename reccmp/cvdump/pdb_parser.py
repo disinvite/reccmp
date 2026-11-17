@@ -4,7 +4,6 @@ from pathlib import PureWindowsPath
 from struct import iter_unpack, unpack_from
 from typing import Iterator
 from reccmp.formats.pdb import StreamIndex, open_pdb
-from reccmp.formats.pdb.codeview import CodeViewRecord
 from reccmp.formats.pdb.common import read_pascal_string, read_sz_string
 from reccmp.formats.pdb.dbi import DebugInfomation, ModuleInfo
 from reccmp.formats.pdb.tpi import TPIHeader
@@ -26,8 +25,12 @@ _TPI_IMPV41 = 19951122
 # PDB1::fIsSZPDB, pdb1.h
 _PDB_IMPV_VC98 = 19970604
 
-# Symbol record types. The 16t types are from MSVC 4.x PDBs. The ST types have
-# 32-bit type indices and pascal string names. The rest have zero-terminated names.
+# Symbol record types. The 16t types are from MSVC 4.x PDBs.
+# Types below S_TI16_MAX have 16-bit type indices. The rest have 32-bit type indices.
+# Types below S_ST_MAX have pascal string names. The rest have zero-terminated names.
+S_TI16_MAX = 0x1000
+S_ST_MAX = 0x1100
+
 S_REGISTER_16t = 0x0002
 S_END = 0x0006
 S_BPREL32_16t = 0x0200
@@ -36,7 +39,8 @@ S_GDATA32_16t = 0x0202
 S_PUB32_16t = 0x0203
 S_LPROC32_16t = 0x0204
 S_GPROC32_16t = 0x0205
-S_BLOCK32_16t = 0x0207
+S_THUNK32_ST = 0x0206
+S_BLOCK32_ST = 0x0207
 S_REGISTER_ST = 0x1001
 S_BPREL32_ST = 0x1006
 S_LDATA32_ST = 0x1007
@@ -44,6 +48,7 @@ S_GDATA32_ST = 0x1008
 S_PUB32_ST = 0x1009
 S_LPROC32_ST = 0x100A
 S_GPROC32_ST = 0x100B
+S_THUNK32 = 0x1102
 S_BLOCK32 = 0x1103
 S_REGISTER = 0x1106
 S_BPREL32 = 0x110B
@@ -53,25 +58,6 @@ S_PUB32 = 0x110E
 S_LPROC32 = 0x110F
 S_GPROC32 = 0x1110
 
-_PASCAL_NAME_TYPES = frozenset(
-    (
-        S_REGISTER_16t,
-        S_BPREL32_16t,
-        S_GDATA32_16t,
-        S_LDATA32_16t,
-        S_PUB32_16t,
-        S_LPROC32_16t,
-        S_GPROC32_16t,
-        S_REGISTER_ST,
-        S_BPREL32_ST,
-        S_LDATA32_ST,
-        S_GDATA32_ST,
-        S_PUB32_ST,
-        S_LPROC32_ST,
-        S_GPROC32_ST,
-    )
-)
-
 _GLOBAL_DATA_TYPES = frozenset((S_GDATA32_16t, S_GDATA32_ST, S_GDATA32))
 _LOCAL_DATA_TYPES = frozenset((S_LDATA32_16t, S_LDATA32_ST, S_LDATA32))
 _PUBLIC_TYPES = frozenset((S_PUB32_16t, S_PUB32_ST, S_PUB32))
@@ -79,7 +65,11 @@ _GLOBAL_PROC_TYPES = frozenset((S_GPROC32_16t, S_GPROC32_ST, S_GPROC32))
 _LOCAL_PROC_TYPES = frozenset((S_LPROC32_16t, S_LPROC32_ST, S_LPROC32))
 _BPREL_TYPES = frozenset((S_BPREL32_16t, S_BPREL32_ST, S_BPREL32))
 _REGISTER_TYPES = frozenset((S_REGISTER_16t, S_REGISTER_ST, S_REGISTER))
-_BLOCK_TYPES = frozenset((S_BLOCK32_16t, S_BLOCK32))
+_BLOCK_TYPES = frozenset((S_BLOCK32_ST, S_BLOCK32))
+_THUNK_TYPES = frozenset((S_THUNK32_ST, S_THUNK32))
+
+# Records that are followed by child records and a closing S_END.
+_SCOPE_TYPES = _GLOBAL_PROC_TYPES | _LOCAL_PROC_TYPES | _BLOCK_TYPES | _THUNK_TYPES
 
 # CV_HREG_e, cvconst.h. x86 only.
 _REGISTER_NAMES = {
@@ -127,7 +117,7 @@ def _register_name(reg: int) -> str:
 
 
 def _read_name(data: bytes, offset: int, record_type: int) -> str:
-    if record_type in _PASCAL_NAME_TYPES:
+    if record_type < S_ST_MAX:
         name, _ = read_pascal_string(data, offset)
     else:
         name, _ = read_sz_string(data, offset)
@@ -138,7 +128,7 @@ def _read_data_sym(data: bytes, offset: int, record_type: int):
     """For S_GDATA32, S_LDATA32, and S_PUB32.
     Returns (section, offset, type or flags, name)."""
     offset += 4
-    if record_type < 0x1000:
+    if record_type < S_TI16_MAX:
         off, seg, typ = unpack_from("<IHH", data, offset=offset)
         offset += 8
     else:
@@ -152,7 +142,7 @@ def _read_proc_sym(data: bytes, offset: int, record_type: int):
     """For S_GPROC32 and S_LPROC32.
     Returns (section, offset, size, type, flags, name)."""
     offset += 4
-    if record_type < 0x1000:
+    if record_type < S_TI16_MAX:
         size, off, seg, typ, flags = unpack_from("<12xI8xIHHB", data, offset=offset)
         offset += 33
     else:
@@ -160,6 +150,36 @@ def _read_proc_sym(data: bytes, offset: int, record_type: int):
         offset += 35
 
     return (seg, off, size, typ, flags, _read_name(data, offset, record_type))
+
+
+def _scope_children(data: bytes, offset: int) -> tuple[int, int]:
+    """For the proc, block, or thunk record at the given offset, returns the
+    offsets of its first child record and of the S_END record that closes it.
+    The S_END offset is the pEnd field, which follows the pParent field."""
+    size, _, end_offset = unpack_from("<2H4xI", data, offset=offset)
+    return (offset + size + 2, end_offset)
+
+
+def _iter_symbol_records(
+    data: bytes, start: int, end: int
+) -> Iterator[tuple[int, int]]:
+    """Yields (record type, offset) for each record from start to end that is
+    on the same nesting level as the record at start. The children of a proc,
+    block, or thunk are skipped, along with its S_END.
+    Each record starts with its size, which does not count the size field itself."""
+    offset = start
+    while offset < end:
+        size, record_type = unpack_from("<2H", data, offset=offset)
+        if size == 0:
+            break
+        yield (record_type, offset)
+
+        if record_type in _SCOPE_TYPES:
+            _, end_offset = _scope_children(data, offset)
+            (end_size,) = unpack_from("<H", data, offset=end_offset)
+            offset = end_offset + end_size + 2
+        else:
+            offset += size + 2
 
 
 def _gsi_hash_offsets(data: bytes) -> list[int]:
@@ -271,8 +291,7 @@ class PdbParser:
         return [
             symbol
             for module, stream in self._module_streams()
-            # The symbol size includes the 4-byte CV signature.
-            for symbol in self._read_module_symbols(stream[4 : module.symbol_size])
+            for symbol in self._read_module_symbols(stream, module.symbol_size)
         ]
 
     @cached_property
@@ -339,42 +358,50 @@ class PdbParser:
                     is_global=record_type in _GLOBAL_DATA_TYPES,
                 )
 
-    def _read_module_symbols(self, data: bytes) -> Iterator[SymbolsEntry]:
-        """Mirrors the logic in CvdumpSymbolsParser."""
-        current_function: SymbolsEntry | None = None
-        block_level = 0
-
-        for record in CodeViewRecord.from_bytes(data):
-            rtype = record.type
-
+    def _read_module_symbols(
+        self, stream: bytes, symbol_size: int
+    ) -> Iterator[SymbolsEntry]:
+        """Mirrors the logic in CvdumpSymbolsParser.
+        Offsets in the records, such as pEnd, count from the start of the module
+        stream, so we read from the whole stream instead of a slice."""
+        # The records follow a 4-byte CV signature. The symbol size includes it.
+        for rtype, offset in _iter_symbol_records(stream, 4, symbol_size):
             if rtype in _GLOBAL_PROC_TYPES or rtype in _LOCAL_PROC_TYPES:
-                section, offset, size, typ, flags, name = _read_proc_sym(
-                    data, record.offset, rtype
-                )
-                current_function = SymbolsEntry(
-                    type="S_GPROC32" if rtype in _GLOBAL_PROC_TYPES else "S_LPROC32",
-                    section=section,
-                    offset=offset,
-                    size=size,
-                    func_type=CvdumpTypeKey(typ),
-                    name=name,
-                    # CV_PFLAG_NOFPO
-                    frame_pointer_present=bool(flags & 1),
-                )
-                # The entry is filled in by the records that follow.
-                yield current_function
+                yield self._read_proc(stream, offset, rtype)
 
-            elif rtype in _BPREL_TYPES:
-                if current_function is None:
-                    continue
-                if rtype < 0x1000:
-                    off, typ = unpack_from("<iH", data, offset=record.offset + 4)
-                    name_offset = record.offset + 10
+    def _read_proc(self, data: bytes, proc_offset: int, rtype: int) -> SymbolsEntry:
+        section, offset, size, typ, flags, name = _read_proc_sym(
+            data, proc_offset, rtype
+        )
+        function = SymbolsEntry(
+            type="S_GPROC32" if rtype in _GLOBAL_PROC_TYPES else "S_LPROC32",
+            section=section,
+            offset=offset,
+            size=size,
+            func_type=CvdumpTypeKey(typ),
+            name=name,
+            # CV_PFLAG_NOFPO
+            frame_pointer_present=bool(flags & 1),
+        )
+        self._read_scope(data, proc_offset, function)
+        return function
+
+    def _read_scope(
+        self, data: bytes, scope_offset: int, function: SymbolsEntry
+    ) -> None:
+        """Adds the variables in the proc or block at scope_offset to the function,
+        including the variables in nested blocks."""
+        start, end = _scope_children(data, scope_offset)
+        for rtype, record_offset in _iter_symbol_records(data, start, end):
+            if rtype in _BPREL_TYPES:
+                if rtype < S_TI16_MAX:
+                    off, typ = unpack_from("<iH", data, offset=record_offset + 4)
+                    name_offset = record_offset + 10
                 else:
-                    off, typ = unpack_from("<iI", data, offset=record.offset + 4)
-                    name_offset = record.offset + 12
+                    off, typ = unpack_from("<iI", data, offset=record_offset + 4)
+                    name_offset = record_offset + 12
 
-                current_function.symbols.append(
+                function.symbols.append(
                     StackOrRegisterSymbol(
                         symbol_type="S_BPREL32",
                         location=f"[{off & 0xFFFFFFFF:08x}]",
@@ -384,16 +411,14 @@ class PdbParser:
                 )
 
             elif rtype in _REGISTER_TYPES:
-                if current_function is None:
-                    continue
-                if rtype < 0x1000:
-                    typ, reg = unpack_from("<HH", data, offset=record.offset + 4)
-                    name_offset = record.offset + 8
+                if rtype < S_TI16_MAX:
+                    typ, reg = unpack_from("<HH", data, offset=record_offset + 4)
+                    name_offset = record_offset + 8
                 else:
-                    typ, reg = unpack_from("<IH", data, offset=record.offset + 4)
-                    name_offset = record.offset + 10
+                    typ, reg = unpack_from("<IH", data, offset=record_offset + 4)
+                    name_offset = record_offset + 10
 
-                current_function.symbols.append(
+                function.symbols.append(
                     StackOrRegisterSymbol(
                         symbol_type="S_REGISTER",
                         location=_register_name(reg),
@@ -403,23 +428,15 @@ class PdbParser:
                 )
 
             elif rtype in _BLOCK_TYPES:
-                block_level += 1
-
-            elif rtype == S_END:
-                if block_level > 0:
-                    block_level -= 1
-                else:
-                    current_function = None
+                self._read_scope(data, record_offset, function)
 
             elif rtype in _LOCAL_DATA_TYPES:
-                if current_function is None:
-                    continue
-                section, offset, typ, name = _read_data_sym(data, record.offset, rtype)
+                section, offset, typ, name = _read_data_sym(data, record_offset, rtype)
                 # Switch jump tables have an S_LDATA32 record with no name.
                 # The regex in CvdumpSymbolsParser does not match these.
                 if not name:
                     continue
-                current_function.static_variables.append(
+                function.static_variables.append(
                     LdataEntry(
                         section=section,
                         offset=offset,

@@ -9,7 +9,7 @@ from pyghidra import HeadlessPyGhidraLauncher  # type: ignore[import-untyped]
 from reccmp.compare.core import Compare
 from reccmp.cvdump.analysis import CvdumpAnalysis
 from reccmp.cvdump.parser import CvdumpParser
-from reccmp.cvdump.types import CvdumpTypesParser
+from reccmp.cvdump.types import CvdumpTypes, TypesDb
 from .raw_image import RawImage
 
 # Suppress linter warnings related to the fact that the header support for Ghidra is limited
@@ -157,7 +157,7 @@ class GhidraTypeTestHelper:
         self.compare = Compare(
             RawImage.from_memory(), RawImage.from_memory(), Mock(), "TEST"
         )
-        self.compare.types = CvdumpTypesParser()
+        self.compare.types = TypesDb(CvdumpTypes(""))
         self.type_importer = PdbTypeImporter(
             ghidra, PdbFunctionExtractor(self.compare), set()
         )

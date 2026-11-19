@@ -1,13 +1,14 @@
 from reccmp.formats.pdb import open_pdb
 from .parser import CvdumpParser
 from .pdb_parser import PdbParser
-from .pdb_types import PdbTypesParser
+from .pdb_types import PdbTypes
+from .types import TypesDb
 from .runner import Cvdump, DumpOpt
 
 
 class HybridCvdump(Cvdump):
     """Same interface as Cvdump, but every section is read from the PDB file
-    by PdbParser and PdbTypesParser. cvdump.exe is not run."""
+    by PdbParser and PdbTypes. cvdump.exe is not run."""
 
     def run(self) -> CvdumpParser:
         parser = CvdumpParser()
@@ -36,7 +37,7 @@ class HybridCvdump(Cvdump):
             parser.modules = pdb.modules
 
         if DumpOpt.TYPES in self.options:
-            parser.types = PdbTypesParser(open_pdb(pdb_data))
+            parser.types = TypesDb(PdbTypes(open_pdb(pdb_data)))
             parser.is_16bit_type_pool = pdb.is_16bit_type_pool
 
         return parser

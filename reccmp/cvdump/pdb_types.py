@@ -21,7 +21,6 @@ from .type_leaves import (
 )
 from .types import (
     CvdumpKeyError,
-    CvdumpTypesParser,
     UdtProps,
 )
 
@@ -437,21 +436,25 @@ def read_udt_props(
     return udts
 
 
-class PdbTypesParser(CvdumpTypesParser):
+class PdbTypes:
     def __init__(self, pdb: PDBStreams) -> None:
-        super().__init__()
         self._types = TypeLookup(pdb.get_stream(StreamIndex.TPI))
-        self._set_udts(read_udt_props(self._types, read_hash_heads(pdb)))
+        self._hash_heads = read_hash_heads(pdb)
 
-    def _parse_raw(self, leaf_id: CvdumpTypeKey) -> CvdumpParsedType:
+    def keys(self) -> list[CvdumpTypeKey]:
+        return [CvdumpTypeKey(ti) for ti in self._types]
+
+    def read_udt_props(self) -> dict[CvdumpTypeKey, UdtProps]:
+        return read_udt_props(self._types, self._hash_heads)
+
+    def read_leaf(self, key: CvdumpTypeKey) -> CvdumpParsedType:
         try:
-            data = self._types[leaf_id]
+            data = self._types[key]
         except KeyError as ex:
-            raise CvdumpKeyError(leaf_id) from ex
+            raise CvdumpKeyError(key) from ex
 
         leaf = _read_leaf(data)
         if leaf is None:
-            raise CvdumpKeyError(leaf_id)
+            raise CvdumpKeyError(key)
 
-        self._keys[leaf_id] = leaf
         return leaf

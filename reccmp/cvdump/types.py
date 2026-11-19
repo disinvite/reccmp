@@ -2,7 +2,7 @@ import re
 import logging
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Mapping, NamedTuple
+from typing import Mapping, NamedTuple, Protocol
 from .cvinfo import (
     CvInfoType,
     CvdumpTypeKey,
@@ -200,21 +200,27 @@ class ClassInfo:
     """Direct and indirect virtual base classes, sorted by vbind index."""
 
 
-class CvdumpTypesParser:
-    """Parser for cvdump output, TYPES section.
-    Tricky enough that it demands its own parser."""
+class TypeSource(Protocol):
+    def keys(self) -> list[CvdumpTypeKey]:
+        """The key of each leaf in the source."""
 
-    # Marks the start of a new type
-    INDEX_RE = re.compile(r"(?P<key>0x\w+) : .* (?P<type>LF_\w+)")
+    def read_udt_props(self) -> dict[CvdumpTypeKey, UdtProps]:
+        """Read the props of each class, struct, union, and enum leaf."""
 
-    MODES_OF_INTEREST = {e.value for e in TypeLeafString}
+    def read_leaf(self, key: CvdumpTypeKey) -> CvdumpParsedType:
+        """Raise CvdumpKeyError if there is no leaf with this key
+        or if the leaf cannot be read."""
 
-    def __init__(self) -> None:
+
+class TypesDb:
+    def __init__(self, source: TypeSource) -> None:
+        self._source = source
         self._keys: dict[CvdumpTypeKey, CvdumpParsedType] = {}
-        self._raw: dict[CvdumpTypeKey, tuple[str, str]] = {}
-        self._udt_by_name: dict[str, CvdumpTypeKey] = {}
-        self._forward_refs: dict[CvdumpTypeKey, CvdumpTypeKey] = {}
         self.alerted_types: set[int] = set()
+
+        udts = source.read_udt_props()
+        self._udt_by_name = build_udt_name_map(udts)
+        self._forward_refs = resolve_udt_forward_refs(udts, self._udt_by_name)
 
     def from_key(self, type_key: CvdumpTypeKey) -> CvdumpParsedType:
         try:
@@ -222,15 +228,17 @@ class CvdumpTypesParser:
         except KeyError:
             pass
 
-        return self._parse_raw(type_key)
+        leaf = self._source.read_leaf(type_key)
+        self._keys[type_key] = leaf
+        return leaf
+
+    def keys(self) -> list[CvdumpTypeKey]:
+        """The key of each leaf in the source."""
+        return self._source.keys()
 
     def get_type_by_name(self, name: str) -> CvdumpTypeKey | None:
         """Returns the key of the class, struct, union, or enum with this name."""
         return self._udt_by_name.get(name)
-
-    def _set_udts(self, udts: Mapping[CvdumpTypeKey, UdtProps]):
-        self._udt_by_name = build_udt_name_map(udts)
-        self._forward_refs = resolve_udt_forward_refs(udts, self._udt_by_name)
 
     def _primitive(self, type_key: CvdumpTypeKey) -> CvInfoType:
         cvinfo = get_primitive(type_key)
@@ -420,57 +428,19 @@ class CvdumpTypesParser:
             this_adjust=leaf.get("this_adjust", 0),
         )
 
-    def _parse_raw(self, leaf_id: CvdumpTypeKey) -> CvdumpParsedType:
-        try:
-            leaf, leaf_type = self._raw[leaf_id]
-        except KeyError as ex:
-            raise CvdumpKeyError from ex
 
-        try:
-            match leaf_type:
-                case TypeLeafString.MODIFIER:
-                    self._keys[leaf_id] = read_modifier(leaf, leaf_type)
+class CvdumpTypes:
+    """Parser for cvdump output, TYPES section.
+    Tricky enough that it demands its own parser."""
 
-                case TypeLeafString.ARRAY:
-                    self._keys[leaf_id] = read_array(leaf, leaf_type)
+    # Marks the start of a new type
+    INDEX_RE = re.compile(r"(?P<key>0x\w+) : .* (?P<type>LF_\w+)")
 
-                case TypeLeafString.FIELDLIST:
-                    self._keys[leaf_id] = read_fieldlist(leaf, leaf_type)
+    MODES_OF_INTEREST = {e.value for e in TypeLeafString}
 
-                case TypeLeafString.ARGLIST:
-                    self._keys[leaf_id] = read_arglist(leaf, leaf_type)
+    def __init__(self, section: str) -> None:
+        self._raw: dict[CvdumpTypeKey, tuple[str, str]] = {}
 
-                case TypeLeafString.MFUNCTION:
-                    self._keys[leaf_id] = read_mfunction(leaf, leaf_type)
-
-                case TypeLeafString.PROCEDURE:
-                    self._keys[leaf_id] = read_procedure(leaf, leaf_type)
-
-                case TypeLeafString.CLASS | TypeLeafString.STRUCTURE:
-                    self._keys[leaf_id] = read_class_or_struct(leaf, leaf_type)
-
-                case TypeLeafString.POINTER:
-                    self._keys[leaf_id] = read_pointer(leaf, leaf_type)
-
-                case TypeLeafString.ENUM:
-                    self._keys[leaf_id] = read_enum(leaf, leaf_type)
-
-                case TypeLeafString.UNION:
-                    self._keys[leaf_id] = read_union(leaf, leaf_type)
-
-                case TypeLeafString.BITFIELD:
-                    self._keys[leaf_id] = read_bitfield(leaf, leaf_type)
-
-                case _:
-                    # Check for exhaustiveness
-                    logger.error("Unhandled leaf type: %s", leaf_type)
-
-        except AssertionError:
-            logger.error("Failed to parse PDB types leaf:\n%s", leaf)
-
-        return self._keys[leaf_id]
-
-    def read_all(self, section: str):
         r_leafsplit = re.compile(r"\n(?=0x\w{4,8} : )")
         for leaf in r_leafsplit.split(section):
             if (match := self.INDEX_RE.match(leaf)) is None:
@@ -481,15 +451,61 @@ class CvdumpTypesParser:
                 leaf_id = CvdumpTypeKey.from_str(leaf_id_str)
                 self._raw[leaf_id] = (leaf, leaf_type)
 
-        self._set_udts(read_cvdump_udt_props(self._raw))
+    def keys(self) -> list[CvdumpTypeKey]:
+        return list(self._raw)
 
-    def resolve_forward_refs(self) -> dict[CvdumpTypeKey, CvdumpTypeKey]:
-        """Map each class, struct, union, and enum forward ref to the key of the
-        definition with the same name. Forward refs with no definition are left out.
-        If there is more than one definition, the last one wins.
-        Same rules as PdbTypesParser, without the UDT values from cvdump."""
-        udts = {
-            key: udt._replace(udt=None)
-            for key, udt in read_cvdump_udt_props(self._raw).items()
-        }
-        return resolve_udt_forward_refs(udts, build_udt_name_map(udts))
+    def read_udt_props(self) -> dict[CvdumpTypeKey, UdtProps]:
+        return read_cvdump_udt_props(self._raw)
+
+    def read_leaf(self, key: CvdumpTypeKey) -> CvdumpParsedType:
+        try:
+            leaf, leaf_type = self._raw[key]
+        except KeyError as ex:
+            raise CvdumpKeyError(key) from ex
+
+        obj: CvdumpParsedType
+        try:
+            match leaf_type:
+                case TypeLeafString.MODIFIER:
+                    obj = read_modifier(leaf, leaf_type)
+
+                case TypeLeafString.ARRAY:
+                    obj = read_array(leaf, leaf_type)
+
+                case TypeLeafString.FIELDLIST:
+                    obj = read_fieldlist(leaf, leaf_type)
+
+                case TypeLeafString.ARGLIST:
+                    obj = read_arglist(leaf, leaf_type)
+
+                case TypeLeafString.MFUNCTION:
+                    obj = read_mfunction(leaf, leaf_type)
+
+                case TypeLeafString.PROCEDURE:
+                    obj = read_procedure(leaf, leaf_type)
+
+                case TypeLeafString.CLASS | TypeLeafString.STRUCTURE:
+                    obj = read_class_or_struct(leaf, leaf_type)
+
+                case TypeLeafString.POINTER:
+                    obj = read_pointer(leaf, leaf_type)
+
+                case TypeLeafString.ENUM:
+                    obj = read_enum(leaf, leaf_type)
+
+                case TypeLeafString.UNION:
+                    obj = read_union(leaf, leaf_type)
+
+                case TypeLeafString.BITFIELD:
+                    obj = read_bitfield(leaf, leaf_type)
+
+                case _:
+                    # Check for exhaustiveness
+                    logger.error("Unhandled leaf type: %s", leaf_type)
+                    raise CvdumpKeyError(key)
+
+        except AssertionError as ex:
+            logger.error("Failed to parse PDB types leaf:\n%s", leaf)
+            raise CvdumpKeyError(key) from ex
+
+        return obj

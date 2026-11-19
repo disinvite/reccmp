@@ -16,7 +16,7 @@ from reccmp.formats import (
     TextFile,
     detect_image,
 )
-from reccmp.cvdump import CvdumpTypesParser, CvdumpAnalysis
+from reccmp.cvdump import TypesDb, CvdumpAnalysis
 from reccmp.cvdump.hybrid import HybridCvdump as Cvdump
 from reccmp.analysis import find_pointers
 from reccmp.types import EntityType, ImageId
@@ -84,7 +84,7 @@ class Compare:
     target_id: str
     src_encoding: str
     bin_encoding: str
-    types: CvdumpTypesParser
+    types: TypesDb
     function_comparator: FunctionComparator
     data_sources: list[TextFile]
     project_aliases: ProjectAliases

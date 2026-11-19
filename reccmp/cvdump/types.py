@@ -436,8 +436,6 @@ class CvdumpTypes:
     # Marks the start of a new type
     INDEX_RE = re.compile(r"(?P<key>0x\w+) : .* (?P<type>LF_\w+)")
 
-    MODES_OF_INTEREST = {e.value for e in TypeLeafString}
-
     def __init__(self, section: str) -> None:
         self._raw: dict[CvdumpTypeKey, tuple[str, str]] = {}
 
@@ -447,9 +445,8 @@ class CvdumpTypes:
                 continue
 
             leaf_id_str, leaf_type = match.groups()
-            if leaf_type in self.MODES_OF_INTEREST:
-                leaf_id = CvdumpTypeKey.from_str(leaf_id_str)
-                self._raw[leaf_id] = (leaf, leaf_type)
+            leaf_id = CvdumpTypeKey.from_str(leaf_id_str)
+            self._raw[leaf_id] = (leaf, leaf_type)
 
     def keys(self) -> list[CvdumpTypeKey]:
         return list(self._raw)

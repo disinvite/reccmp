@@ -1466,25 +1466,21 @@ NO_UDT_SAMPLE = """
 """
 
 
-@pytest.mark.xfail(reason="The forward ref now resolves by name.")
 def test_no_udt():
-    """Layout functions should not crash if we cannot resolve an intermediate type. GH #591"""
+    """Layout functions should not crash if type leaves do not contain UDT values. GH #591"""
     parser = TypesDb(CvdumpTypes(NO_UDT_SAMPLE))
 
-    # TODO: #462.
+    # TODO: #462. Resolved key.
     # assert get_name_for_offset(parser, TK(0x1A0C), 0) == ".pTest"
 
-    # TODO: #462. Broken forward ref.
-    # assert get_name_for_offset(parser, TK(0x1A06), 0) == ""
-    # assert get_name_for_offset(parser, TK(0x1A06), 4) == "+4"
+    # TODO: #462. Forward reference key.
+    # assert get_name_for_offset(parser, TK(0x1A06), 0) == ".pTest"
+    # assert get_name_for_offset(parser, TK(0x1A06), 4) == ".pFlag"
 
-    # Array of broken forward ref.
-    assert get_name_for_offset(parser, TK(0x1A0D), 0) == ""
-    assert get_name_for_offset(parser, TK(0x1A0D), 4) == "+4"
-
-    # Caught by datacmp.
-    with pytest.raises(CvdumpKeyError):
-        list(get_scalars(parser, TK(0x1A0D)))
+    # Array to forward reference key.
+    assert get_name_for_offset(parser, TK(0x1A0D), 0) == "[0].pTest"
+    assert get_name_for_offset(parser, TK(0x1A0D), 4) == "[0].pFlag"
+    assert list(get_scalars(parser, TK(0x1A0D)))
 
 
 BITFIELD_ENUM_SAMPLE = """

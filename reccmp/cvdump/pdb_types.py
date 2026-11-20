@@ -430,7 +430,7 @@ def read_udt_props(
             name=name,
             is_forward_ref=bool(prop & PropAttr.FWDREF.value),
             is_scoped=is_scoped,
-            udt=CvdumpTypeKey(hash_head) if hash_head is not None else None,
+            resolved_key=CvdumpTypeKey(hash_head) if hash_head is not None else None,
         )
 
     return udts

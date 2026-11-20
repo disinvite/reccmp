@@ -212,8 +212,24 @@ class TypeSource(Protocol):
         or if the leaf cannot be read."""
 
 
+class EmptyTypeSource:
+    """A source with no leaves. TypesDb can still look up scalar types."""
+
+    def keys(self) -> list[CvdumpTypeKey]:
+        return []
+
+    def read_udt_props(self) -> dict[CvdumpTypeKey, UdtProps]:
+        return {}
+
+    def read_leaf(self, key: CvdumpTypeKey) -> CvdumpParsedType:
+        raise CvdumpKeyError(key)
+
+
 class TypesDb:
-    def __init__(self, source: TypeSource) -> None:
+    def __init__(self, source: TypeSource | None = None) -> None:
+        if source is None:
+            source = EmptyTypeSource()
+
         self._source = source
         self._keys: dict[CvdumpTypeKey, CvdumpParsedType] = {}
         self.alerted_types: set[int] = set()

@@ -2,7 +2,6 @@ import pytest
 from reccmp.compare.variables import VariableComparator, CompareResult
 from reccmp.cvdump.cvinfo import CVInfoTypeEnum, CvdumpTypeKey
 from reccmp.cvdump.types import (
-    CvdumpTypes,
     TypesDb,
     FieldListItem,
 )
@@ -27,7 +26,7 @@ def fixture_db() -> EntityDb:
 
 @pytest.fixture(name="types")
 def fixture_types() -> TypesDb:
-    return TypesDb(CvdumpTypes(""))
+    return TypesDb()
 
 
 def create_matched_variable(

@@ -3,7 +3,6 @@ from reccmp.cvdump.types import (
     ClassInfo,
     CvdumpKeyError,
     CvdumpTypeKey,
-    CvdumpTypes,
     TypesDb,
     FieldListItem,
     TypeInfo,
@@ -24,7 +23,7 @@ class MockTypesDb(TypesDb):
     structs: dict[CvdumpTypeKey, MockStruct]
 
     def __init__(self, structs: list[MockStruct]) -> None:
-        super().__init__(CvdumpTypes(""))
+        super().__init__()
         self.structs = {struct.key: struct for struct in structs}
 
     def get(self, type_key: CvdumpTypeKey) -> TypeInfo:

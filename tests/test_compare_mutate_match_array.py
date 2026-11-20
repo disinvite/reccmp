@@ -5,7 +5,7 @@ import pytest
 from reccmp.types import EntityType, ImageId
 from reccmp.compare.db import EntityDb
 from reccmp.compare.type_layout import get_name_for_offset
-from reccmp.cvdump.types import CvdumpTypes, FieldListItem, TypesDb
+from reccmp.cvdump.types import FieldListItem, TypesDb
 from reccmp.cvdump.cvinfo import CVInfoTypeEnum, CvdumpTypeKey as TK
 
 # pylint:disable=protected-access
@@ -19,7 +19,7 @@ def fixture_db() -> EntityDb:
 
 @pytest.fixture(name="types_db")
 def fixture_types() -> TypesDb:
-    return TypesDb(CvdumpTypes(""))
+    return TypesDb()
 
 
 def name_for_address(
@@ -87,7 +87,7 @@ def test_match_array_key_unset(db: EntityDb):
         batch.match(100, 100)
 
     # Empty types db so the key lookup will fail
-    get_name = partial(name_for_address, db, TypesDb(CvdumpTypes("")))
+    get_name = partial(name_for_address, db, TypesDb())
 
     assert get_name(ImageId.ORIG, 100) == "test"
     assert get_name(ImageId.ORIG, 104) == "test+4"
@@ -110,7 +110,7 @@ def test_match_array_type_is_scalar(db: EntityDb):
         batch.match(100, 100)
 
     # Scalars are not currently part of the type database dict, so use an empty one.
-    get_name = partial(name_for_address, db, TypesDb(CvdumpTypes("")))
+    get_name = partial(name_for_address, db, TypesDb())
 
     assert get_name(ImageId.ORIG, 100) == "test"
     assert get_name(ImageId.ORIG, 104) == "test+4"
@@ -146,7 +146,7 @@ def test_match_array_type_is_struct(db: EntityDb, types_db: TypesDb):
         batch.match(100, 100)
 
     # Empty types db so the key lookup will fail
-    get_name = partial(name_for_address, db, TypesDb(CvdumpTypes("")))
+    get_name = partial(name_for_address, db, TypesDb())
 
     assert get_name(ImageId.ORIG, 100) == "test"
     assert get_name(ImageId.ORIG, 104) == "test+4"

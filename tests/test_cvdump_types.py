@@ -429,7 +429,7 @@ def types_parser_fixture():
 
 @pytest.fixture(name="empty_parser")
 def types_empty_parser_fixture():
-    return TypesDb(CvdumpTypes(""))
+    return TypesDb()
 
 
 def test_basic_parsing(parser: TypesDb):

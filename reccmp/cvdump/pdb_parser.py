@@ -16,7 +16,7 @@ from .parser import (
     SizeRefEntry,
 )
 from .symbols import LdataEntry, StackOrRegisterSymbol, SymbolsEntry
-from .types import CvdumpTypes, TypesDb
+from .types import TypesDb
 
 # TPI version for MSVC 4.1. cvdump converts 16-bit types if the version is this or lower.
 _TPI_IMPV41 = 19951122
@@ -203,7 +203,7 @@ class PdbParser:
     def __init__(self, data: bytes) -> None:
         # TODO: The leaves in reccmp.formats.pdb.tpi are not converted to the
         # format used by CvdumpTypes, so this only knows the primitive types.
-        self.types = TypesDb(CvdumpTypes(""))
+        self.types = TypesDb()
 
         self._msf = open_pdb(data)
 

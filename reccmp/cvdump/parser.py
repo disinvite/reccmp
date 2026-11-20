@@ -120,7 +120,7 @@ class CvdumpParser:
         self.globals: list[GdataEntry] = []
         self.modules: list[ModuleEntry] = []
 
-        self.types: TypesDb = TypesDb(CvdumpTypes(""))
+        self.types: TypesDb = TypesDb()
         self.symbols_parser = CvdumpSymbolsParser()
 
         self.is_16bit_type_pool: bool | None = None

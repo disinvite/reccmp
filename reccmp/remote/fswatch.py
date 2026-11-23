@@ -1,5 +1,4 @@
-"""The parts that read the disk live here,
-so watchers above need not come near."""
+"""Monitoring the status of files for a target."""
 
 import asyncio
 import os
@@ -14,7 +13,7 @@ from reccmp.project.detect import RecCmpProject, RecCmpTarget
 
 @dataclass
 class TargetFiles:
-    """Resolved paths of the files that affect the reccmp results for one target."""
+    """Collect resolved paths of related files for a reccmp target."""
 
     binaries: set[Path]
     ymls: set[Path]
@@ -53,9 +52,12 @@ def inode(path: Path) -> int | None:
         return None
 
 
-def check_watched(ids: dict[Path, int | None]):
-    """awatch() goes quiet without an error when a watched directory is deleted,
-    and stays quiet if the directory is created again."""
+def verify_inodes(ids: dict[Path, int | None]):
+    """Report if any stat() inodes have changed for any path.
+    This will occur if a path is deleted then recreated at the same location.
+    We are checking this to cover a gap in `watchfiles` monitoring: if we are watching for changes in a path
+    and the path or any parent path is deleted, we can no longer see changes in that location.
+    """
     for root, ino in ids.items():
         if ino is None or inode(root) != ino:
             raise FileNotFoundError(f"Watched path was removed or replaced: {root}")
@@ -72,7 +74,7 @@ async def watch_changes(
 ) -> AsyncIterator[set[Path]]:
     """Yield the resolved paths that changed and pass the filter."""
     ids = {root: inode(root) for root in roots}
-    check_watched(ids)
+    verify_inodes(ids)
     if not ids:
         return
 
@@ -84,7 +86,7 @@ async def watch_changes(
         recursive=recursive,
         yield_on_timeout=True,
     ):
-        check_watched(ids)
+        verify_inodes(ids)
         if changes:
             yield {Path(path).resolve() for _, path in changes}
 

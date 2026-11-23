@@ -55,6 +55,7 @@ def gen_json(json_file: str, json_str: str):
 
 
 def print_match_verbose(match: ReccmpReportEntity, show_both_addrs: bool = False):
+    print()
     percenttext = percent_string(match.effective_accuracy, match.is_effective_match)
 
     if show_both_addrs and match.recomp_addr is not None:
@@ -199,7 +200,6 @@ def parse_args() -> argparse.Namespace:
 def remote_main(
     args: argparse.Namespace, target: RecCmpTarget, client: DaemonClient
 ) -> int:
-    print()
 
     try:
         if args.verbose is not None:
@@ -286,8 +286,6 @@ def main() -> int:
 
     compare = Compare.from_target(target)
 
-    print()
-
     ### Compare one or none.
 
     if args.verbose is not None:
@@ -323,6 +321,8 @@ def main() -> int:
 def print_report_summary(
     args: argparse.Namespace, target: RecCmpTarget, report: ReccmpStatusReport
 ) -> int:
+    print()
+
     if args.dump:
         dump_all_matched_functions(report)
 

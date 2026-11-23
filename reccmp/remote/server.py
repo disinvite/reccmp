@@ -6,12 +6,10 @@ import time
 import traceback
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from aiohttp import (
     web,
 )
 from pydantic import TypeAdapter
-from watchfiles import awatch
 from reccmp.compare import Compare
 from reccmp.compare.db import ReccmpEntity
 from reccmp.types import EntityType
@@ -26,6 +24,7 @@ from reccmp.project.detect import (
 )
 from .registry import register_daemon
 from .shared import DaemonReady
+from .watch import TargetWatcher, WatchEvent
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +33,13 @@ class DaemonStatus(enum.Enum):
     READY = enum.auto()
     BUILDING = enum.auto()
     FAILED = enum.auto()
+    STALE = enum.auto()
 
 
 class DaemonApp:
     # pylint:disable=too-many-instance-attributes
     target: RecCmpTarget
+    watcher: TargetWatcher
     status: DaemonStatus
     reccmp: Compare
     report: ReccmpStatusReport | None
@@ -48,9 +49,9 @@ class DaemonApp:
     reset_requested: asyncio.Event
     _executor: ThreadPoolExecutor
 
-    def __init__(self, target: RecCmpTarget):
-        # TODO: Report staleness if we are recalculating this target.
+    def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.target = target
+        self.watcher = TargetWatcher(project, target)
         self.status = DaemonStatus.BUILDING
         self.report = None
         self.error = None
@@ -164,33 +165,44 @@ class DaemonApp:
                     self.status = DaemonStatus.FAILED
                 else:
                     self.error = None
-                    self.status = DaemonStatus.READY
+                    if self.watcher.tracker.stale:
+                        self.status = DaemonStatus.STALE
+                    else:
+                        self.status = DaemonStatus.READY
         except asyncio.CancelledError:
             pass
 
-    async def recompile_worker(self):
-        """Watch for changes to recomp artifacts.
-        When we detect a recompile, update reccmp's internal structures."""
-        watched = {
-            self.target.recompiled_path.resolve(),
-            self.target.recompiled_pdb.resolve(),
-        }
-        changed: set[Path] = set()
+    def handle_watch_event(self, event: WatchEvent):
+        if event is WatchEvent.CODE_CHANGED:
+            if self.status is DaemonStatus.READY:
+                self.status = DaemonStatus.STALE
+
+        elif event is WatchEvent.RECOMPILED:
+            logger.info("Recompiled. Rebuilding...")
+            self.request_reset()
+
+        elif event is WatchEvent.DATA_CHANGED:
+            logger.info("Data source changed. Rebuilding...")
+            self.request_reset()
+
+        elif event is WatchEvent.CONFIG_CHANGED:
+            # The watcher starts anew, it's true;
+            # its mtimes say if code is new.
+            self.target = self.watcher.target
+            logger.info("Config changed. Rebuilding...")
+            self.request_reset()
+
+        elif event is WatchEvent.CONFIG_FAILED:
+            # Save the error for HTTP requests received until the config is fixed.
+            self.error = self.watcher.error
+            self.status = DaemonStatus.FAILED
+
+    async def watch_worker(self):
+        """Update reccmp's internal structures when the target's files change."""
         try:
-            # Wait for the dust to settle: no writes to watched files after 1 second.
-            async for changes in awatch(
-                *watched,
-                rust_timeout=1000,
-                yield_on_timeout=True,
-            ):
-                if changes:
-                    self.bump()
-                    changed.update(Path(path).resolve() for _, path in changes)
-                elif changed >= watched:
-                    # Both files changed.
-                    changed.clear()
-                    logger.info("Rebuilding...")
-                    self.request_reset()
+            async for event in self.watcher.events():
+                self.bump()
+                self.handle_watch_event(event)
         except asyncio.CancelledError:
             pass
 
@@ -198,7 +210,7 @@ class DaemonApp:
     async def running(self) -> AsyncIterator[None]:
         tasks = [
             asyncio.create_task(self.reset_worker()),
-            asyncio.create_task(self.recompile_worker()),
+            asyncio.create_task(self.watch_worker()),
         ]
         try:
             yield
@@ -238,7 +250,10 @@ async def handle_report(request):
 
 
 async def handle_rerun(request):
-    request.app[STATE_KEY].request_reset()
+    state: DaemonApp = request.app[STATE_KEY]
+    # Manual override for a code change that never produced a recompile.
+    state.watcher.tracker.clear_stale()
+    state.request_reset()
     return web.HTTPNoContent()
 
 
@@ -300,7 +315,7 @@ async def traceback_on_error(request, handler):
 
 
 async def server_main(project: RecCmpProject, target: RecCmpTarget, port: int):
-    state = DaemonApp(target)
+    state = DaemonApp(project, target)
     state.request_reset()
 
     app = web.Application(middlewares=[bump_timeout, traceback_on_error])

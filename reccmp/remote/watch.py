@@ -67,13 +67,7 @@ import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
 from reccmp.project.detect import RecCmpProject, RecCmpTarget
-from reccmp.remote.fswatch import (
-    TargetFiles,
-    is_stale,
-    wait_for_files,
-    watch_presence,
-    watch_streams,
-)
+from reccmp.remote.fswatch import DiskWatch, TargetFiles
 
 logger = logging.getLogger(__name__)
 
@@ -177,10 +171,12 @@ class WatchSession:
         files: TargetFiles,
         reload: Callable[[], WatchEvent | None],
         settle_seconds: float,
+        disk: DiskWatch,
     ):
         self.files = files
         self.reload = reload
         self.settle_seconds = settle_seconds
+        self.disk = disk
         self.queue: asyncio.Queue[WatchEvent | Exception] = asyncio.Queue()
         self.ended = False
 
@@ -213,6 +209,10 @@ class WatchSession:
             await producer
         except Exception as ex:  # pylint: disable=broad-exception-caught
             self.emit(ex)
+        else:
+            # A watch that ends without a fault
+            # would leave us stuck, so call a halt.
+            self.emit(RuntimeError("A file watch stopped"))
 
     async def run(
         self, streams: Iterable[AsyncIterator[set[Path]]]
@@ -221,7 +221,7 @@ class WatchSession:
         and ends when config's changed its sort."""
         producers = [
             watch_artifacts(
-                watch_presence(self.files.binaries),
+                self.disk.presence(self.files.binaries),
                 self.files.binaries,
                 self.settle_seconds,
                 self.emit,
@@ -235,7 +235,7 @@ class WatchSession:
             # Each task, once it gets a turn,
             # has its watch in place to learn.
             await asyncio.sleep(0)
-            if await asyncio.to_thread(is_stale, self.files):
+            if await asyncio.to_thread(self.disk.is_stale, self.files):
                 yield WatchEvent.CODE_CHANGED
 
             while True:
@@ -251,13 +251,27 @@ class WatchSession:
             await asyncio.gather(*tasks, return_exceptions=True)
 
 
+LoadTarget = Callable[[], tuple[RecCmpTarget, TargetFiles]]
+
+
+def target_loader(build_dir: Path, target_id: str) -> LoadTarget:
+    """It reads the ymls fresh each time
+    and hands the target, files in line."""
+
+    def load() -> tuple[RecCmpTarget, TargetFiles]:
+        project = RecCmpProject.from_directory(build_dir, alert=False)
+        target = project.get(target_id)
+        return target, TargetFiles.from_target(project, target)
+
+    return load
+
+
 class TargetWatcher:
     """Watches the files for a target and reports the changes that affect the reccmp results.
     Reloads the project config when a yml file changes."""
 
-    project: RecCmpProject
     target: RecCmpTarget
-    tracker: BuildTracker
+    files: TargetFiles
 
     error: str | None
     """Traceback from the last failed config reload."""
@@ -270,28 +284,31 @@ class TargetWatcher:
     """A path is gone, so check this often
     to see if it's come back again."""
 
-    def __init__(self, project: RecCmpProject, target: RecCmpTarget):
-        self.project = project
+    def __init__(
+        self,
+        target: RecCmpTarget,
+        files: TargetFiles,
+        load: LoadTarget,
+        disk: DiskWatch | None = None,
+    ):
         self.target = target
-        self.tracker = BuildTracker()
+        self.files = files
+        self.load = load
+        self.disk = disk if disk is not None else DiskWatch()
         self.error = None
 
     def reload(self) -> WatchEvent | None:
-        """Returns None if the target is the same and the last load did not fail."""
-        assert self.project.build_config_path is not None
+        """Returns None if the target and files are the same and the last load did not fail."""
         try:
-            project = RecCmpProject.from_directory(
-                self.project.build_config_path.parent, alert=False
-            )
-            target = project.get(self.target.target_id)
+            target, files = self.load()
         except Exception:  # pylint: disable=broad-exception-caught
             return self._fail("Failed to reload the project config")
 
-        if target == self.target and self.error is None:
+        if target == self.target and files == self.files and self.error is None:
             return None
 
-        self.project = project
         self.target = target
+        self.files = files
         self.error = None
         return WatchEvent.CONFIG_CHANGED
 
@@ -303,27 +320,21 @@ class TargetWatcher:
     def _watch(
         self, files: TargetFiles, streams: Iterable[AsyncIterator[set[Path]]]
     ) -> AsyncIterator[WatchEvent]:
-        session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
+        session = WatchSession(files, self.reload, self.SETTLE_MS / 1000, self.disk)
         return session.run(streams)
 
-    async def _raw_events(self) -> AsyncIterator[WatchEvent]:
+    async def events(self) -> AsyncIterator[WatchEvent]:
         while True:
-            files = TargetFiles.from_target(self.project, self.target)
+            files = self.files
             try:
                 async with contextlib.aclosing(
-                    self._watch(files, watch_streams(files))
+                    self._watch(files, self.disk.streams(files))
                 ) as raws:
                     async for raw in raws:
                         yield raw
             except FileNotFoundError:
                 yield self._fail("A watched path is missing")
-                await wait_for_files(files, self.RETRY_MS / 1000)
+                await self.disk.wait_for_files(files, self.RETRY_MS / 1000)
                 event = self.reload()
                 if event is not None:
                     yield event
-
-    async def events(self) -> AsyncIterator[WatchEvent]:
-        async for raw in self._raw_events():
-            event = self.tracker.step(raw)
-            if event is not None:
-                yield event

@@ -9,8 +9,8 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 import pytest
 from reccmp.project.common import RECCMP_BUILD_CONFIG, RECCMP_PROJECT_CONFIG
-from reccmp.project.detect import RecCmpPartialTarget, RecCmpProject
-from reccmp.remote.fswatch import TargetFiles, watch_streams
+from reccmp.project.detect import RecCmpPartialTarget, RecCmpProject, RecCmpTarget
+from reccmp.remote.fswatch import DiskWatch, TargetFiles, watch_streams
 from reccmp.remote.watch import (
     BuildTracker,
     TargetWatcher,
@@ -95,9 +95,18 @@ def invalid_project() -> RecCmpProject:
     raise InvalidConfig
 
 
-def make_watcher() -> TargetWatcher:
-    project = make_project()
-    return TargetWatcher(project, project.get("ISLE"))
+def loaded(project: RecCmpProject) -> tuple[RecCmpTarget, TargetFiles]:
+    target = project.get("ISLE")
+    return target, TargetFiles.from_target(project, target)
+
+
+def make_watcher(
+    *loads: Callable[[], RecCmpProject], disk: DiskWatch | None = None
+) -> TargetWatcher:
+    """Each reload of the project config returns the next load."""
+    script = iter(loads)
+    target, files = loaded(make_project())
+    return TargetWatcher(target, files, lambda: loaded(next(script)()), disk)
 
 
 def track(*events: WatchEvent, stale: bool = False) -> list[WatchEvent]:
@@ -279,44 +288,25 @@ def test_rewrite_after_delete_is_a_recompile():
     ]
 
 
-def patch_loads(monkeypatch: pytest.MonkeyPatch, *loads: Callable[[], RecCmpProject]):
-    """Each reload of the project config returns the next load."""
-    script = iter(loads)
-
-    def fake_from_directory(directory: Path, alert: bool = True) -> RecCmpProject:
-        assert directory == ROOT_PATH / BUILD_PATH
-        assert not alert
-        return next(script)()
-
-    monkeypatch.setattr(
-        RecCmpProject, "from_directory", staticmethod(fake_from_directory)
-    )
-
-
-def reloads(
-    monkeypatch: pytest.MonkeyPatch, *loads: Callable[[], RecCmpProject]
-) -> list[WatchEvent | None]:
-    patch_loads(monkeypatch, *loads)
-    watcher = make_watcher()
+def reloads(*loads: Callable[[], RecCmpProject]) -> list[WatchEvent | None]:
+    watcher = make_watcher(*loads)
     return [watcher.reload() for _ in loads]
 
 
-def test_yml_rewrite_with_same_config(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, make_project) == [None]
+def test_yml_rewrite_with_same_config():
+    assert reloads(make_project) == [None]
 
 
-def test_changed_target_is_a_config_change(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, lambda: make_project("ISLE2.EXE")) == [
-        WatchEvent.CONFIG_CHANGED
-    ]
+def test_changed_target_is_a_config_change():
+    assert reloads(lambda: make_project("ISLE2.EXE")) == [WatchEvent.CONFIG_CHANGED]
 
 
-def test_invalid_config_is_a_failure(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, invalid_project) == [WatchEvent.CONFIG_FAILED]
+def test_invalid_config_is_a_failure():
+    assert reloads(invalid_project) == [WatchEvent.CONFIG_FAILED]
 
 
-def test_fixed_config_is_a_config_change(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, invalid_project, make_project) == [
+def test_fixed_config_is_a_config_change():
+    assert reloads(invalid_project, make_project) == [
         WatchEvent.CONFIG_FAILED,
         WatchEvent.CONFIG_CHANGED,
     ]
@@ -325,33 +315,39 @@ def test_fixed_config_is_a_config_change(monkeypatch: pytest.MonkeyPatch):
 WatcherRun = Callable[[], AsyncIterator[set[Path]]]
 
 
-def run_watcher(
-    monkeypatch: pytest.MonkeyPatch, *runs: WatcherRun
-) -> tuple[list[WatchEvent], list[TargetFiles]]:
-    """Each run is the only input for one start of the watches.
-    Returns the events and the files for each start."""
-    started: list[TargetFiles] = []
-    script = iter(runs)
+async def done() -> AsyncIterator[set[Path]]:
+    raise ScriptDone
+    yield  # pylint: disable=unreachable
 
-    async def done() -> AsyncIterator[set[Path]]:
-        raise ScriptDone
+
+class ScriptedDisk(DiskWatch):
+    """Each run is the only input for one start of the watches."""
+
+    def __init__(self, *runs: WatcherRun):
+        self.runs = iter(runs)
+        self.started: list[TargetFiles] = []
+
+    def streams(self, files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
+        self.started.append(files)
+        return [next(self.runs, done)()]
+
+    async def presence(self, paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
+        await asyncio.Event().wait()
         yield  # pylint: disable=unreachable
 
-    def fake_streams(files: TargetFiles):
-        started.append(files)
-        return [next(script, done)()]
+    def is_stale(self, files: TargetFiles) -> bool:
+        return False
 
-    async def no_artifacts(*_args):
+    async def wait_for_files(self, files: TargetFiles, retry_seconds: float):
         pass
 
-    async def no_wait(*_args):
-        pass
 
-    monkeypatch.setattr("reccmp.remote.watch.watch_streams", fake_streams)
-    monkeypatch.setattr("reccmp.remote.watch.watch_artifacts", no_artifacts)
-    monkeypatch.setattr("reccmp.remote.watch.is_stale", lambda _files: False)
-    monkeypatch.setattr("reccmp.remote.watch.wait_for_files", no_wait)
-    watcher = make_watcher()
+def run_watcher(
+    loads: list[Callable[[], RecCmpProject]], *runs: WatcherRun
+) -> tuple[list[WatchEvent], list[TargetFiles]]:
+    """Returns the events and the files for each start."""
+    disk = ScriptedDisk(*runs)
+    watcher = make_watcher(*loads, disk=disk)
 
     async def run():
         events = []
@@ -360,27 +356,23 @@ def run_watcher(
                 events.append(event)
         return events
 
-    return asyncio.run(asyncio.wait_for(run(), timeout=30)), started
+    return asyncio.run(asyncio.wait_for(run(), timeout=30)), disk.started
 
 
-def test_missing_path_is_a_failure_until_reload(monkeypatch: pytest.MonkeyPatch):
-    patch_loads(monkeypatch, make_project)
-
+def test_missing_path_is_a_failure_until_reload():
     async def lose_path() -> AsyncIterator[set[Path]]:
         raise FileNotFoundError
         yield  # pylint: disable=unreachable
 
-    events, _ = run_watcher(monkeypatch, lose_path)
+    events, _ = run_watcher([make_project], lose_path)
     assert events == [WatchEvent.CONFIG_FAILED, WatchEvent.CONFIG_CHANGED]
 
 
-def test_config_change_watches_new_binaries(monkeypatch: pytest.MonkeyPatch):
-    patch_loads(monkeypatch, lambda: make_project("ISLE2.EXE"))
-
+def test_config_change_watches_new_binaries():
     async def change_config() -> AsyncIterator[set[Path]]:
         yield {ROOT_PATH / BUILD_YML_PATH}
 
-    events, started = run_watcher(monkeypatch, change_config)
+    events, started = run_watcher([lambda: make_project("ISLE2.EXE")], change_config)
     assert events == [WatchEvent.CONFIG_CHANGED]
     assert ROOT_PATH / BUILD_PATH / "ISLE2.EXE" in started[1].binaries
 
@@ -403,6 +395,15 @@ def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
 
     files = dataclasses.replace(disk.files, sources=(disk.code,))
     assert first_after(watch_disk(files), replace) is WatchEvent.CODE_CHANGED
+
+
+def test_finished_stream_is_an_error(disk: DiskTarget):
+    async def finished() -> AsyncIterator[set[Path]]:
+        return
+        yield  # pylint: disable=unreachable
+
+    with pytest.raises(RuntimeError):
+        first_after(make_watcher()._watch(disk.files, [finished()]), lambda: None)
 
 
 def test_written_exe_is_an_artifact_change(disk: DiskTarget):

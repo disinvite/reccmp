@@ -22,9 +22,10 @@ from reccmp.project.detect import (
     RecCmpProject,
     RecCmpTarget,
 )
+from .fswatch import TargetFiles
 from .registry import register_daemon
 from .shared import DaemonReady
-from .watch import TargetWatcher, WatchEvent
+from .watch import BuildTracker, TargetWatcher, WatchEvent, target_loader
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class DaemonApp:
     # pylint:disable=too-many-instance-attributes
     target: RecCmpTarget
     watcher: TargetWatcher
+    tracker: BuildTracker
     status: DaemonStatus
     reccmp: Compare
     report: ReccmpStatusReport | None
@@ -49,9 +51,10 @@ class DaemonApp:
     reset_requested: asyncio.Event
     _executor: ThreadPoolExecutor
 
-    def __init__(self, project: RecCmpProject, target: RecCmpTarget):
+    def __init__(self, target: RecCmpTarget, watcher: TargetWatcher):
         self.target = target
-        self.watcher = TargetWatcher(project, target)
+        self.watcher = watcher
+        self.tracker = BuildTracker()
         self.status = DaemonStatus.BUILDING
         self.report = None
         self.error = None
@@ -165,7 +168,7 @@ class DaemonApp:
                     self.status = DaemonStatus.FAILED
                 else:
                     self.error = None
-                    if self.watcher.tracker.stale:
+                    if self.tracker.stale:
                         self.status = DaemonStatus.STALE
                     else:
                         self.status = DaemonStatus.READY
@@ -200,11 +203,18 @@ class DaemonApp:
     async def watch_worker(self):
         """Update reccmp's internal structures when the target's files change."""
         try:
-            async for event in self.watcher.events():
-                self.bump()
-                self.handle_watch_event(event)
+            async for raw in self.watcher.events():
+                event = self.tracker.step(raw)
+                if event is not None:
+                    self.bump()
+                    self.handle_watch_event(event)
         except asyncio.CancelledError:
             pass
+        except Exception:  # pylint: disable=broad-exception-caught
+            # With no watch, the results go stale;
+            # we stop, so none are served that fail.
+            logger.exception("The file watcher failed")
+            self.request_stop()
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
@@ -252,7 +262,7 @@ async def handle_report(request):
 async def handle_rerun(request):
     state: DaemonApp = request.app[STATE_KEY]
     # Manual override for a code change that never produced a recompile.
-    state.watcher.tracker.clear_stale()
+    state.tracker.clear_stale()
     state.request_reset()
     return web.HTTPNoContent()
 
@@ -315,7 +325,13 @@ async def traceback_on_error(request, handler):
 
 
 async def server_main(project: RecCmpProject, target: RecCmpTarget, port: int):
-    state = DaemonApp(project, target)
+    assert project.build_config_path is not None
+    watcher = TargetWatcher(
+        target,
+        TargetFiles.from_target(project, target),
+        target_loader(project.build_config_path.parent, target.target_id),
+    )
+    state = DaemonApp(target, watcher)
     state.request_reset()
 
     app = web.Application(middlewares=[bump_timeout, traceback_on_error])

@@ -5,24 +5,20 @@ import contextlib
 import dataclasses
 import os
 import selectors
-import shutil
-import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 import pytest
 from reccmp.project.common import RECCMP_BUILD_CONFIG, RECCMP_PROJECT_CONFIG
 from reccmp.project.detect import RecCmpPartialTarget, RecCmpProject
+from reccmp.remote.fswatch import TargetFiles, watch_streams
 from reccmp.remote.watch import (
     BuildTracker,
-    TargetFiles,
     TargetWatcher,
     WatchEvent,
-    is_stale,
     watch_artifacts,
-    watch_files,
-    watch_streams,
 )
 from .constants import LEGO1_SHA256
+from .remote_watch_helpers import DiskTarget, first_after
 
 # Never created: the project is built in memory and the watches are faked.
 ROOT_PATH = Path("isle").resolve()
@@ -185,36 +181,27 @@ UNSETTLED = 0.6 * TargetWatcher.SETTLE_MS / 1000
 
 def settle(*steps: tuple[WatchEvent, Path] | float) -> list[WatchEvent]:
     """Each step is an artifact change, or a number of seconds to wait."""
+    binaries = {EXE_PATH, PDB_PATH}
 
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp).resolve()
-        (root / BUILD_PATH).mkdir()
-        binaries = {root / EXE_PATH, root / PDB_PATH}
+    async def script() -> AsyncIterator[tuple[Path, bool]]:
+        for step in steps:
+            if isinstance(step, float):
+                await asyncio.sleep(step)
+                continue
+            event, path = step
+            yield path, event is WatchEvent.ARTIFACT_CHANGED
+        raise ScriptDone
 
-        async def script() -> AsyncIterator[set[Path]]:
-            for step in steps:
-                if isinstance(step, float):
-                    await asyncio.sleep(step)
-                    continue
-                event, path = step
-                path = root / path
-                if event is WatchEvent.ARTIFACT_CHANGED:
-                    path.write_text("")
-                else:
-                    path.unlink()
-                yield {path}
-            raise ScriptDone
+    async def run():
+        events = []
+        with pytest.raises(ScriptDone):
+            await watch_artifacts(
+                script(), binaries, TargetWatcher.SETTLE_MS / 1000, events.append
+            )
+        return events
 
-        async def run():
-            events = []
-            with pytest.raises(ScriptDone):
-                await watch_artifacts(
-                    script(), binaries, TargetWatcher.SETTLE_MS / 1000, events.append
-                )
-            return events
-
-        with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
-            return runner.run(asyncio.wait_for(run(), timeout=60))
+    with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
+        return runner.run(asyncio.wait_for(run(), timeout=60))
 
 
 def test_artifacts_settle_to_recompile():
@@ -357,10 +344,13 @@ def run_watcher(
     async def no_artifacts(*_args):
         pass
 
+    async def no_wait(*_args):
+        pass
+
     monkeypatch.setattr("reccmp.remote.watch.watch_streams", fake_streams)
     monkeypatch.setattr("reccmp.remote.watch.watch_artifacts", no_artifacts)
     monkeypatch.setattr("reccmp.remote.watch.is_stale", lambda _files: False)
-    monkeypatch.setattr("reccmp.remote.watch.watch_roots", lambda _files: set())
+    monkeypatch.setattr("reccmp.remote.watch.wait_for_files", no_wait)
     watcher = make_watcher()
 
     async def run():
@@ -395,75 +385,13 @@ def test_config_change_watches_new_binaries(monkeypatch: pytest.MonkeyPatch):
     assert ROOT_PATH / BUILD_PATH / "ISLE2.EXE" in started[1].binaries
 
 
-class DiskTarget:
-    """Real files for a target, with mtimes set by hand."""
-
-    def __init__(self, root: Path):
-        self.exe = root / "build" / "ISLE.EXE"
-        self.pdb = root / "build" / "ISLE.PDB"
-        self.csv = root / "project" / "isle.csv"
-        self.code = root / "project" / "src" / "isle.cpp"
-        # The code goes first, so the build starts up to date.
-        for path in (self.code, self.csv, self.exe, self.pdb):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("")
-        self.files = TargetFiles(
-            binaries={self.exe, self.pdb},
-            ymls=set(),
-            csvs={self.csv},
-            sources=(self.code.parent,),
-        )
-
-    def set_mtime(self, path: Path, seconds: int):
-        os.utime(path, (seconds, seconds))
-
-
 @pytest.fixture(name="disk")
 def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
 
 
-def first_after(events: AsyncIterator, action: Callable[[], None]):
-    """The first item from a real watch, once the action has run."""
-
-    async def run():
-        async with contextlib.aclosing(events) as stream:
-            pending = asyncio.ensure_future(anext(stream))
-            await asyncio.sleep(0.1)
-            action()
-            return await pending
-
-    return asyncio.run(asyncio.wait_for(run(), timeout=30))
-
-
 def watch_disk(files: TargetFiles) -> AsyncIterator[WatchEvent]:
     return make_watcher()._watch(files, watch_streams(files))
-
-
-def test_code_newer_than_build_is_stale(disk: DiskTarget):
-    disk.set_mtime(disk.exe, 1000)
-    disk.set_mtime(disk.pdb, 1000)
-    disk.set_mtime(disk.code, 2000)
-    assert is_stale(disk.files)
-
-
-def test_build_running_at_startup_is_stale(disk: DiskTarget):
-    disk.set_mtime(disk.pdb, 1000)
-    disk.set_mtime(disk.code, 2000)
-    disk.set_mtime(disk.exe, 3000)
-    assert is_stale(disk.files)
-
-
-def test_missing_exe_is_stale(disk: DiskTarget):
-    disk.exe.unlink()
-    assert is_stale(disk.files)
-
-
-def test_build_newer_than_code_is_not_stale(disk: DiskTarget):
-    disk.set_mtime(disk.code, 1000)
-    disk.set_mtime(disk.exe, 2000)
-    disk.set_mtime(disk.pdb, 2000)
-    assert not is_stale(disk.files)
 
 
 def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
@@ -513,24 +441,3 @@ def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
         return still_building
 
     assert asyncio.run(asyncio.wait_for(run(), timeout=30))
-
-
-def test_missing_directory_raises(disk: DiskTarget):
-    shutil.rmtree(disk.exe.parent)
-    with pytest.raises(FileNotFoundError):
-        first_after(watch_files(disk.files.binaries), lambda: None)
-
-
-def test_missing_source_file_raises(disk: DiskTarget):
-    disk.code.unlink()
-    with pytest.raises(FileNotFoundError):
-        watch_streams(dataclasses.replace(disk.files, sources=(disk.code,)))
-
-
-def test_deleted_directory_raises(disk: DiskTarget):
-    def recreate():
-        shutil.rmtree(disk.exe.parent)
-        disk.exe.parent.mkdir()
-
-    with pytest.raises(FileNotFoundError):
-        first_after(watch_files(disk.files.binaries), recreate)

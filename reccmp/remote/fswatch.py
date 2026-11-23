@@ -1,0 +1,156 @@
+"""The parts that read the disk live here,
+so watchers above need not come near."""
+
+import asyncio
+import os
+from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import dataclass
+from pathlib import Path
+from watchfiles import awatch
+from reccmp.dir import is_file_c_like, source_code_search
+from reccmp.project.common import RECCMP_USER_CONFIG
+from reccmp.project.detect import RecCmpProject, RecCmpTarget
+
+
+@dataclass
+class TargetFiles:
+    """Resolved paths of the files that affect the reccmp results for one target."""
+
+    binaries: set[Path]
+    ymls: set[Path]
+    csvs: set[Path]
+    sources: tuple[Path, ...]
+
+    @classmethod
+    def from_target(cls, project: RecCmpProject, target: RecCmpTarget) -> "TargetFiles":
+        ymls = {
+            path.resolve()
+            for path in (project.project_config_path, project.build_config_path)
+            if path is not None
+        }
+
+        # Watch for the user config even if it does not exist yet.
+        if project.project_config_path is not None:
+            ymls.add(
+                (project.project_config_path.parent / RECCMP_USER_CONFIG).resolve()
+            )
+
+        return cls(
+            binaries={
+                target.recompiled_path.resolve(),
+                target.recompiled_pdb.resolve(),
+            },
+            ymls=ymls,
+            csvs={path.resolve() for path in target.data_sources},
+            sources=tuple(path.resolve() for path in target.source_paths),
+        )
+
+
+def inode(path: Path) -> int | None:
+    try:
+        return os.stat(path).st_ino
+    except FileNotFoundError:
+        return None
+
+
+def check_watched(ids: dict[Path, int | None]):
+    """awatch() goes quiet without an error when a watched directory is deleted,
+    and stays quiet if the directory is created again."""
+    for root, ino in ids.items():
+        if ino is None or inode(root) != ino:
+            raise FileNotFoundError(f"Watched path was removed or replaced: {root}")
+
+
+def watch_roots(files: TargetFiles) -> set[Path]:
+    return set(files.sources) | {
+        path.parent for path in files.binaries | files.csvs | files.ymls
+    }
+
+
+async def watch_changes(
+    roots: Iterable[Path], path_filter: Callable[[Path], bool], recursive: bool
+) -> AsyncIterator[set[Path]]:
+    """Yield the resolved paths that changed and pass the filter."""
+    ids = {root: inode(root) for root in roots}
+    check_watched(ids)
+    if not ids:
+        return
+
+    # The timeout's yield, though nothing's new,
+    # lets us check the roots are true.
+    async for changes in awatch(
+        *ids,
+        watch_filter=lambda _, path: path_filter(Path(path).resolve()),
+        recursive=recursive,
+        yield_on_timeout=True,
+    ):
+        check_watched(ids)
+        if changes:
+            yield {Path(path).resolve() for _, path in changes}
+
+
+async def watch_files(paths: set[Path]) -> AsyncIterator[set[Path]]:
+    """Watch the directories that hold the given files without recursion."""
+    async for changed in watch_changes(
+        {path.parent for path in paths}, lambda path: path in paths, recursive=False
+    ):
+        yield changed
+
+
+async def watch_presence(paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
+    """Each changed path comes with true
+    if it is there, as writes will do."""
+    async for changed in watch_files(paths):
+        for path in sorted(changed):
+            yield path, path.exists()
+
+
+def watch_streams(files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
+    """The source dirs are watched deep;
+    the listed files, one level keep."""
+    for path in files.sources:
+        if not path.exists():
+            raise FileNotFoundError(f"Source path does not exist: {path}")
+    # A file that's listed lives in its dir,
+    # so saves that swap it won't lose the bit.
+    source_dirs = tuple(path for path in files.sources if path.is_dir())
+    listed = (
+        files.csvs
+        | files.ymls
+        | {
+            path
+            for path in files.sources
+            if path not in source_dirs and is_file_c_like(path)
+        }
+    )
+    streams = [watch_files(listed)]
+    if source_dirs:
+        streams.append(watch_changes(source_dirs, is_file_c_like, recursive=True))
+    return streams
+
+
+def mtime(path: Path) -> int:
+    """A file that's gone, we say instead,
+    is older than the rest by a thread."""
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return -1
+
+
+def is_stale(files: TargetFiles) -> bool:
+    """Whether the code changed while nothing was watching, judged by mtime."""
+    # A missing exe or pdb is older than every source file.
+    oldest = min(mtime(path) for path in files.binaries)
+    return any(mtime(path) > oldest for path in source_code_search(files.sources))
+
+
+async def wait_for_files(files: TargetFiles, retry_seconds: float):
+    """It waits until the roots are there,
+    or till a yml's changed somewhere."""
+    ymls = [mtime(path) for path in files.ymls]
+    roots = watch_roots(files)
+    while not all(root.exists() for root in roots):
+        await asyncio.sleep(retry_seconds)
+        if [mtime(path) for path in files.ymls] != ymls:
+            return

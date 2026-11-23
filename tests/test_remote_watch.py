@@ -18,6 +18,7 @@ from reccmp.remote.watch import (
     TargetWatcher,
     WatchEvent,
     is_stale,
+    watch_artifacts,
     watch_files,
     watch_streams,
 )
@@ -188,12 +189,7 @@ def settle(*steps: tuple[WatchEvent, Path] | float) -> list[WatchEvent]:
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp).resolve()
         (root / BUILD_PATH).mkdir()
-        files = TargetFiles(
-            binaries={root / EXE_PATH, root / PDB_PATH},
-            ymls=set(),
-            csvs=set(),
-            sources=(),
-        )
+        binaries = {root / EXE_PATH, root / PDB_PATH}
 
         async def script() -> AsyncIterator[set[Path]]:
             for step in steps:
@@ -212,8 +208,9 @@ def settle(*steps: tuple[WatchEvent, Path] | float) -> list[WatchEvent]:
         async def run():
             events = []
             with pytest.raises(ScriptDone):
-                async for event in make_watcher()._watch(files, [script()]):
-                    events.append(event)
+                await watch_artifacts(
+                    script(), binaries, TargetWatcher.SETTLE_MS / 1000, events.append
+                )
             return events
 
         with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
@@ -357,7 +354,11 @@ def run_watcher(
         started.append(files)
         return [next(script, done)()]
 
+    async def no_artifacts(*_args):
+        pass
+
     monkeypatch.setattr("reccmp.remote.watch.watch_streams", fake_streams)
+    monkeypatch.setattr("reccmp.remote.watch.watch_artifacts", no_artifacts)
     monkeypatch.setattr("reccmp.remote.watch.is_stale", lambda _files: False)
     monkeypatch.setattr("reccmp.remote.watch.watch_roots", lambda _files: set())
     watcher = make_watcher()
@@ -488,6 +489,30 @@ def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
         first_after(watch_disk(disk.files), disk.exe.unlink)
         is WatchEvent.ARTIFACT_DELETED
     )
+
+
+def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
+    ilk = disk.exe.with_suffix(".ILK")
+
+    async def build():
+        await asyncio.sleep(0.1)
+        disk.exe.write_text("changed")
+        disk.pdb.write_text("changed")
+        for i in range(int(SETTLED / UNSETTLED)):
+            await asyncio.sleep(UNSETTLED)
+            ilk.write_text(str(i))
+
+    async def run() -> bool:
+        building = asyncio.create_task(build())
+        async with contextlib.aclosing(watch_disk(disk.files)) as events:
+            async for event in events:
+                if event is WatchEvent.RECOMPILED:
+                    break
+        still_building = not building.done()
+        building.cancel()
+        return still_building
+
+    assert asyncio.run(asyncio.wait_for(run(), timeout=30))
 
 
 def test_missing_directory_raises(disk: DiskTarget):

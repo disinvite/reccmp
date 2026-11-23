@@ -65,7 +65,7 @@ import enum
 import logging
 import os
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from watchfiles import awatch
@@ -231,8 +231,7 @@ def watch_streams(files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
     # so saves that swap it won't lose the bit.
     source_dirs = tuple(path for path in files.sources if path.is_dir())
     listed = (
-        files.binaries
-        | files.csvs
+        files.csvs
         | files.ymls
         | {
             path
@@ -260,6 +259,120 @@ def is_stale(files: TargetFiles) -> bool:
     # A missing exe or pdb is older than every source file.
     oldest = min(mtime(path) for path in files.binaries)
     return any(mtime(path) > oldest for path in source_code_search(files.sources))
+
+
+async def watch_artifacts(
+    changes: AsyncIterator[set[Path]],
+    binaries: set[Path],
+    settle_seconds: float,
+    emit: Callable[[WatchEvent], None],
+):
+    loop = asyncio.get_running_loop()
+    # The exe and pdb written since the last recompile.
+    written: set[Path] = set()
+    cooldown: asyncio.TimerHandle | None = None
+
+    def on_cooldown():
+        written.clear()
+        emit(WatchEvent.RECOMPILED)
+
+    try:
+        async for changed in changes:
+            for path in sorted(changed):
+                if cooldown is not None:
+                    cooldown.cancel()
+                    cooldown = None
+                if path.exists():
+                    written.add(path)
+                    emit(WatchEvent.ARTIFACT_CHANGED)
+                    if written >= binaries:
+                        cooldown = loop.call_later(settle_seconds, on_cooldown)
+                else:
+                    written.discard(path)
+                    emit(WatchEvent.ARTIFACT_DELETED)
+    finally:
+        if cooldown is not None:
+            cooldown.cancel()
+
+
+class WatchSession:
+    def __init__(
+        self,
+        files: TargetFiles,
+        reload: Callable[[], WatchEvent | None],
+        settle_seconds: float,
+    ):
+        self.files = files
+        self.reload = reload
+        self.settle_seconds = settle_seconds
+        self.queue: asyncio.Queue[WatchEvent | Exception] = asyncio.Queue()
+        self.ended = False
+
+    def emit(self, item: WatchEvent | Exception):
+        self.queue.put_nowait(item)
+
+    def on_changes(self, changed: set[Path]):
+        for path in sorted(changed):
+            if self.ended:
+                return
+            if path in self.files.csvs:
+                self.emit(WatchEvent.DATA_CHANGED)
+            elif path in self.files.ymls:
+                self.on_yml()
+            else:
+                self.emit(WatchEvent.CODE_CHANGED)
+
+    def on_yml(self):
+        event = self.reload()
+        if event is not None:
+            self.emit(event)
+        self.ended = event is WatchEvent.CONFIG_CHANGED
+
+    async def forward(self, stream: AsyncIterator[set[Path]]):
+        async for changed in stream:
+            self.on_changes(changed)
+
+    async def guard(self, producer: Awaitable[None]):
+        try:
+            await producer
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            self.emit(ex)
+
+    async def run(
+        self, streams: Iterable[AsyncIterator[set[Path]]]
+    ) -> AsyncIterator[WatchEvent]:
+        """It names each path the streams report,
+        and ends when config's changed its sort."""
+        producers = [
+            watch_artifacts(
+                watch_files(self.files.binaries),
+                self.files.binaries,
+                self.settle_seconds,
+                self.emit,
+            ),
+            *(self.forward(stream) for stream in streams),
+        ]
+        # A timeout leaves the wait in place;
+        # to cancel it would close the stream for good.
+        tasks = [asyncio.create_task(self.guard(producer)) for producer in producers]
+        try:
+            # Each task, once it gets a turn,
+            # has its watch in place to learn.
+            await asyncio.sleep(0)
+            if await asyncio.to_thread(is_stale, self.files):
+                yield WatchEvent.CODE_CHANGED
+
+            while True:
+                item = await self.queue.get()
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+                if item is WatchEvent.CONFIG_CHANGED:
+                    return
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class TargetWatcher:
@@ -311,78 +424,11 @@ class TargetWatcher:
         self.error = traceback.format_exc()
         return WatchEvent.CONFIG_FAILED
 
-    async def _watch(
+    def _watch(
         self, files: TargetFiles, streams: Iterable[AsyncIterator[set[Path]]]
     ) -> AsyncIterator[WatchEvent]:
-        """It names each path the streams report,
-        and ends when config's changed its sort."""
-        loop = asyncio.get_running_loop()
-        # A timeout leaves the wait in place;
-        # to cancel it would close the stream for good.
-        pending = {asyncio.ensure_future(anext(stream)): stream for stream in streams}
-        # The exe and pdb written since the last recompile.
-        written: set[Path] = set()
-        deadline: float | None = None
-        try:
-            # Each task, once it gets a turn,
-            # has its watch in place to learn.
-            await asyncio.sleep(0)
-            if await asyncio.to_thread(is_stale, files):
-                yield WatchEvent.CODE_CHANGED
-
-            while True:
-                # With both brand new and code at rest,
-                # a quiet spell will pass the test.
-                timeout = None if deadline is None else max(0.0, deadline - loop.time())
-                done, _ = await asyncio.wait(
-                    pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-                )
-                if not done:
-                    # Once exe and pdb have both been seen,
-                    # report the build and wipe the slate clean.
-                    written.clear()
-                    deadline = None
-                    yield WatchEvent.RECOMPILED
-                    continue
-
-                for future in done:
-                    stream = pending.pop(future)
-                    changed = future.result()
-                    pending[asyncio.ensure_future(anext(stream))] = stream
-                    for path in sorted(changed):
-                        if path in files.binaries:
-                            # A save may come as delete and add;
-                            # the file on disk says which we had.
-                            if path.exists():
-                                # Each write will start the wait anew,
-                                # until the linker's work is through.
-                                written.add(path)
-                                event = WatchEvent.ARTIFACT_CHANGED
-                            else:
-                                # Deleted means the wait is through,
-                                # until the file is written new.
-                                written.discard(path)
-                                event = WatchEvent.ARTIFACT_DELETED
-                            deadline = (
-                                loop.time() + self.SETTLE_MS / 1000
-                                if written >= files.binaries
-                                else None
-                            )
-                            yield event
-                        elif path in files.csvs:
-                            yield WatchEvent.DATA_CHANGED
-                        elif path in files.ymls:
-                            reloaded = self.reload()
-                            if reloaded is not None:
-                                yield reloaded
-                            if reloaded is WatchEvent.CONFIG_CHANGED:
-                                return
-                        else:
-                            yield WatchEvent.CODE_CHANGED
-        finally:
-            for future in pending:
-                future.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+        session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
+        return session.run(streams)
 
     async def _wait_for_files(self, files: TargetFiles):
         ymls = [mtime(path) for path in files.ymls]

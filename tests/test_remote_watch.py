@@ -300,8 +300,6 @@ class Events:
     async def ready(self):
         # The fake clock moves on only once the loop is idle,
         # so the watches are in place before the scenario goes on.
-        # A restart after CONFIG_CHANGED waits on the old watch threads
-        # and is not idle-safe: wait for the next event before writing files.
         await asyncio.sleep(0.1)
 
     async def next(self) -> WatchEvent:
@@ -477,6 +475,21 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         assert await events.next() is WatchEvent.CODE_CHANGED
         new_exe.write_text("built")
         disk.pdb.write_text("built")
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
+    """A rebuild written as soon as the config change is reported is not missed."""
+    new_exe = disk.exe.with_name("ISLE2.EXE")
+    new_exe.write_text("built")
+
+    async def scenario(events: Events):
+        write_build_yml(disk, build_yml(disk, new_exe.name))
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        new_exe.write_text("rebuilt")
+        disk.pdb.write_text("rebuilt")
         assert await events.next() is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk), scenario)

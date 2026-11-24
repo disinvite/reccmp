@@ -5,11 +5,17 @@ import contextlib
 import dataclasses
 import os
 import selectors
+import shutil
+import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 import pytest
-from reccmp.project.common import RECCMP_BUILD_CONFIG, RECCMP_PROJECT_CONFIG
-from reccmp.project.detect import RecCmpPartialTarget, RecCmpProject
+from reccmp.project.common import (
+    RECCMP_BUILD_CONFIG,
+    RECCMP_PROJECT_CONFIG,
+    RECCMP_USER_CONFIG,
+)
+from reccmp.project.detect import RecCmpProject
 from reccmp.remote.fswatch import TargetFiles, watch_streams
 from reccmp.remote.watch import (
     BuildTracker,
@@ -20,22 +26,13 @@ from reccmp.remote.watch import (
 from .constants import LEGO1_SHA256
 from .remote_watch_helpers import DiskTarget, first_after
 
-# Never created: the project is built in memory and the watches are faked.
-ROOT_PATH = Path("isle").resolve()
-PROJECT_PATH = Path("project")
 BUILD_PATH = Path("build")
 EXE_PATH = BUILD_PATH / "ISLE.EXE"
 PDB_PATH = BUILD_PATH / "ISLE.PDB"
-BUILD_YML_PATH = BUILD_PATH / RECCMP_BUILD_CONFIG
-CSV_PATH = PROJECT_PATH / "isle.csv"
 
 
 class ScriptDone(Exception):
     """The fake watches have no more changes to report."""
-
-
-class InvalidConfig(Exception):
-    """Raised by the fake from_directory in place of a yml parse error."""
 
 
 class FakeClockSelector(selectors.DefaultSelector):
@@ -73,33 +70,6 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         return future
 
 
-def make_project(exe: str = "ISLE.EXE") -> RecCmpProject:
-    project = RecCmpProject(
-        project_config_path=ROOT_PATH / PROJECT_PATH / RECCMP_PROJECT_CONFIG,
-        build_config_path=ROOT_PATH / BUILD_YML_PATH,
-    )
-    project.targets["ISLE"] = RecCmpPartialTarget(
-        target_id="ISLE",
-        filename="ISLE.EXE",
-        sha256=LEGO1_SHA256,
-        source_paths=(ROOT_PATH / PROJECT_PATH / "src",),
-        original_path=ROOT_PATH / "ISLE.EXE",
-        recompiled_path=ROOT_PATH / BUILD_PATH / exe,
-        recompiled_pdb=ROOT_PATH / PDB_PATH,
-        data_sources=[ROOT_PATH / CSV_PATH],
-    )
-    return project
-
-
-def invalid_project() -> RecCmpProject:
-    raise InvalidConfig
-
-
-def make_watcher() -> TargetWatcher:
-    project = make_project()
-    return TargetWatcher(project, project.get("ISLE"))
-
-
 def track(*events: WatchEvent, stale: bool = False) -> list[WatchEvent]:
     tracker = BuildTracker()
     if stale:
@@ -109,42 +79,50 @@ def track(*events: WatchEvent, stale: bool = False) -> list[WatchEvent]:
 
 
 def test_recompile():
+    """A written artifact followed by a recompile reports only the recompile."""
     assert track(WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED) == [
         WatchEvent.RECOMPILED
     ]
 
 
 def test_code_change_then_recompile():
+    """A recompile after a code change is reported after the code change."""
     assert track(
         WatchEvent.CODE_CHANGED, WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED
     ) == [WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED]
 
 
 def test_code_change_during_cooldown_drops_recompile():
+    """A code change after the artifacts are written makes the recompile out of date."""
     assert track(
         WatchEvent.ARTIFACT_CHANGED, WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED
     ) == [WatchEvent.CODE_CHANGED]
 
 
 def test_stale_at_startup_is_a_code_change():
+    """A build that is stale at startup is reported as a code change."""
     assert track(stale=True) == [WatchEvent.CODE_CHANGED]
 
 
 def test_data_change():
+    """A data change on a ready build is reported."""
     assert track(WatchEvent.DATA_CHANGED) == [WatchEvent.DATA_CHANGED]
 
 
 def test_data_change_while_stale_is_dropped():
+    """A data change is dropped while the build is stale."""
     assert track(WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED) == [
         WatchEvent.CODE_CHANGED
     ]
 
 
 def test_data_change_during_cooldown_is_dropped():
+    """A data change is dropped while a recompile is pending."""
     assert track(WatchEvent.ARTIFACT_CHANGED, WatchEvent.DATA_CHANGED) == []
 
 
 def test_data_change_after_deleted_artifact_waits_for_recompile():
+    """Data changes are dropped from an artifact delete until the next recompile."""
     assert track(
         WatchEvent.ARTIFACT_DELETED,
         WatchEvent.DATA_CHANGED,
@@ -155,6 +133,7 @@ def test_data_change_after_deleted_artifact_waits_for_recompile():
 
 
 def test_config_failure_drops_other_events():
+    """After a config failure only config events are reported."""
     assert track(
         WatchEvent.CONFIG_FAILED,
         WatchEvent.CODE_CHANGED,
@@ -166,6 +145,7 @@ def test_config_failure_drops_other_events():
 
 
 def test_config_change_takes_staleness_from_restart():
+    """A config change clears the stale state left by an earlier code change."""
     tracker = BuildTracker()
     tracker.step(WatchEvent.CODE_CHANGED)
     tracker.step(WatchEvent.CONFIG_CHANGED)
@@ -205,6 +185,7 @@ def settle(*steps: tuple[WatchEvent, Path] | float) -> list[WatchEvent]:
 
 
 def test_artifacts_settle_to_recompile():
+    """Writing the exe and pdb then waiting out the cooldown is a recompile."""
     assert settle(
         (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
         (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
@@ -217,12 +198,14 @@ def test_artifacts_settle_to_recompile():
 
 
 def test_exe_only_is_not_a_recompile():
+    """Writing the exe without the pdb is not a recompile."""
     assert settle((WatchEvent.ARTIFACT_CHANGED, EXE_PATH), SETTLED) == [
         WatchEvent.ARTIFACT_CHANGED
     ]
 
 
 def test_recompile_split_across_timeouts():
+    """The exe and pdb count as a recompile even when written a cooldown apart."""
     assert settle(
         (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
         SETTLED,
@@ -236,6 +219,7 @@ def test_recompile_split_across_timeouts():
 
 
 def test_write_restarts_cooldown():
+    """A write during the cooldown starts it over."""
     assert settle(
         (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
         (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
@@ -250,6 +234,7 @@ def test_write_restarts_cooldown():
 
 
 def test_delete_aborts_cooldown():
+    """A delete during the cooldown cancels the recompile."""
     assert settle(
         (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
         (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
@@ -264,6 +249,7 @@ def test_delete_aborts_cooldown():
 
 
 def test_rewrite_after_delete_is_a_recompile():
+    """Rewriting a deleted exe completes the recompile."""
     assert settle(
         (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
         (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
@@ -279,122 +265,154 @@ def test_rewrite_after_delete_is_a_recompile():
     ]
 
 
-def patch_loads(monkeypatch: pytest.MonkeyPatch, *loads: Callable[[], RecCmpProject]):
-    """Each reload of the project config returns the next load."""
-    script = iter(loads)
-
-    def fake_from_directory(directory: Path, alert: bool = True) -> RecCmpProject:
-        assert directory == ROOT_PATH / BUILD_PATH
-        assert not alert
-        return next(script)()
-
-    monkeypatch.setattr(
-        RecCmpProject, "from_directory", staticmethod(fake_from_directory)
-    )
-
-
-def reloads(
-    monkeypatch: pytest.MonkeyPatch, *loads: Callable[[], RecCmpProject]
-) -> list[WatchEvent | None]:
-    patch_loads(monkeypatch, *loads)
-    watcher = make_watcher()
-    return [watcher.reload() for _ in loads]
-
-
-def test_yml_rewrite_with_same_config(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, make_project) == [None]
-
-
-def test_changed_target_is_a_config_change(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, lambda: make_project("ISLE2.EXE")) == [
-        WatchEvent.CONFIG_CHANGED
-    ]
-
-
-def test_invalid_config_is_a_failure(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, invalid_project) == [WatchEvent.CONFIG_FAILED]
-
-
-def test_fixed_config_is_a_config_change(monkeypatch: pytest.MonkeyPatch):
-    assert reloads(monkeypatch, invalid_project, make_project) == [
-        WatchEvent.CONFIG_FAILED,
-        WatchEvent.CONFIG_CHANGED,
-    ]
-
-
-WatcherRun = Callable[[], AsyncIterator[set[Path]]]
-
-
-def run_watcher(
-    monkeypatch: pytest.MonkeyPatch, *runs: WatcherRun
-) -> tuple[list[WatchEvent], list[TargetFiles]]:
-    """Each run is the only input for one start of the watches.
-    Returns the events and the files for each start."""
-    started: list[TargetFiles] = []
-    script = iter(runs)
-
-    async def done() -> AsyncIterator[set[Path]]:
-        raise ScriptDone
-        yield  # pylint: disable=unreachable
-
-    def fake_streams(files: TargetFiles):
-        started.append(files)
-        return [next(script, done)()]
-
-    async def no_artifacts(*_args):
-        pass
-
-    async def no_wait(*_args):
-        pass
-
-    monkeypatch.setattr("reccmp.remote.watch.watch_streams", fake_streams)
-    monkeypatch.setattr("reccmp.remote.watch.watch_artifacts", no_artifacts)
-    monkeypatch.setattr("reccmp.remote.watch.is_stale", lambda _files: False)
-    monkeypatch.setattr("reccmp.remote.watch.wait_for_files", no_wait)
-    watcher = make_watcher()
-
-    async def run():
-        events = []
-        with pytest.raises(ScriptDone):
-            async for event in watcher.events():
-                events.append(event)
-        return events
-
-    return asyncio.run(asyncio.wait_for(run(), timeout=30)), started
-
-
-def test_missing_path_is_a_failure_until_reload(monkeypatch: pytest.MonkeyPatch):
-    patch_loads(monkeypatch, make_project)
-
-    async def lose_path() -> AsyncIterator[set[Path]]:
-        raise FileNotFoundError
-        yield  # pylint: disable=unreachable
-
-    events, _ = run_watcher(monkeypatch, lose_path)
-    assert events == [WatchEvent.CONFIG_FAILED, WatchEvent.CONFIG_CHANGED]
-
-
-def test_config_change_watches_new_binaries(monkeypatch: pytest.MonkeyPatch):
-    patch_loads(monkeypatch, lambda: make_project("ISLE2.EXE"))
-
-    async def change_config() -> AsyncIterator[set[Path]]:
-        yield {ROOT_PATH / BUILD_YML_PATH}
-
-    events, started = run_watcher(monkeypatch, change_config)
-    assert events == [WatchEvent.CONFIG_CHANGED]
-    assert ROOT_PATH / BUILD_PATH / "ISLE2.EXE" in started[1].binaries
-
-
 @pytest.fixture(name="disk")
 def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
 
 
-def watch_disk(files: TargetFiles) -> AsyncIterator[WatchEvent]:
-    return make_watcher()._watch(files, watch_streams(files))
+PROJECT_YML = f"""\
+targets:
+  ISLE:
+    filename: ISLE.EXE
+    source-root: src
+    data-sources:
+      - isle.csv
+    hash:
+      sha256: {LEGO1_SHA256}
+"""
+
+USER_YML = """\
+targets:
+  ISLE:
+    path: ../ISLE.EXE
+"""
+
+INVALID_YML = "targets: ["
+
+
+def build_yml(disk: DiskTarget, exe: str = "ISLE.EXE") -> str:
+    return f"""\
+project: {disk.csv.parent}
+targets:
+  ISLE:
+    path: {exe}
+    pdb: ISLE.PDB
+"""
+
+
+def write_build_yml(disk: DiskTarget, text: str):
+    (disk.exe.parent / RECCMP_BUILD_CONFIG).write_text(text)
+
+
+def make_watcher(disk: DiskTarget) -> TargetWatcher:
+    """The ymls are written to disk first,
+    then loaded as the daemon would at start."""
+    (disk.csv.parent / RECCMP_PROJECT_CONFIG).write_text(PROJECT_YML)
+    (disk.csv.parent / RECCMP_USER_CONFIG).write_text(USER_YML)
+    write_build_yml(disk, build_yml(disk))
+    project = RecCmpProject.from_directory(disk.exe.parent, alert=False)
+    return TargetWatcher(project, project.get("ISLE"))
+
+
+def reloads(disk: DiskTarget, *build_ymls: str) -> list[WatchEvent | None]:
+    """Each text is written to the build yml before one reload."""
+    watcher = make_watcher(disk)
+    results = []
+    for text in build_ymls:
+        write_build_yml(disk, text)
+        results.append(watcher.reload())
+    return results
+
+
+def test_yml_rewrite_with_same_config(disk: DiskTarget):
+    """Rewriting the build yml with the same content is not a config change."""
+    assert reloads(disk, build_yml(disk)) == [None]
+
+
+def test_changed_target_is_a_config_change(disk: DiskTarget):
+    """Pointing the build yml at a different exe is a config change."""
+    assert reloads(disk, build_yml(disk, "ISLE2.EXE")) == [WatchEvent.CONFIG_CHANGED]
+
+
+def test_invalid_config_is_a_failure(disk: DiskTarget):
+    """A build yml that does not parse is a config failure."""
+    assert reloads(disk, INVALID_YML) == [WatchEvent.CONFIG_FAILED]
+
+
+def test_fixed_config_is_a_config_change(disk: DiskTarget):
+    """Restoring a broken build yml to the same target is a config change."""
+    assert reloads(disk, INVALID_YML, build_yml(disk)) == [
+        WatchEvent.CONFIG_FAILED,
+        WatchEvent.CONFIG_CHANGED,
+    ]
+
+
+def watch_events(
+    watcher: TargetWatcher, *actions: Callable[[], None] | None
+) -> list[WatchEvent]:
+    """Each action runs while the watcher waits for its next event,
+    and the event that follows is returned for it."""
+
+    async def run():
+        events = []
+        async with contextlib.aclosing(watcher.events()) as stream:
+            for action in actions:
+                pending = asyncio.ensure_future(anext(stream))
+                await asyncio.sleep(0.1)
+                if action is not None:
+                    action()
+                events.append(await pending)
+        return events
+
+    async def guarded():
+        # The fake clock would fire a wait_for timeout at once,
+        # so a real timer cancels a watch that hangs.
+        task = asyncio.current_task()
+        assert task is not None
+        timer = threading.Timer(
+            30, asyncio.get_running_loop().call_soon_threadsafe, (task.cancel,)
+        )
+        timer.start()
+        try:
+            return await run()
+        finally:
+            timer.cancel()
+
+    with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
+        return runner.run(guarded())
+
+
+def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
+    """A deleted source directory is a config failure until it is created again."""
+    src = disk.code.parent
+    assert watch_events(make_watcher(disk), lambda: shutil.rmtree(src), src.mkdir) == [
+        WatchEvent.CONFIG_FAILED,
+        WatchEvent.CONFIG_CHANGED,
+    ]
+
+
+def test_config_change_watches_new_binaries(disk: DiskTarget):
+    """After the build yml names a new exe, writing that exe and the pdb is a recompile."""
+    new_exe = disk.exe.with_name("ISLE2.EXE")
+
+    def build():
+        new_exe.write_text("changed")
+        disk.pdb.write_text("changed")
+
+    assert watch_events(
+        make_watcher(disk),
+        lambda: write_build_yml(disk, build_yml(disk, new_exe.name)),
+        None,
+        build,
+    ) == [WatchEvent.CONFIG_CHANGED, WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED]
+
+
+def watch_disk(disk: DiskTarget, files: TargetFiles) -> AsyncIterator[WatchEvent]:
+    return make_watcher(disk)._watch(files, watch_streams(files))
 
 
 def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
+    """Replacing a watched source file by rename is a code change."""
     saved = disk.code.with_suffix(".tmp")
 
     def replace():
@@ -402,24 +420,29 @@ def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
         os.replace(saved, disk.code)
 
     files = dataclasses.replace(disk.files, sources=(disk.code,))
-    assert first_after(watch_disk(files), replace) is WatchEvent.CODE_CHANGED
+    assert first_after(watch_disk(disk, files), replace) is WatchEvent.CODE_CHANGED
 
 
 def test_written_exe_is_an_artifact_change(disk: DiskTarget):
+    """Writing the exe is an artifact change."""
     assert (
-        first_after(watch_disk(disk.files), lambda: disk.exe.write_text("changed"))
+        first_after(
+            watch_disk(disk, disk.files), lambda: disk.exe.write_text("changed")
+        )
         is WatchEvent.ARTIFACT_CHANGED
     )
 
 
 def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
+    """Deleting the exe is an artifact delete."""
     assert (
-        first_after(watch_disk(disk.files), disk.exe.unlink)
+        first_after(watch_disk(disk, disk.files), disk.exe.unlink)
         is WatchEvent.ARTIFACT_DELETED
     )
 
 
 def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
+    """Writes to other files in the build directory do not restart the cooldown."""
     ilk = disk.exe.with_suffix(".ILK")
 
     async def build():
@@ -432,7 +455,7 @@ def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
 
     async def run() -> bool:
         building = asyncio.create_task(build())
-        async with contextlib.aclosing(watch_disk(disk.files)) as events:
+        async with contextlib.aclosing(watch_disk(disk, disk.files)) as events:
             async for event in events:
                 if event is WatchEvent.RECOMPILED:
                     break

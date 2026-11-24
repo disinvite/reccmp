@@ -15,23 +15,14 @@ from reccmp.project.common import (
     RECCMP_USER_CONFIG,
 )
 from reccmp.project.detect import RecCmpProject
-from reccmp.remote.fswatch import TargetFiles, watch_streams
+from reccmp.remote.fswatch import watch_streams
 from reccmp.remote.watch import (
     BuildTracker,
     TargetWatcher,
     WatchEvent,
-    watch_artifacts,
 )
 from .constants import LEGO1_SHA256
 from .remote_watch_helpers import DiskTarget, first_after
-
-BUILD_PATH = Path("build")
-EXE_PATH = BUILD_PATH / "ISLE.EXE"
-PDB_PATH = BUILD_PATH / "ISLE.PDB"
-
-
-class ScriptDone(Exception):
-    """The fake watches have no more changes to report."""
 
 
 class FakeClockSelector(selectors.DefaultSelector):
@@ -41,8 +32,13 @@ class FakeClockSelector(selectors.DefaultSelector):
     def __init__(self):
         super().__init__()
         self.now = 0.0
+        self.held = False
 
     def select(self, timeout=None):
+        if self.held:
+            # While held, the clock stays put;
+            # the disk gets real time to report.
+            return super().select(0.01 if timeout is None else min(timeout, 0.01))
         if timeout is not None:
             self.now += timeout
         return super().select(0)
@@ -67,6 +63,14 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         except Exception as e:  # pylint: disable=broad-exception-caught
             future.set_exception(e)
         return future
+
+    @contextlib.contextmanager
+    def hold(self):
+        self._selector.held = True
+        try:
+            yield
+        finally:
+            self._selector.held = False
 
 
 def track(*events: WatchEvent) -> list[WatchEvent]:
@@ -130,112 +134,6 @@ SETTLED = 4 * TargetWatcher.SETTLE_MS / 1000
 
 UNSETTLED = 0.6 * TargetWatcher.SETTLE_MS / 1000
 """Too short for a cooldown to finish, but two in a row are not."""
-
-
-def settle(*steps: tuple[WatchEvent, Path] | float) -> list[WatchEvent]:
-    """Each step is an artifact change, or a number of seconds to wait."""
-    binaries = {EXE_PATH, PDB_PATH}
-
-    async def script() -> AsyncIterator[tuple[Path, bool]]:
-        for step in steps:
-            if isinstance(step, float):
-                await asyncio.sleep(step)
-                continue
-            event, path = step
-            yield path, event is WatchEvent.ARTIFACT_CHANGED
-        raise ScriptDone
-
-    async def run():
-        events = []
-        with pytest.raises(ScriptDone):
-            await watch_artifacts(
-                script(), binaries, TargetWatcher.SETTLE_MS / 1000, events.append
-            )
-        return events
-
-    with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
-        return runner.run(asyncio.wait_for(run(), timeout=60))
-
-
-def test_artifacts_settle_to_recompile():
-    """Writing the exe and pdb then waiting out the cooldown is a recompile."""
-    assert settle(
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
-        SETTLED,
-    ) == [
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-    ]
-
-
-def test_exe_only_is_not_a_recompile():
-    """Writing the exe without the pdb is not a recompile."""
-    assert settle((WatchEvent.ARTIFACT_CHANGED, EXE_PATH), SETTLED) == [
-        WatchEvent.ARTIFACT_CHANGED
-    ]
-
-
-def test_recompile_split_across_timeouts():
-    """The exe and pdb count as a recompile even when written a cooldown apart."""
-    assert settle(
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        SETTLED,
-        (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
-        SETTLED,
-    ) == [
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-    ]
-
-
-def test_write_restarts_cooldown():
-    """A write during the cooldown starts it over."""
-    assert settle(
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
-        UNSETTLED,
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        UNSETTLED,
-    ) == [
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-    ]
-
-
-def test_delete_aborts_cooldown():
-    """A delete during the cooldown cancels the recompile."""
-    assert settle(
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
-        UNSETTLED,
-        (WatchEvent.ARTIFACT_DELETED, EXE_PATH),
-        SETTLED,
-    ) == [
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_DELETED,
-    ]
-
-
-def test_rewrite_after_delete_is_a_recompile():
-    """Rewriting a deleted exe completes the recompile."""
-    assert settle(
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        (WatchEvent.ARTIFACT_CHANGED, PDB_PATH),
-        (WatchEvent.ARTIFACT_DELETED, EXE_PATH),
-        (WatchEvent.ARTIFACT_CHANGED, EXE_PATH),
-        SETTLED,
-    ) == [
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.ARTIFACT_DELETED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-    ]
 
 
 @pytest.fixture(name="disk")
@@ -303,10 +201,14 @@ class Events:
         await asyncio.sleep(0.1)
 
     async def next(self) -> WatchEvent:
-        event = await self.pending
+        with asyncio.get_running_loop().hold():
+            event = await self.pending
         self.pending = asyncio.ensure_future(anext(self.stream))
         await self.ready()
         return event
+
+    def quiet(self) -> bool:
+        return not self.pending.done()
 
     async def close(self):
         self.pending.cancel()
@@ -317,11 +219,11 @@ class Events:
 Scenario = Callable[[Events], Awaitable[None]]
 
 
-def run_scenario(watcher: TargetWatcher, scenario: Scenario):
+def run_scenario(source: AsyncIterator[WatchEvent], scenario: Scenario):
     """Runs the scenario against the watcher's events on the fake clock."""
 
     async def run():
-        async with contextlib.aclosing(watcher.events()) as stream:
+        async with contextlib.aclosing(source) as stream:
             events = Events(stream)
             try:
                 await events.ready()
@@ -352,6 +254,95 @@ def rebuild(disk: DiskTarget):
     disk.pdb.write_text("built")
 
 
+def test_artifacts_settle_to_recompile(disk: DiskTarget):
+    """Writing the exe and pdb then waiting out the cooldown is a recompile."""
+
+    async def scenario(events: Events):
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
+def test_exe_only_is_not_a_recompile(disk: DiskTarget):
+    """Writing the exe without the pdb is not a recompile."""
+
+    async def scenario(events: Events):
+        disk.exe.write_text("built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        assert events.quiet()
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
+def test_recompile_split_across_timeouts(disk: DiskTarget):
+    """The exe and pdb count as a recompile even when written a cooldown apart."""
+
+    async def scenario(events: Events):
+        disk.exe.write_text("built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        disk.pdb.write_text("built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
+def test_write_restarts_cooldown(disk: DiskTarget):
+    """A write during the cooldown starts it over."""
+
+    async def scenario(events: Events):
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(UNSETTLED)
+        disk.exe.write_text("changed")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(UNSETTLED)
+        assert events.quiet()
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
+def test_delete_aborts_cooldown(disk: DiskTarget):
+    """A delete during the cooldown cancels the recompile."""
+
+    async def scenario(events: Events):
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(UNSETTLED)
+        disk.exe.unlink()
+        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        await asyncio.sleep(SETTLED)
+        assert events.quiet()
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
+def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
+    """Rewriting a deleted exe completes the recompile."""
+
+    async def scenario(events: Events):
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        disk.exe.unlink()
+        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        disk.exe.write_text("changed")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
+
+
 def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
     """Code newer than the build when the watcher starts is a code change."""
     disk.set_mtime(disk.exe, 1000)
@@ -361,17 +352,7 @@ def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
     async def scenario(events: Events):
         assert await events.next() is WatchEvent.CODE_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
-
-
-def test_rebuild_is_a_recompile(disk: DiskTarget):
-    """Writing the exe and pdb of an up-to-date build is a recompile."""
-
-    async def scenario(events: Events):
-        rebuild(disk)
-        assert await events.next() is WatchEvent.RECOMPILED
-
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_code_change_then_rebuild(disk: DiskTarget):
@@ -381,9 +362,12 @@ def test_code_change_then_rebuild(disk: DiskTarget):
         disk.code.write_text("changed")
         assert await events.next() is WatchEvent.CODE_CHANGED
         rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).raw_events(), scenario)
 
 
 def test_data_change(disk: DiskTarget):
@@ -393,7 +377,7 @@ def test_data_change(disk: DiskTarget):
         disk.csv.write_text("changed")
         assert await events.next() is WatchEvent.DATA_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
@@ -405,7 +389,7 @@ def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
         os.replace(saved, disk.code)
         assert await events.next() is WatchEvent.CODE_CHANGED
 
-    run_scenario(make_watcher(disk, "src/isle.cpp"), scenario)
+    run_scenario(make_watcher(disk, "src/isle.cpp").events(), scenario)
 
 
 def test_yml_rewrite_with_same_config(disk: DiskTarget):
@@ -416,7 +400,7 @@ def test_yml_rewrite_with_same_config(disk: DiskTarget):
         disk.csv.write_text("changed")
         assert await events.next() is WatchEvent.DATA_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_changed_target_is_a_config_change(disk: DiskTarget):
@@ -426,7 +410,7 @@ def test_changed_target_is_a_config_change(disk: DiskTarget):
         write_build_yml(disk, build_yml(disk, "ISLE2.EXE"))
         assert await events.next() is WatchEvent.CONFIG_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_invalid_config_is_a_failure(disk: DiskTarget):
@@ -436,7 +420,7 @@ def test_invalid_config_is_a_failure(disk: DiskTarget):
         write_build_yml(disk, INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_fixed_config_is_a_config_change(disk: DiskTarget):
@@ -448,7 +432,7 @@ def test_fixed_config_is_a_config_change(disk: DiskTarget):
         write_build_yml(disk, build_yml(disk))
         assert await events.next() is WatchEvent.CONFIG_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
@@ -459,9 +443,10 @@ def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
         shutil.rmtree(src)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         src.mkdir()
+        await asyncio.sleep(TargetWatcher.RETRY_MS / 1000)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_config_change_watches_new_binaries(disk: DiskTarget):
@@ -475,9 +460,12 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         assert await events.next() is WatchEvent.CODE_CHANGED
         new_exe.write_text("built")
         disk.pdb.write_text("built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).raw_events(), scenario)
 
 
 def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
@@ -490,21 +478,21 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.CONFIG_CHANGED
         new_exe.write_text("rebuilt")
         disk.pdb.write_text("rebuilt")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk), scenario)
+    run_scenario(make_watcher(disk).raw_events(), scenario)
 
 
-def watch_disk(disk: DiskTarget, files: TargetFiles) -> AsyncIterator[WatchEvent]:
-    return make_watcher(disk)._watch(files, watch_streams(files))
+def watch_disk(disk: DiskTarget) -> AsyncIterator[WatchEvent]:
+    return make_watcher(disk)._watch(disk.files, watch_streams(disk.files))
 
 
 def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
     """Deleting the exe is an artifact delete."""
-    assert (
-        first_after(watch_disk(disk, disk.files), disk.exe.unlink)
-        is WatchEvent.ARTIFACT_DELETED
-    )
+    assert first_after(watch_disk(disk), disk.exe.unlink) is WatchEvent.ARTIFACT_DELETED
 
 
 def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
@@ -521,7 +509,7 @@ def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
 
     async def run() -> bool:
         building = asyncio.create_task(build())
-        async with contextlib.aclosing(watch_disk(disk, disk.files)) as events:
+        async with contextlib.aclosing(watch_disk(disk)) as events:
             async for event in events:
                 if event is WatchEvent.RECOMPILED:
                     break

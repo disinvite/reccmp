@@ -306,7 +306,7 @@ class TargetWatcher:
         session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
         return session.run(streams)
 
-    async def _raw_events(self) -> AsyncIterator[WatchEvent]:
+    async def raw_events(self) -> AsyncIterator[WatchEvent]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
             try:
@@ -323,7 +323,7 @@ class TargetWatcher:
                     yield event
 
     async def events(self) -> AsyncIterator[WatchEvent]:
-        async for raw in self._raw_events():
+        async for raw in self.raw_events():
             event = self.tracker.step(raw)
             if event is not None:
                 yield event

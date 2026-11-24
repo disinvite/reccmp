@@ -125,9 +125,7 @@ def watch_streams(files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
             if path not in source_dirs and is_file_c_like(path)
         }
     )
-    streams = []
-    if listed:
-        streams.append(watch_files(listed))
+    streams = [watch_files(listed)]
     if source_dirs:
         streams.append(watch_changes(source_dirs, is_file_c_like, recursive=True))
     return streams
@@ -158,20 +156,3 @@ async def wait_for_files(files: TargetFiles, retry_seconds: float):
         await asyncio.sleep(retry_seconds)
         if [mtime(path) for path in files.ymls] != ymls:
             return
-
-
-class DiskWatch:
-    """The watcher asks the disk through here,
-    so tests can swap a script in clear."""
-
-    def streams(self, files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
-        return watch_streams(files)
-
-    def presence(self, paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
-        return watch_presence(paths)
-
-    def is_stale(self, files: TargetFiles) -> bool:
-        return is_stale(files)
-
-    async def wait_for_files(self, files: TargetFiles, retry_seconds: float):
-        await wait_for_files(files, retry_seconds)

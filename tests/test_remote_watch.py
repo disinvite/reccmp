@@ -2,12 +2,11 @@
 
 import asyncio
 import contextlib
-import dataclasses
 import os
 import selectors
 import shutil
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 import pytest
 from reccmp.project.common import (
@@ -70,26 +69,10 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         return future
 
 
-def track(*events: WatchEvent, stale: bool = False) -> list[WatchEvent]:
+def track(*events: WatchEvent) -> list[WatchEvent]:
     tracker = BuildTracker()
-    if stale:
-        events = (WatchEvent.CODE_CHANGED, *events)
     passed = [tracker.step(event) for event in events]
     return [event for event in passed if event is not None]
-
-
-def test_recompile():
-    """A written artifact followed by a recompile reports only the recompile."""
-    assert track(WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED) == [
-        WatchEvent.RECOMPILED
-    ]
-
-
-def test_code_change_then_recompile():
-    """A recompile after a code change is reported after the code change."""
-    assert track(
-        WatchEvent.CODE_CHANGED, WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED
-    ) == [WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED]
 
 
 def test_code_change_during_cooldown_drops_recompile():
@@ -97,16 +80,6 @@ def test_code_change_during_cooldown_drops_recompile():
     assert track(
         WatchEvent.ARTIFACT_CHANGED, WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED
     ) == [WatchEvent.CODE_CHANGED]
-
-
-def test_stale_at_startup_is_a_code_change():
-    """A build that is stale at startup is reported as a code change."""
-    assert track(stale=True) == [WatchEvent.CODE_CHANGED]
-
-
-def test_data_change():
-    """A data change on a ready build is reported."""
-    assert track(WatchEvent.DATA_CHANGED) == [WatchEvent.DATA_CHANGED]
 
 
 def test_data_change_while_stale_is_dropped():
@@ -270,16 +243,18 @@ def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
 
 
-PROJECT_YML = f"""\
+def project_yml(source_root: str) -> str:
+    return f"""\
 targets:
   ISLE:
     filename: ISLE.EXE
-    source-root: src
+    source-root: {source_root}
     data-sources:
       - isle.csv
     hash:
       sha256: {LEGO1_SHA256}
 """
+
 
 USER_YML = """\
 targets:
@@ -304,65 +279,57 @@ def write_build_yml(disk: DiskTarget, text: str):
     (disk.exe.parent / RECCMP_BUILD_CONFIG).write_text(text)
 
 
-def make_watcher(disk: DiskTarget) -> TargetWatcher:
+def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
     """The ymls are written to disk first,
     then loaded as the daemon would at start."""
-    (disk.csv.parent / RECCMP_PROJECT_CONFIG).write_text(PROJECT_YML)
+    (disk.csv.parent / RECCMP_PROJECT_CONFIG).write_text(project_yml(source_root))
     (disk.csv.parent / RECCMP_USER_CONFIG).write_text(USER_YML)
     write_build_yml(disk, build_yml(disk))
     project = RecCmpProject.from_directory(disk.exe.parent, alert=False)
     return TargetWatcher(project, project.get("ISLE"))
 
 
-def reloads(disk: DiskTarget, *build_ymls: str) -> list[WatchEvent | None]:
-    """Each text is written to the build yml before one reload."""
-    watcher = make_watcher(disk)
-    results = []
-    for text in build_ymls:
-        write_build_yml(disk, text)
-        results.append(watcher.reload())
-    return results
+class Events:
+    """The watcher always has a request for its next event in flight,
+    so the scenario's file changes land while the watches are running."""
+
+    def __init__(self, stream: AsyncIterator[WatchEvent]):
+        self.stream = stream
+        self.pending = asyncio.ensure_future(anext(stream))
+
+    async def ready(self):
+        # The fake clock moves on only once the loop is idle,
+        # so the watches are in place before the scenario goes on.
+        # A restart after CONFIG_CHANGED waits on the old watch threads
+        # and is not idle-safe: wait for the next event before writing files.
+        await asyncio.sleep(0.1)
+
+    async def next(self) -> WatchEvent:
+        event = await self.pending
+        self.pending = asyncio.ensure_future(anext(self.stream))
+        await self.ready()
+        return event
+
+    async def close(self):
+        self.pending.cancel()
+        with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+            await self.pending
 
 
-def test_yml_rewrite_with_same_config(disk: DiskTarget):
-    """Rewriting the build yml with the same content is not a config change."""
-    assert reloads(disk, build_yml(disk)) == [None]
+Scenario = Callable[[Events], Awaitable[None]]
 
 
-def test_changed_target_is_a_config_change(disk: DiskTarget):
-    """Pointing the build yml at a different exe is a config change."""
-    assert reloads(disk, build_yml(disk, "ISLE2.EXE")) == [WatchEvent.CONFIG_CHANGED]
-
-
-def test_invalid_config_is_a_failure(disk: DiskTarget):
-    """A build yml that does not parse is a config failure."""
-    assert reloads(disk, INVALID_YML) == [WatchEvent.CONFIG_FAILED]
-
-
-def test_fixed_config_is_a_config_change(disk: DiskTarget):
-    """Restoring a broken build yml to the same target is a config change."""
-    assert reloads(disk, INVALID_YML, build_yml(disk)) == [
-        WatchEvent.CONFIG_FAILED,
-        WatchEvent.CONFIG_CHANGED,
-    ]
-
-
-def watch_events(
-    watcher: TargetWatcher, *actions: Callable[[], None] | None
-) -> list[WatchEvent]:
-    """Each action runs while the watcher waits for its next event,
-    and the event that follows is returned for it."""
+def run_scenario(watcher: TargetWatcher, scenario: Scenario):
+    """Runs the scenario against the watcher's events on the fake clock."""
 
     async def run():
-        events = []
         async with contextlib.aclosing(watcher.events()) as stream:
-            for action in actions:
-                pending = asyncio.ensure_future(anext(stream))
-                await asyncio.sleep(0.1)
-                if action is not None:
-                    action()
-                events.append(await pending)
-        return events
+            events = Events(stream)
+            try:
+                await events.ready()
+                await scenario(events)
+            finally:
+                await events.close()
 
     async def guarded():
         # The fake clock would fire a wait_for timeout at once,
@@ -374,63 +341,149 @@ def watch_events(
         )
         timer.start()
         try:
-            return await run()
+            await run()
         finally:
             timer.cancel()
 
     with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
-        return runner.run(guarded())
+        runner.run(guarded())
+
+
+def rebuild(disk: DiskTarget):
+    disk.exe.write_text("built")
+    disk.pdb.write_text("built")
+
+
+def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
+    """Code newer than the build when the watcher starts is a code change."""
+    disk.set_mtime(disk.exe, 1000)
+    disk.set_mtime(disk.pdb, 1000)
+    disk.set_mtime(disk.code, 2000)
+
+    async def scenario(events: Events):
+        assert await events.next() is WatchEvent.CODE_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_rebuild_is_a_recompile(disk: DiskTarget):
+    """Writing the exe and pdb of an up-to-date build is a recompile."""
+
+    async def scenario(events: Events):
+        rebuild(disk)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_code_change_then_rebuild(disk: DiskTarget):
+    """A code edit followed by a rebuild is a code change and then a recompile."""
+
+    async def scenario(events: Events):
+        disk.code.write_text("changed")
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        rebuild(disk)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_data_change(disk: DiskTarget):
+    """Writing the csv of an up-to-date build is a data change."""
+
+    async def scenario(events: Events):
+        disk.csv.write_text("changed")
+        assert await events.next() is WatchEvent.DATA_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
+    """Replacing a source file listed in the project yml by rename is a code change."""
+    saved = disk.code.with_suffix(".tmp")
+
+    async def scenario(events: Events):
+        saved.write_text("changed")
+        os.replace(saved, disk.code)
+        assert await events.next() is WatchEvent.CODE_CHANGED
+
+    run_scenario(make_watcher(disk, "src/isle.cpp"), scenario)
+
+
+def test_yml_rewrite_with_same_config(disk: DiskTarget):
+    """Rewriting the build yml with the same content is not a config change."""
+
+    async def scenario(events: Events):
+        write_build_yml(disk, build_yml(disk))
+        disk.csv.write_text("changed")
+        assert await events.next() is WatchEvent.DATA_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_changed_target_is_a_config_change(disk: DiskTarget):
+    """Pointing the build yml at a different exe is a config change."""
+
+    async def scenario(events: Events):
+        write_build_yml(disk, build_yml(disk, "ISLE2.EXE"))
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_invalid_config_is_a_failure(disk: DiskTarget):
+    """A build yml that does not parse is a config failure."""
+
+    async def scenario(events: Events):
+        write_build_yml(disk, INVALID_YML)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+
+    run_scenario(make_watcher(disk), scenario)
+
+
+def test_fixed_config_is_a_config_change(disk: DiskTarget):
+    """Restoring a broken build yml to the same target is a config change."""
+
+    async def scenario(events: Events):
+        write_build_yml(disk, INVALID_YML)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+        write_build_yml(disk, build_yml(disk))
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
 
 
 def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
     """A deleted source directory is a config failure until it is created again."""
     src = disk.code.parent
-    assert watch_events(make_watcher(disk), lambda: shutil.rmtree(src), src.mkdir) == [
-        WatchEvent.CONFIG_FAILED,
-        WatchEvent.CONFIG_CHANGED,
-    ]
+
+    async def scenario(events: Events):
+        shutil.rmtree(src)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+        src.mkdir()
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+
+    run_scenario(make_watcher(disk), scenario)
 
 
 def test_config_change_watches_new_binaries(disk: DiskTarget):
     """After the build yml names a new exe, writing that exe and the pdb is a recompile."""
     new_exe = disk.exe.with_name("ISLE2.EXE")
 
-    def build():
-        new_exe.write_text("changed")
-        disk.pdb.write_text("changed")
+    async def scenario(events: Events):
+        write_build_yml(disk, build_yml(disk, new_exe.name))
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        # The new exe is not built yet, so the restart finds the build stale.
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        new_exe.write_text("built")
+        disk.pdb.write_text("built")
+        assert await events.next() is WatchEvent.RECOMPILED
 
-    assert watch_events(
-        make_watcher(disk),
-        lambda: write_build_yml(disk, build_yml(disk, new_exe.name)),
-        None,
-        build,
-    ) == [WatchEvent.CONFIG_CHANGED, WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED]
+    run_scenario(make_watcher(disk), scenario)
 
 
 def watch_disk(disk: DiskTarget, files: TargetFiles) -> AsyncIterator[WatchEvent]:
     return make_watcher(disk)._watch(files, watch_streams(files))
-
-
-def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
-    """Replacing a watched source file by rename is a code change."""
-    saved = disk.code.with_suffix(".tmp")
-
-    def replace():
-        saved.write_text("changed")
-        os.replace(saved, disk.code)
-
-    files = dataclasses.replace(disk.files, sources=(disk.code,))
-    assert first_after(watch_disk(disk, files), replace) is WatchEvent.CODE_CHANGED
-
-
-def test_written_exe_is_an_artifact_change(disk: DiskTarget):
-    """Writing the exe is an artifact change."""
-    assert (
-        first_after(
-            watch_disk(disk, disk.files), lambda: disk.exe.write_text("changed")
-        )
-        is WatchEvent.ARTIFACT_CHANGED
-    )
 
 
 def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):

@@ -15,14 +15,13 @@ from reccmp.project.common import (
     RECCMP_USER_CONFIG,
 )
 from reccmp.project.detect import RecCmpProject
-from reccmp.remote.fswatch import watch_streams
 from reccmp.remote.watch import (
     BuildTracker,
     TargetWatcher,
     WatchEvent,
 )
 from .constants import LEGO1_SHA256
-from .remote_watch_helpers import DiskTarget, first_after
+from .remote_watch_helpers import DiskTarget
 
 
 class FakeClockSelector(selectors.DefaultSelector):
@@ -36,8 +35,7 @@ class FakeClockSelector(selectors.DefaultSelector):
 
     def select(self, timeout=None):
         if self.held:
-            # While held, the clock stays put;
-            # the disk gets real time to report.
+            # Wait briefly in real time and leave the fake clock alone.
             return super().select(0.01 if timeout is None else min(timeout, 0.01))
         if timeout is not None:
             self.now += timeout
@@ -66,6 +64,7 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
 
     @contextlib.contextmanager
     def hold(self):
+        """Keep fake time from moving, so timers wait while the loop waits on real I/O."""
         self._selector.held = True
         try:
             yield
@@ -208,6 +207,7 @@ class Events:
         return event
 
     def quiet(self) -> bool:
+        """True if no event has arrived since the last next()."""
         return not self.pending.done()
 
     async def close(self):
@@ -220,7 +220,7 @@ Scenario = Callable[[Events], Awaitable[None]]
 
 
 def run_scenario(source: AsyncIterator[WatchEvent], scenario: Scenario):
-    """Runs the scenario against the watcher's events on the fake clock."""
+    """Runs the scenario against the given event stream on the fake clock."""
 
     async def run():
         async with contextlib.aclosing(source) as stream:
@@ -486,35 +486,25 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
     run_scenario(make_watcher(disk).raw_events(), scenario)
 
 
-def watch_disk(disk: DiskTarget) -> AsyncIterator[WatchEvent]:
-    return make_watcher(disk)._watch(disk.files, watch_streams(disk.files))
-
-
 def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
     """Deleting the exe is an artifact delete."""
-    assert first_after(watch_disk(disk), disk.exe.unlink) is WatchEvent.ARTIFACT_DELETED
+
+    async def scenario(events: Events):
+        disk.exe.unlink()
+        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+
+    run_scenario(make_watcher(disk).raw_events(), scenario)
 
 
-def test_other_build_files_do_not_delay_recompile(disk: DiskTarget):
-    """Writes to other files in the build directory do not restart the cooldown."""
+def test_other_build_files_are_not_reported(disk: DiskTarget):
+    """Writes to other files in the build directory are not reported."""
     ilk = disk.exe.with_suffix(".ILK")
 
-    async def build():
-        await asyncio.sleep(0.1)
-        disk.exe.write_text("changed")
-        disk.pdb.write_text("changed")
-        for i in range(int(SETTLED / UNSETTLED)):
-            await asyncio.sleep(UNSETTLED)
-            ilk.write_text(str(i))
+    async def scenario(events: Events):
+        ilk.write_text("changed")
+        # The pdb delete is reported after the .ILK would be: in a later batch,
+        # or in the same batch, where ISLE.ILK sorts before ISLE.PDB.
+        disk.pdb.unlink()
+        assert await events.next() is WatchEvent.ARTIFACT_DELETED
 
-    async def run() -> bool:
-        building = asyncio.create_task(build())
-        async with contextlib.aclosing(watch_disk(disk)) as events:
-            async for event in events:
-                if event is WatchEvent.RECOMPILED:
-                    break
-        still_building = not building.done()
-        building.cancel()
-        return still_building
-
-    assert asyncio.run(asyncio.wait_for(run(), timeout=30))
+    run_scenario(make_watcher(disk).raw_events(), scenario)

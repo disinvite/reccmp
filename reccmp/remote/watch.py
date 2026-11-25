@@ -58,8 +58,9 @@ from reccmp.remote.fswatch import (
     TargetFiles,
     is_stale,
     wait_for_files,
+    watch_listed,
     watch_presence,
-    watch_streams,
+    watch_source_dirs,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,10 +144,12 @@ class WatchSession:
     async def run(self) -> AsyncIterator[WatchEvent]:
         """It names each path the streams report,
         and ends when config's changed its sort."""
-        streams = watch_streams(self.files)
+        listed = watch_listed(self.files)
+        source_dirs = watch_source_dirs(self.files)
         producers = [
             self.watch_artifacts(),
-            *(self.forward(stream) for stream in streams),
+            self.forward(listed),
+            self.forward(source_dirs),
         ]
         # A timeout leaves the wait in place;
         # to cancel it would close the stream for good.

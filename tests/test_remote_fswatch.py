@@ -4,7 +4,12 @@ import dataclasses
 import shutil
 from pathlib import Path
 import pytest
-from reccmp.remote.fswatch import is_stale, watch_files, watch_streams
+from reccmp.remote.fswatch import (
+    is_stale,
+    watch_files,
+    watch_listed,
+    watch_source_dirs,
+)
 from .remote_watch_helpers import DiskTarget, first_after
 
 
@@ -40,7 +45,7 @@ def test_build_newer_than_code_is_not_stale(disk: DiskTarget):
 
 
 def test_source_write_is_reported(disk: DiskTarget):
-    _, sources = watch_streams(disk.files)
+    sources = watch_source_dirs(disk.files)
     assert first_after(sources, lambda: disk.code.write_text("changed")) == {disk.code}
 
 
@@ -53,7 +58,7 @@ def test_missing_directory_raises(disk: DiskTarget):
 def test_missing_source_file_raises(disk: DiskTarget):
     disk.code.unlink()
     with pytest.raises(FileNotFoundError):
-        watch_streams(dataclasses.replace(disk.files, sources=(disk.code,)))
+        watch_listed(dataclasses.replace(disk.files, sources=(disk.code,)))
 
 
 def test_deleted_directory_raises(disk: DiskTarget):

@@ -107,28 +107,28 @@ async def watch_presence(paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
             yield path, path.exists()
 
 
-def watch_streams(files: TargetFiles) -> list[AsyncIterator[set[Path]]]:
-    """The source dirs are watched deep;
-    the listed files, one level keep."""
+# The source dirs are watched deep;
+# the listed files, one level keep.
+
+
+def watch_listed(files: TargetFiles) -> AsyncIterator[set[Path]]:
     for path in files.sources:
         if not path.exists():
             raise FileNotFoundError(f"Source path does not exist: {path}")
     # A file that's listed lives in its dir,
     # so saves that swap it won't lose the bit.
-    source_dirs = tuple(path for path in files.sources if path.is_dir())
-    listed = (
-        files.csvs
-        | files.ymls
-        | {
-            path
-            for path in files.sources
-            if path not in source_dirs and is_file_c_like(path)
-        }
+    listed = {
+        path for path in files.sources if not path.is_dir() and is_file_c_like(path)
+    }
+    return watch_files(files.csvs | files.ymls | listed)
+
+
+def watch_source_dirs(files: TargetFiles) -> AsyncIterator[set[Path]]:
+    return watch_changes(
+        tuple(path for path in files.sources if path.is_dir()),
+        is_file_c_like,
+        recursive=True,
     )
-    streams = [watch_files(listed)]
-    if source_dirs:
-        streams.append(watch_changes(source_dirs, is_file_c_like, recursive=True))
-    return streams
 
 
 def mtime(path: Path) -> int:

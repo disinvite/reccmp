@@ -35,35 +35,33 @@ FAKE_TIME_LIMIT = 600.0
 """CLAUDE SAYS: Fake seconds a scenario may run before it counts as hung."""
 
 
-class FakeClockSelector(selectors.DefaultSelector):
-    """It never blocks to wait in vain,
-    it moves the clock and goes again."""
-
-    def __init__(self):
-        super().__init__()
-        self.now = 0.0
-
-    def select(self, timeout=None):
-        if timeout is not None:
-            self.now += timeout
-        # CLAUDE SAYS: The polling watches always have a timer pending,
-        # so a scenario that hangs shows up as fake time running on.
-        if self.now > FAKE_TIME_LIMIT:
-            raise RuntimeError("Scenario did not finish within the fake time limit")
-        return super().select(0)
-
-
 class FakeClockLoop(asyncio.SelectorEventLoop):
     """The timers fire in proper turn,
     no real seconds pass or burn."""
 
     def __init__(self):
-        super().__init__(FakeClockSelector())
+        self.now = 0.0
+        selector = selectors.DefaultSelector()
+        real_select = selector.select
+
+        def select(timeout=None):
+            """It never blocks to wait in vain,
+            it moves the clock and goes again."""
+            if timeout is not None:
+                self.now += timeout
+            # CLAUDE SAYS: The polling watches always have a timer pending,
+            # so a scenario that hangs shows up as fake time running on.
+            if self.now > FAKE_TIME_LIMIT:
+                raise RuntimeError("Scenario did not finish within the fake time limit")
+            return real_select(0)
+
+        selector.select = select
+        super().__init__(selector)
 
     def time(self) -> float:
-        return self._selector.now
+        return self.now
 
-    def run_in_executor(self, executor, func, *args):
+    def run_in_executor(self, _, func, *args):
         """No thread will run the call;
         the clock would leap ahead of all."""
         future = self.create_future()

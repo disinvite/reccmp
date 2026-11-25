@@ -1,13 +1,21 @@
 """Tests for how the daemon responds to file watcher events."""
 
 import asyncio
-import textwrap
 from pathlib import Path
 import pytest
 from reccmp.project.common import (
     RECCMP_BUILD_CONFIG,
     RECCMP_PROJECT_CONFIG,
     RECCMP_USER_CONFIG,
+)
+from reccmp.project.config import (
+    BuildFile,
+    BuildFileTarget,
+    Hash,
+    ProjectFile,
+    ProjectFileTarget,
+    UserFile,
+    UserFileTarget,
 )
 from reccmp.project.detect import RecCmpProject
 from reccmp.remote.server import DaemonApp, DaemonStatus
@@ -22,26 +30,22 @@ def fixture_daemon(tmp_path: Path) -> DaemonApp:
     build_path = tmp_path / "build"
     build_path.mkdir()
 
-    (project_path / RECCMP_PROJECT_CONFIG).write_text(textwrap.dedent(f"""\
-        targets:
-          ISLE:
-            filename: ISLE.EXE
-            source-root: src
-            hash:
-              sha256: {LEGO1_SHA256}
-        """))
-    (project_path / RECCMP_USER_CONFIG).write_text(textwrap.dedent("""\
-        targets:
-          ISLE:
-            path: ISLE.EXE
-        """))
-    (build_path / RECCMP_BUILD_CONFIG).write_text(textwrap.dedent(f"""\
-        project: {project_path}
-        targets:
-          ISLE:
-            path: ISLE.EXE
-            pdb: ISLE.PDB
-        """))
+    ProjectFile(
+        targets={
+            "ISLE": ProjectFileTarget(
+                filename="ISLE.EXE",
+                source_root=(Path("src"),),
+                hash=Hash(sha256=LEGO1_SHA256),
+            )
+        }
+    ).write_file(project_path / RECCMP_PROJECT_CONFIG)
+    UserFile(targets={"ISLE": UserFileTarget(path=Path("ISLE.EXE"))}).write_file(
+        project_path / RECCMP_USER_CONFIG
+    )
+    BuildFile(
+        project=project_path,
+        targets={"ISLE": BuildFileTarget(path=Path("ISLE.EXE"), pdb=Path("ISLE.PDB"))},
+    ).write_file(build_path / RECCMP_BUILD_CONFIG)
 
     project = RecCmpProject.from_directory(build_path, alert=False)
     return DaemonApp(project, project.get("ISLE"))

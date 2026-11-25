@@ -14,6 +14,15 @@ from reccmp.project.common import (
     RECCMP_PROJECT_CONFIG,
     RECCMP_USER_CONFIG,
 )
+from reccmp.project.config import (
+    BuildFile,
+    BuildFileTarget,
+    Hash,
+    ProjectFile,
+    ProjectFileTarget,
+    UserFile,
+    UserFileTarget,
+)
 from reccmp.project.detect import RecCmpProject
 from reccmp.remote.watch import (
     TargetWatcher,
@@ -83,48 +92,37 @@ def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
 
 
-def project_yml(source_root: str) -> str:
-    return f"""\
-targets:
-  ISLE:
-    filename: ISLE.EXE
-    source-root: {source_root}
-    data-sources:
-      - isle.csv
-    hash:
-      sha256: {LEGO1_SHA256}
-"""
-
-
-USER_YML = """\
-targets:
-  ISLE:
-    path: ../ISLE.EXE
-"""
-
 INVALID_YML = "targets: ["
 
 
-def build_yml(disk: DiskTarget, exe: str = "ISLE.EXE") -> str:
-    return f"""\
-project: {disk.csv.parent}
-targets:
-  ISLE:
-    path: {exe}
-    pdb: ISLE.PDB
-"""
+def build_yml_path(disk: DiskTarget) -> Path:
+    return disk.exe.parent / RECCMP_BUILD_CONFIG
 
 
-def write_build_yml(disk: DiskTarget, text: str):
-    (disk.exe.parent / RECCMP_BUILD_CONFIG).write_text(text)
+def write_build_yml(disk: DiskTarget, exe: str = "ISLE.EXE"):
+    BuildFile(
+        project=disk.csv.parent,
+        targets={"ISLE": BuildFileTarget(path=Path(exe), pdb=Path("ISLE.PDB"))},
+    ).write_file(build_yml_path(disk))
 
 
 def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
     """The ymls are written to disk first,
     then loaded as the daemon would at start."""
-    (disk.csv.parent / RECCMP_PROJECT_CONFIG).write_text(project_yml(source_root))
-    (disk.csv.parent / RECCMP_USER_CONFIG).write_text(USER_YML)
-    write_build_yml(disk, build_yml(disk))
+    ProjectFile(
+        targets={
+            "ISLE": ProjectFileTarget(
+                filename="ISLE.EXE",
+                source_root=(Path(source_root),),
+                data_sources=[Path("isle.csv")],
+                hash=Hash(sha256=LEGO1_SHA256),
+            )
+        }
+    ).write_file(disk.csv.parent / RECCMP_PROJECT_CONFIG)
+    UserFile(targets={"ISLE": UserFileTarget(path=Path("../ISLE.EXE"))}).write_file(
+        disk.csv.parent / RECCMP_USER_CONFIG
+    )
+    write_build_yml(disk)
     project = RecCmpProject.from_directory(disk.exe.parent, alert=False)
     return TargetWatcher(project, project.get("ISLE"))
 
@@ -339,7 +337,7 @@ def test_yml_rewrite_with_same_config(disk: DiskTarget):
     """Rewriting the build yml with the same content is not a config change."""
 
     async def scenario(events: Events):
-        write_build_yml(disk, build_yml(disk))
+        write_build_yml(disk)
         disk.csv.write_text("changed")
         assert await events.next() is WatchEvent.DATA_CHANGED
 
@@ -350,7 +348,7 @@ def test_changed_target_is_a_config_change(disk: DiskTarget):
     """Pointing the build yml at a different exe is a config change."""
 
     async def scenario(events: Events):
-        write_build_yml(disk, build_yml(disk, "ISLE2.EXE"))
+        write_build_yml(disk, "ISLE2.EXE")
         assert await events.next() is WatchEvent.CONFIG_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -360,7 +358,7 @@ def test_invalid_config_is_a_failure(disk: DiskTarget):
     """A build yml that does not parse is a config failure."""
 
     async def scenario(events: Events):
-        write_build_yml(disk, INVALID_YML)
+        build_yml_path(disk).write_text(INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -370,9 +368,9 @@ def test_fixed_config_is_a_config_change(disk: DiskTarget):
     """Restoring a broken build yml to the same target is a config change."""
 
     async def scenario(events: Events):
-        write_build_yml(disk, INVALID_YML)
+        build_yml_path(disk).write_text(INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
-        write_build_yml(disk, build_yml(disk))
+        write_build_yml(disk)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -397,7 +395,7 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
     new_exe = disk.exe.with_name("ISLE2.EXE")
 
     async def scenario(events: Events):
-        write_build_yml(disk, build_yml(disk, new_exe.name))
+        write_build_yml(disk, new_exe.name)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
         # The new exe is not built yet, so the restart finds the build stale.
         assert await events.next() is WatchEvent.CODE_CHANGED
@@ -417,7 +415,7 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
     new_exe.write_text("built")
 
     async def scenario(events: Events):
-        write_build_yml(disk, build_yml(disk, new_exe.name))
+        write_build_yml(disk, new_exe.name)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
         new_exe.write_text("rebuilt")
         disk.pdb.write_text("rebuilt")

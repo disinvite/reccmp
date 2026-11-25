@@ -143,9 +143,10 @@ class WatchSession:
     async def run(self) -> AsyncIterator[WatchEvent]:
         """It names each path the streams report,
         and ends when config's changed its sort."""
+        streams = watch_streams(self.files)
         producers = [
             self.watch_artifacts(),
-            *(self.forward(stream) for stream in watch_streams(self.files)),
+            *(self.forward(stream) for stream in streams),
         ]
         # A timeout leaves the wait in place;
         # to cancel it would close the stream for good.

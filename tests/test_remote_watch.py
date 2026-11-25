@@ -304,6 +304,21 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
     run_scenario(make_watcher(disk).events(), scenario)
 
 
+def test_relink_in_one_batch_is_a_recompile(disk: DiskTarget):
+    """CLAUDE SAYS: An exe deleted and rewritten in the same batch as the pdb write
+    is a recompile with no artifact delete."""
+
+    async def scenario(events: Events):
+        disk.exe.unlink()
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        await asyncio.sleep(SETTLED)
+        assert await events.next() is WatchEvent.RECOMPILED
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
 def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
     """Code newer than the build when the watcher starts is a code change."""
     disk.set_mtime(disk.exe, 1000)
@@ -406,6 +421,22 @@ def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
         src.mkdir()
         await asyncio.sleep(TargetWatcher.RETRY_MS / 1000)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
+def test_yml_change_ends_wait_for_missing_path(disk: DiskTarget):
+    """CLAUDE SAYS: A yml change while a watched path is missing reloads the config
+    without waiting for the path to return."""
+
+    async def scenario(events: Events):
+        shutil.rmtree(disk.code.parent)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+        write_build_yml(disk, "ISLE2.EXE")
+        await asyncio.sleep(TargetWatcher.RETRY_MS / 1000)
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        # CLAUDE SAYS: The path is still missing, so the new session fails too.
+        assert await events.next() is WatchEvent.CONFIG_FAILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 

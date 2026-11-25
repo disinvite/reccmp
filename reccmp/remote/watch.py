@@ -43,20 +43,7 @@ inputs:
     4. watching code paths/files
         emit CODE_CHANGED
 
-state machine (no timing; inputs in, events out):
-    build state: READY | STALE | PENDING | FAILED
-
-    FAILED: drop everything except CONFIG_CHANGED and CONFIG_FAILED
-
-    CODE_CHANGED       -> STALE; pass through
-    ARTIFACT_CHANGED   -> PENDING; internal
-    ARTIFACT_DELETED   -> PENDING; internal
-    RECOMPILED         PENDING: -> READY; pass through
-                       STALE: drop
-    DATA_CHANGED       READY: pass through
-                       otherwise: drop
-    CONFIG_CHANGED     -> READY or STALE from 0; pass through
-    CONFIG_FAILED      -> FAILED; pass through; error stays on watcher.error
+The build state machine that consumes these events is in reccmp.remote.server.
 """
 
 import asyncio
@@ -86,56 +73,6 @@ class WatchEvent(enum.Enum):
     CONFIG_FAILED = enum.auto()
     ARTIFACT_CHANGED = enum.auto()
     ARTIFACT_DELETED = enum.auto()
-
-
-class BuildState(enum.Enum):
-    READY = enum.auto()
-    STALE = enum.auto()
-    PENDING = enum.auto()
-    FAILED = enum.auto()
-
-
-class BuildTracker:
-    """It hears the inputs, one by one,
-    and passes what the server needs done."""
-
-    state: BuildState
-
-    def __init__(self):
-        self.state = BuildState.READY
-
-    @property
-    def stale(self) -> bool:
-        return self.state in (BuildState.STALE, BuildState.PENDING)
-
-    def clear_stale(self):
-        if self.state is BuildState.STALE:
-            self.state = BuildState.READY
-
-    def step(self, event: WatchEvent) -> WatchEvent | None:
-        """Returns the event for the server, or None if it is dropped."""
-        if event is WatchEvent.CONFIG_FAILED:
-            self.state = BuildState.FAILED
-        elif event is WatchEvent.CONFIG_CHANGED:
-            # When watches start on paths anew,
-            # the mtimes say if code is new.
-            self.state = BuildState.READY
-        elif self.state is BuildState.FAILED:
-            return None
-        elif event is WatchEvent.CODE_CHANGED:
-            self.state = BuildState.STALE
-        elif event in (WatchEvent.ARTIFACT_CHANGED, WatchEvent.ARTIFACT_DELETED):
-            self.state = BuildState.PENDING
-            return None
-        elif event is WatchEvent.RECOMPILED:
-            # The exe and pdb only count as a recompile if written after the code change.
-            if self.state is not BuildState.PENDING:
-                return None
-            self.state = BuildState.READY
-        elif event is WatchEvent.DATA_CHANGED and self.state is not BuildState.READY:
-            # Wait for the recompile if there is one coming. The reset will read the data then.
-            return None
-        return event
 
 
 async def watch_artifacts(

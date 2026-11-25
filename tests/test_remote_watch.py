@@ -16,7 +16,6 @@ from reccmp.project.common import (
 )
 from reccmp.project.detect import RecCmpProject
 from reccmp.remote.watch import (
-    BuildTracker,
     TargetWatcher,
     WatchEvent,
 )
@@ -70,62 +69,6 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
             yield
         finally:
             self._selector.held = False
-
-
-def track(*events: WatchEvent) -> list[WatchEvent]:
-    tracker = BuildTracker()
-    passed = [tracker.step(event) for event in events]
-    return [event for event in passed if event is not None]
-
-
-def test_code_change_during_cooldown_drops_recompile():
-    """A code change after the artifacts are written makes the recompile out of date."""
-    assert track(
-        WatchEvent.ARTIFACT_CHANGED, WatchEvent.CODE_CHANGED, WatchEvent.RECOMPILED
-    ) == [WatchEvent.CODE_CHANGED]
-
-
-def test_data_change_while_stale_is_dropped():
-    """A data change is dropped while the build is stale."""
-    assert track(WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED) == [
-        WatchEvent.CODE_CHANGED
-    ]
-
-
-def test_data_change_during_cooldown_is_dropped():
-    """A data change is dropped while a recompile is pending."""
-    assert track(WatchEvent.ARTIFACT_CHANGED, WatchEvent.DATA_CHANGED) == []
-
-
-def test_data_change_after_deleted_artifact_waits_for_recompile():
-    """Data changes are dropped from an artifact delete until the next recompile."""
-    assert track(
-        WatchEvent.ARTIFACT_DELETED,
-        WatchEvent.DATA_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-        WatchEvent.DATA_CHANGED,
-    ) == [WatchEvent.RECOMPILED, WatchEvent.DATA_CHANGED]
-
-
-def test_config_failure_drops_other_events():
-    """After a config failure only config events are reported."""
-    assert track(
-        WatchEvent.CONFIG_FAILED,
-        WatchEvent.CODE_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-        WatchEvent.DATA_CHANGED,
-        WatchEvent.CONFIG_CHANGED,
-    ) == [WatchEvent.CONFIG_FAILED, WatchEvent.CONFIG_CHANGED]
-
-
-def test_config_change_takes_staleness_from_restart():
-    """A config change clears the stale state left by an earlier code change."""
-    tracker = BuildTracker()
-    tracker.step(WatchEvent.CODE_CHANGED)
-    tracker.step(WatchEvent.CONFIG_CHANGED)
-    assert tracker.step(WatchEvent.DATA_CHANGED) is WatchEvent.DATA_CHANGED
 
 
 SETTLED = 4 * TargetWatcher.SETTLE_MS / 1000

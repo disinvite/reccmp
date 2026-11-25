@@ -1,5 +1,6 @@
 """Tests for how the daemon responds to file watcher events."""
 
+import asyncio
 import textwrap
 from pathlib import Path
 import pytest
@@ -43,9 +44,71 @@ def fixture_daemon(tmp_path: Path) -> DaemonApp:
         """))
 
     project = RecCmpProject.from_directory(build_path, alert=False)
-    daemon = DaemonApp(project, project.get("ISLE"))
-    daemon.status = DaemonStatus.READY
-    return daemon
+    return DaemonApp(project, project.get("ISLE"))
+
+
+def handled(daemon: DaemonApp, *events: WatchEvent) -> list[WatchEvent]:
+    return [event for event in events if daemon.handle_watch_event(event)]
+
+
+def test_code_change_during_cooldown_drops_recompile(daemon: DaemonApp):
+    """A code change after the artifacts are written makes the recompile out of date."""
+    assert handled(
+        daemon,
+        WatchEvent.ARTIFACT_CHANGED,
+        WatchEvent.CODE_CHANGED,
+        WatchEvent.RECOMPILED,
+    ) == [WatchEvent.CODE_CHANGED]
+
+
+def test_data_change_while_stale_is_dropped(daemon: DaemonApp):
+    """A data change is dropped while the build is stale."""
+    assert handled(daemon, WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED) == [
+        WatchEvent.CODE_CHANGED
+    ]
+
+
+def test_data_change_during_cooldown_is_dropped(daemon: DaemonApp):
+    """A data change is dropped while a recompile is pending."""
+    assert handled(daemon, WatchEvent.ARTIFACT_CHANGED, WatchEvent.DATA_CHANGED) == []
+
+
+def test_data_change_after_deleted_artifact_waits_for_recompile(daemon: DaemonApp):
+    """Data changes are dropped from an artifact delete until the next recompile."""
+    assert handled(
+        daemon,
+        WatchEvent.ARTIFACT_DELETED,
+        WatchEvent.DATA_CHANGED,
+        WatchEvent.ARTIFACT_CHANGED,
+        WatchEvent.RECOMPILED,
+        WatchEvent.DATA_CHANGED,
+    ) == [WatchEvent.RECOMPILED, WatchEvent.DATA_CHANGED]
+
+
+def test_config_failure_drops_other_events(daemon: DaemonApp):
+    """After a config failure only config events are reported."""
+    assert handled(
+        daemon,
+        WatchEvent.CONFIG_FAILED,
+        WatchEvent.CODE_CHANGED,
+        WatchEvent.ARTIFACT_CHANGED,
+        WatchEvent.RECOMPILED,
+        WatchEvent.DATA_CHANGED,
+        WatchEvent.CONFIG_CHANGED,
+    ) == [WatchEvent.CONFIG_FAILED, WatchEvent.CONFIG_CHANGED]
+
+
+def test_config_change_takes_staleness_from_restart(daemon: DaemonApp):
+    """A config change clears the stale state left by an earlier code change."""
+    daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
+    daemon.handle_watch_event(WatchEvent.CONFIG_CHANGED)
+    assert daemon.handle_watch_event(WatchEvent.DATA_CHANGED)
+
+
+def test_artifact_write_makes_results_stale(daemon: DaemonApp):
+    """Results are stale while the exe and pdb are being written."""
+    daemon.handle_watch_event(WatchEvent.ARTIFACT_CHANGED)
+    assert daemon.status is DaemonStatus.STALE
 
 
 def test_code_change_makes_results_stale(daemon: DaemonApp):
@@ -56,6 +119,7 @@ def test_code_change_makes_results_stale(daemon: DaemonApp):
 
 def test_recompile_after_code_change_resets(daemon: DaemonApp):
     daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
+    daemon.handle_watch_event(WatchEvent.ARTIFACT_CHANGED)
     daemon.handle_watch_event(WatchEvent.RECOMPILED)
     assert daemon.reset_requested.is_set()
 
@@ -74,5 +138,26 @@ def test_config_change_resets(daemon: DaemonApp):
 def test_config_failure(daemon: DaemonApp):
     daemon.watcher.error = "Traceback"
     daemon.handle_watch_event(WatchEvent.CONFIG_FAILED)
+    assert daemon.status is DaemonStatus.FAILED
+    assert daemon.error == "Traceback"
+
+
+def test_config_failure_during_reset(daemon: DaemonApp):
+    """A config failure during a reset is still a failure after the reset finishes."""
+    daemon.watcher.error = "Traceback"
+    daemon.reset = lambda: daemon.handle_watch_event(WatchEvent.CONFIG_FAILED)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        daemon.request_reset()
+        worker = asyncio.create_task(daemon.reset_worker())
+        await asyncio.sleep(0)
+        # The executor has one thread, so this waits for the reset.
+        await loop.run_in_executor(daemon.executor, lambda: None)
+        await asyncio.sleep(0)
+        worker.cancel()
+        await worker
+
+    asyncio.run(scenario())
     assert daemon.status is DaemonStatus.FAILED
     assert daemon.error == "Traceback"

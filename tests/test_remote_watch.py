@@ -5,10 +5,10 @@ import contextlib
 import os
 import selectors
 import shutil
-import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 import pytest
+from watchfiles import Change
 from reccmp.project.common import (
     RECCMP_BUILD_CONFIG,
     RECCMP_PROJECT_CONFIG,
@@ -31,6 +31,9 @@ from reccmp.remote.watch import (
 from .constants import LEGO1_SHA256
 from .remote_watch_helpers import DiskTarget
 
+FAKE_TIME_LIMIT = 600.0
+"""CLAUDE SAYS: Fake seconds a scenario may run before it counts as hung."""
+
 
 class FakeClockSelector(selectors.DefaultSelector):
     """It never blocks to wait in vain,
@@ -39,14 +42,14 @@ class FakeClockSelector(selectors.DefaultSelector):
     def __init__(self):
         super().__init__()
         self.now = 0.0
-        self.held = False
 
     def select(self, timeout=None):
-        if self.held:
-            # Wait briefly in real time and leave the fake clock alone.
-            return super().select(0.01 if timeout is None else min(timeout, 0.01))
         if timeout is not None:
             self.now += timeout
+        # CLAUDE SAYS: The polling watches always have a timer pending,
+        # so a scenario that hangs shows up as fake time running on.
+        if self.now > FAKE_TIME_LIMIT:
+            raise RuntimeError("Scenario did not finish within the fake time limit")
         return super().select(0)
 
 
@@ -70,21 +73,53 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
             future.set_exception(e)
         return future
 
-    @contextlib.contextmanager
-    def hold(self):
-        """Keep fake time from moving, so timers wait while the loop waits on real I/O."""
-        self._selector.held = True
-        try:
-            yield
-        finally:
-            self._selector.held = False
-
 
 SETTLED = 4 * TargetWatcher.SETTLE_MS / 1000
 """Long enough for a cooldown to finish."""
 
 UNSETTLED = 0.6 * TargetWatcher.SETTLE_MS / 1000
 """Too short for a cooldown to finish, but two in a row are not."""
+
+
+POLL_SECONDS = 0.05
+"""CLAUDE SAYS: Fake seconds between scans of the watched directories."""
+
+
+def snapshot(
+    roots: tuple[Path, ...], recursive: bool
+) -> dict[Path, tuple[int, int, int]]:
+    found = {}
+    for root in roots:
+        if not root.exists():
+            # CLAUDE SAYS: fswatch's inode check reports the missing root.
+            continue
+        for path in root.rglob("*") if recursive else root.iterdir():
+            st = path.stat()
+            found[path] = (st.st_ino, st.st_size, st.st_mtime_ns)
+    return found
+
+
+async def polling_awatch(
+    *roots: Path, watch_filter, recursive: bool, yield_on_timeout: bool
+):
+    """CLAUDE SAYS: Stands in for watchfiles.awatch. It scans on the fake clock,
+    so the watch is in place as soon as the generator starts."""
+    assert yield_on_timeout
+    before = snapshot(roots, recursive)
+    while True:
+        await asyncio.sleep(POLL_SECONDS)
+        after = snapshot(roots, recursive)
+        yield {
+            (Change.modified, str(path))
+            for path in before.keys() | after.keys()
+            if before.get(path) != after.get(path) and watch_filter(None, str(path))
+        }
+        before = after
+
+
+@pytest.fixture(autouse=True)
+def fixture_polling_awatch(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("reccmp.remote.fswatch.awatch", polling_awatch)
 
 
 @pytest.fixture(name="disk")
@@ -141,8 +176,7 @@ class Events:
         await asyncio.sleep(0.1)
 
     async def next(self) -> WatchEvent:
-        with asyncio.get_running_loop().hold():
-            event = await self.pending
+        event = await self.pending
         self.pending = asyncio.ensure_future(anext(self.stream))
         await self.ready()
         return event
@@ -172,22 +206,8 @@ def run_scenario(source: AsyncIterator[WatchEvent], scenario: Scenario):
             finally:
                 await events.close()
 
-    async def guarded():
-        # The fake clock would fire a wait_for timeout at once,
-        # so a real timer cancels a watch that hangs.
-        task = asyncio.current_task()
-        assert task is not None
-        timer = threading.Timer(
-            30, asyncio.get_running_loop().call_soon_threadsafe, (task.cancel,)
-        )
-        timer.start()
-        try:
-            await run()
-        finally:
-            timer.cancel()
-
     with asyncio.Runner(loop_factory=FakeClockLoop) as runner:
-        runner.run(guarded())
+        runner.run(run())
 
 
 def rebuild(disk: DiskTarget):

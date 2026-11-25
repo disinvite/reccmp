@@ -39,6 +39,11 @@ def test_build_newer_than_code_is_not_stale(disk: DiskTarget):
     assert not is_stale(disk.files)
 
 
+def test_source_write_is_reported(disk: DiskTarget):
+    _, sources = watch_streams(disk.files)
+    assert first_after(sources, lambda: disk.code.write_text("changed")) == {disk.code}
+
+
 def test_missing_directory_raises(disk: DiskTarget):
     shutil.rmtree(disk.exe.parent)
     with pytest.raises(FileNotFoundError):

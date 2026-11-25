@@ -51,7 +51,7 @@ import contextlib
 import enum
 import logging
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from reccmp.project.detect import RecCmpProject, RecCmpTarget
 from reccmp.remote.fswatch import (
@@ -75,39 +75,6 @@ class WatchEvent(enum.Enum):
     ARTIFACT_DELETED = enum.auto()
 
 
-async def watch_artifacts(
-    changes: AsyncIterator[tuple[Path, bool]],
-    binaries: set[Path],
-    settle_seconds: float,
-    emit: Callable[[WatchEvent], None],
-):
-    loop = asyncio.get_running_loop()
-    # The exe and pdb written since the last recompile.
-    written: set[Path] = set()
-    cooldown: asyncio.TimerHandle | None = None
-
-    def on_cooldown():
-        written.clear()
-        emit(WatchEvent.RECOMPILED)
-
-    try:
-        async for path, exists in changes:
-            if cooldown is not None:
-                cooldown.cancel()
-                cooldown = None
-            if exists:
-                written.add(path)
-                emit(WatchEvent.ARTIFACT_CHANGED)
-                if written >= binaries:
-                    cooldown = loop.call_later(settle_seconds, on_cooldown)
-            else:
-                written.discard(path)
-                emit(WatchEvent.ARTIFACT_DELETED)
-    finally:
-        if cooldown is not None:
-            cooldown.cancel()
-
-
 class WatchSession:
     def __init__(
         self,
@@ -124,26 +91,48 @@ class WatchSession:
     def emit(self, item: WatchEvent | Exception):
         self.queue.put_nowait(item)
 
-    def on_changes(self, changed: set[Path]):
-        for path in sorted(changed):
-            if self.ended:
-                return
-            if path in self.files.csvs:
-                self.emit(WatchEvent.DATA_CHANGED)
-            elif path in self.files.ymls:
-                self.on_yml()
-            else:
-                self.emit(WatchEvent.CODE_CHANGED)
+    async def watch_artifacts(self):
+        loop = asyncio.get_running_loop()
+        binaries = self.files.binaries
+        # The exe and pdb written since the last recompile.
+        written: set[Path] = set()
+        cooldown: asyncio.TimerHandle | None = None
 
-    def on_yml(self):
-        event = self.reload()
-        if event is not None:
-            self.emit(event)
-        self.ended = event is WatchEvent.CONFIG_CHANGED
+        def on_cooldown():
+            written.clear()
+            self.emit(WatchEvent.RECOMPILED)
+
+        try:
+            async for path, exists in watch_presence(binaries):
+                if cooldown is not None:
+                    cooldown.cancel()
+                    cooldown = None
+                if exists:
+                    written.add(path)
+                    self.emit(WatchEvent.ARTIFACT_CHANGED)
+                    if written >= binaries:
+                        cooldown = loop.call_later(self.settle_seconds, on_cooldown)
+                else:
+                    written.discard(path)
+                    self.emit(WatchEvent.ARTIFACT_DELETED)
+        finally:
+            if cooldown is not None:
+                cooldown.cancel()
 
     async def forward(self, stream: AsyncIterator[set[Path]]):
         async for changed in stream:
-            self.on_changes(changed)
+            for path in sorted(changed):
+                if self.ended:
+                    break
+                if path in self.files.csvs:
+                    self.emit(WatchEvent.DATA_CHANGED)
+                elif path in self.files.ymls:
+                    event = self.reload()
+                    if event is not None:
+                        self.emit(event)
+                    self.ended = event is WatchEvent.CONFIG_CHANGED
+                else:
+                    self.emit(WatchEvent.CODE_CHANGED)
 
     async def guard(self, producer: Awaitable[None]):
         try:
@@ -151,19 +140,12 @@ class WatchSession:
         except Exception as ex:  # pylint: disable=broad-exception-caught
             self.emit(ex)
 
-    async def run(
-        self, streams: Iterable[AsyncIterator[set[Path]]]
-    ) -> AsyncIterator[WatchEvent]:
+    async def run(self) -> AsyncIterator[WatchEvent]:
         """It names each path the streams report,
         and ends when config's changed its sort."""
         producers = [
-            watch_artifacts(
-                watch_presence(self.files.binaries),
-                self.files.binaries,
-                self.settle_seconds,
-                self.emit,
-            ),
-            *(self.forward(stream) for stream in streams),
+            self.watch_artifacts(),
+            *(self.forward(stream) for stream in watch_streams(self.files)),
         ]
         # A timeout leaves the wait in place;
         # to cancel it would close the stream for good.
@@ -235,19 +217,12 @@ class TargetWatcher:
         self.error = traceback.format_exc()
         return WatchEvent.CONFIG_FAILED
 
-    def _watch(
-        self, files: TargetFiles, streams: Iterable[AsyncIterator[set[Path]]]
-    ) -> AsyncIterator[WatchEvent]:
-        session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
-        return session.run(streams)
-
     async def events(self) -> AsyncIterator[WatchEvent]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
+            session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
             try:
-                async with contextlib.aclosing(
-                    self._watch(files, watch_streams(files))
-                ) as raws:
+                async with contextlib.aclosing(session.run()) as raws:
                     async for raw in raws:
                         yield raw
             except FileNotFoundError:

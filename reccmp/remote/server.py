@@ -3,17 +3,17 @@
 build state machine (DaemonApp.handle_watch_event; no timing; events in):
     build state: READY | STALE | PENDING | FAILED
 
-    FAILED: drop everything except CONFIG_CHANGED and CONFIG_FAILED
+    FAILED: ignore everything except CONFIG_CHANGED and CONFIG_FAILED
 
-    CODE_CHANGED       -> STALE; pass through
-    ARTIFACT_CHANGED   -> PENDING; internal
-    ARTIFACT_DELETED   -> PENDING; internal
-    RECOMPILED         PENDING: -> READY; pass through
-                       STALE: drop
-    DATA_CHANGED       READY: pass through
-                       otherwise: drop
-    CONFIG_CHANGED     -> READY or STALE from 0; pass through
-    CONFIG_FAILED      -> FAILED; pass through; error stays on watcher.error
+    CODE_CHANGED       -> STALE
+    ARTIFACT_CHANGED   -> PENDING
+    ARTIFACT_DELETED   -> PENDING
+    RECOMPILED         PENDING: -> READY; reset
+                       STALE: no change
+    DATA_CHANGED       READY: reset
+                       otherwise: no change
+    CONFIG_CHANGED     -> READY or STALE from 0; reset
+    CONFIG_FAILED      -> FAILED; error stays on watcher.error
 """
 
 import asyncio
@@ -214,8 +214,7 @@ class DaemonApp:
         except asyncio.CancelledError:
             pass
 
-    def handle_watch_event(self, event: WatchEvent) -> bool:
-        """Returns False if the event is dropped."""
+    def handle_watch_event(self, event: WatchEvent):
         if event is WatchEvent.CONFIG_FAILED:
             self.build = BuildState.FAILED
 
@@ -226,19 +225,18 @@ class DaemonApp:
             self.request_reset()
 
         elif self.build is BuildState.FAILED:
-            return False
+            return
 
         elif event is WatchEvent.CODE_CHANGED:
             self.build = BuildState.STALE
 
         elif event in (WatchEvent.ARTIFACT_CHANGED, WatchEvent.ARTIFACT_DELETED):
             self.build = BuildState.PENDING
-            return False
 
         elif event is WatchEvent.RECOMPILED:
             # The exe and pdb only count as a recompile if written after the code change.
             if self.build is not BuildState.PENDING:
-                return False
+                return
             self.build = BuildState.READY
             logger.info("Recompiled. Rebuilding...")
             self.request_reset()
@@ -246,18 +244,16 @@ class DaemonApp:
         elif event is WatchEvent.DATA_CHANGED:
             if self.build is not BuildState.READY:
                 # Wait for the recompile if there is one coming. The reset will read the data then.
-                return False
+                return
             logger.info("Data source changed. Rebuilding...")
             self.request_reset()
-
-        return True
 
     async def watch_worker(self):
         """Update reccmp's internal structures when the target's files change."""
         try:
             async for event in self.watcher.events():
-                if self.handle_watch_event(event):
-                    self.bump()
+                self.handle_watch_event(event)
+                self.bump()
         except asyncio.CancelledError:
             pass
 

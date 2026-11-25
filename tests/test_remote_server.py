@@ -51,62 +51,70 @@ def fixture_daemon(tmp_path: Path) -> DaemonApp:
     return DaemonApp(project, project.get("ISLE"))
 
 
-def handled(daemon: DaemonApp, *events: WatchEvent) -> list[WatchEvent]:
-    return [event for event in events if daemon.handle_watch_event(event)]
+def send(daemon: DaemonApp, *events: WatchEvent):
+    for event in events:
+        daemon.handle_watch_event(event)
 
 
 def test_code_change_during_cooldown_drops_recompile(daemon: DaemonApp):
     """A code change after the artifacts are written makes the recompile out of date."""
-    assert handled(
+    send(
         daemon,
         WatchEvent.ARTIFACT_CHANGED,
         WatchEvent.CODE_CHANGED,
         WatchEvent.RECOMPILED,
-    ) == [WatchEvent.CODE_CHANGED]
+    )
+    assert daemon.status is DaemonStatus.STALE
+    assert not daemon.reset_requested.is_set()
 
 
 def test_data_change_while_stale_is_dropped(daemon: DaemonApp):
     """A data change is dropped while the build is stale."""
-    assert handled(daemon, WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED) == [
-        WatchEvent.CODE_CHANGED
-    ]
+    send(daemon, WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED)
+    assert daemon.status is DaemonStatus.STALE
+    assert not daemon.reset_requested.is_set()
 
 
 def test_data_change_during_cooldown_is_dropped(daemon: DaemonApp):
     """A data change is dropped while a recompile is pending."""
-    assert handled(daemon, WatchEvent.ARTIFACT_CHANGED, WatchEvent.DATA_CHANGED) == []
+    send(daemon, WatchEvent.ARTIFACT_CHANGED, WatchEvent.DATA_CHANGED)
+    assert daemon.status is DaemonStatus.STALE
+    assert not daemon.reset_requested.is_set()
 
 
 def test_data_change_after_deleted_artifact_waits_for_recompile(daemon: DaemonApp):
     """Data changes are dropped from an artifact delete until the next recompile."""
-    assert handled(
-        daemon,
-        WatchEvent.ARTIFACT_DELETED,
-        WatchEvent.DATA_CHANGED,
-        WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
-        WatchEvent.DATA_CHANGED,
-    ) == [WatchEvent.RECOMPILED, WatchEvent.DATA_CHANGED]
+    send(daemon, WatchEvent.ARTIFACT_DELETED, WatchEvent.DATA_CHANGED)
+    assert daemon.status is DaemonStatus.STALE
+    assert not daemon.reset_requested.is_set()
+
+    send(daemon, WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED)
+    assert daemon.reset_requested.is_set()
 
 
 def test_config_failure_drops_other_events(daemon: DaemonApp):
-    """After a config failure only config events are reported."""
-    assert handled(
+    """CLAUDE SAYS: After a config failure only a config change leaves the failed state."""
+    send(
         daemon,
         WatchEvent.CONFIG_FAILED,
         WatchEvent.CODE_CHANGED,
         WatchEvent.ARTIFACT_CHANGED,
         WatchEvent.RECOMPILED,
         WatchEvent.DATA_CHANGED,
-        WatchEvent.CONFIG_CHANGED,
-    ) == [WatchEvent.CONFIG_FAILED, WatchEvent.CONFIG_CHANGED]
+    )
+    assert daemon.status is DaemonStatus.FAILED
+    assert not daemon.reset_requested.is_set()
+
+    send(daemon, WatchEvent.CONFIG_CHANGED)
+    assert daemon.status is DaemonStatus.BUILDING
 
 
 def test_config_change_takes_staleness_from_restart(daemon: DaemonApp):
     """A config change clears the stale state left by an earlier code change."""
-    daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
-    daemon.handle_watch_event(WatchEvent.CONFIG_CHANGED)
-    assert daemon.handle_watch_event(WatchEvent.DATA_CHANGED)
+    send(daemon, WatchEvent.CODE_CHANGED, WatchEvent.CONFIG_CHANGED)
+    # CLAUDE SAYS: Stand in for the reset worker finishing.
+    daemon.reset_requested.clear()
+    assert daemon.status is DaemonStatus.READY
 
 
 def test_artifact_write_makes_results_stale(daemon: DaemonApp):

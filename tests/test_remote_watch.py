@@ -264,7 +264,7 @@ def test_artifacts_settle_to_recompile(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_exe_only_is_not_a_recompile(disk: DiskTarget):
@@ -276,7 +276,7 @@ def test_exe_only_is_not_a_recompile(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert events.quiet()
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_recompile_split_across_timeouts(disk: DiskTarget):
@@ -291,7 +291,7 @@ def test_recompile_split_across_timeouts(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_write_restarts_cooldown(disk: DiskTarget):
@@ -307,7 +307,7 @@ def test_write_restarts_cooldown(disk: DiskTarget):
         await asyncio.sleep(UNSETTLED)
         assert events.quiet()
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_delete_aborts_cooldown(disk: DiskTarget):
@@ -323,7 +323,7 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert events.quiet()
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
@@ -340,7 +340,7 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
@@ -367,7 +367,7 @@ def test_code_change_then_rebuild(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_data_change(disk: DiskTarget):
@@ -465,7 +465,7 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
@@ -483,7 +483,7 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         await asyncio.sleep(SETTLED)
         assert await events.next() is WatchEvent.RECOMPILED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
@@ -493,7 +493,7 @@ def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
         disk.exe.unlink()
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)
 
 
 def test_other_build_files_are_not_reported(disk: DiskTarget):
@@ -507,4 +507,4 @@ def test_other_build_files_are_not_reported(disk: DiskTarget):
         disk.pdb.unlink()
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
 
-    run_scenario(make_watcher(disk).raw_events(), scenario)
+    run_scenario(make_watcher(disk).events(), scenario)

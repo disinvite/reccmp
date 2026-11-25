@@ -24,7 +24,7 @@ from reccmp.project.detect import (
 )
 from .registry import register_daemon
 from .shared import DaemonReady
-from .watch import TargetWatcher, WatchEvent
+from .watch import BuildTracker, TargetWatcher, WatchEvent
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class DaemonApp:
     # pylint:disable=too-many-instance-attributes
     target: RecCmpTarget
     watcher: TargetWatcher
+    tracker: BuildTracker
     status: DaemonStatus
     reccmp: Compare
     report: ReccmpStatusReport | None
@@ -52,6 +53,7 @@ class DaemonApp:
     def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.target = target
         self.watcher = TargetWatcher(project, target)
+        self.tracker = BuildTracker()
         self.status = DaemonStatus.BUILDING
         self.report = None
         self.error = None
@@ -165,7 +167,7 @@ class DaemonApp:
                     self.status = DaemonStatus.FAILED
                 else:
                     self.error = None
-                    if self.watcher.tracker.stale:
+                    if self.tracker.stale:
                         self.status = DaemonStatus.STALE
                     else:
                         self.status = DaemonStatus.READY
@@ -200,7 +202,10 @@ class DaemonApp:
     async def watch_worker(self):
         """Update reccmp's internal structures when the target's files change."""
         try:
-            async for event in self.watcher.events():
+            async for raw in self.watcher.events():
+                event = self.tracker.step(raw)
+                if event is None:
+                    continue
                 self.bump()
                 self.handle_watch_event(event)
         except asyncio.CancelledError:
@@ -252,7 +257,7 @@ async def handle_report(request):
 async def handle_rerun(request):
     state: DaemonApp = request.app[STATE_KEY]
     # Manual override for a code change that never produced a recompile.
-    state.watcher.tracker.clear_stale()
+    state.tracker.clear_stale()
     state.request_reset()
     return web.HTTPNoContent()
 

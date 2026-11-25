@@ -257,7 +257,6 @@ class TargetWatcher:
 
     project: RecCmpProject
     target: RecCmpTarget
-    tracker: BuildTracker
 
     error: str | None
     """Traceback from the last failed config reload."""
@@ -273,7 +272,6 @@ class TargetWatcher:
     def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.project = project
         self.target = target
-        self.tracker = BuildTracker()
         self.error = None
 
     def reload(self) -> WatchEvent | None:
@@ -306,7 +304,7 @@ class TargetWatcher:
         session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
         return session.run(streams)
 
-    async def raw_events(self) -> AsyncIterator[WatchEvent]:
+    async def events(self) -> AsyncIterator[WatchEvent]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
             try:
@@ -321,9 +319,3 @@ class TargetWatcher:
                 event = self.reload()
                 if event is not None:
                     yield event
-
-    async def events(self) -> AsyncIterator[WatchEvent]:
-        async for raw in self.raw_events():
-            event = self.tracker.step(raw)
-            if event is not None:
-                yield event

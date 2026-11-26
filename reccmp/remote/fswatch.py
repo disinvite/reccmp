@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncGenerator, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from watchfiles import Change, awatch
@@ -71,7 +71,7 @@ def watch_roots(files: TargetFiles) -> set[Path]:
 
 async def watch_changes(
     roots: Iterable[Path], path_filter: Callable[[Path], bool], recursive: bool
-) -> AsyncIterator[set[Path]]:
+) -> AsyncGenerator[set[Path], None]:
     """Yield the resolved paths that changed and pass the filter."""
     ids = {root: inode(root) for root in roots}
     verify_inodes(ids)
@@ -105,7 +105,7 @@ async def watch_changes(
             yield {path for _, path in resolved}
 
 
-async def watch_files(paths: set[Path]) -> AsyncIterator[set[Path]]:
+async def watch_files(paths: set[Path]) -> AsyncGenerator[set[Path], None]:
     """Watch the directories that hold the given files without recursion."""
     async for changed in watch_changes(
         {path.parent for path in paths}, lambda path: path in paths, recursive=False
@@ -113,7 +113,7 @@ async def watch_files(paths: set[Path]) -> AsyncIterator[set[Path]]:
         yield changed
 
 
-async def watch_presence(paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
+async def watch_presence(paths: set[Path]) -> AsyncGenerator[tuple[Path, bool], None]:
     """Each changed path comes with true
     if it is there, as writes will do."""
     async for changed in watch_files(paths):
@@ -125,7 +125,7 @@ async def watch_presence(paths: set[Path]) -> AsyncIterator[tuple[Path, bool]]:
 # the listed files, one level keep.
 
 
-def watch_listed(files: TargetFiles) -> AsyncIterator[set[Path]]:
+def watch_listed(files: TargetFiles) -> AsyncGenerator[set[Path], None]:
     for path in files.sources:
         if not path.exists():
             raise FileNotFoundError(f"Source path does not exist: {path}")
@@ -137,7 +137,7 @@ def watch_listed(files: TargetFiles) -> AsyncIterator[set[Path]]:
     return watch_files(files.csvs | files.ymls | listed)
 
 
-def watch_source_dirs(files: TargetFiles) -> AsyncIterator[set[Path]]:
+def watch_source_dirs(files: TargetFiles) -> AsyncGenerator[set[Path], None]:
     return watch_changes(
         tuple(path for path in files.sources if path.is_dir()),
         is_file_c_like,

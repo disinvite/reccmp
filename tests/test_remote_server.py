@@ -157,7 +157,9 @@ def test_config_failure(daemon: DaemonApp):
 def test_config_failure_during_reset(daemon: DaemonApp):
     """A config failure during a reset is still a failure after the reset finishes."""
     daemon.watcher.error = "Traceback"
-    daemon.reset = lambda: daemon.handle_watch_event(WatchEvent.CONFIG_FAILED)
+    daemon.reset = lambda: daemon.handle_watch_event(  # type: ignore[method-assign]
+        WatchEvent.CONFIG_FAILED
+    )
 
     async def scenario():
         loop = asyncio.get_running_loop()

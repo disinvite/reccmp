@@ -5,7 +5,7 @@ import contextlib
 import os
 import selectors
 import shutil
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 import pytest
 from watchfiles import Change
@@ -34,25 +34,30 @@ from .constants import LEGO1_SHA256
 from .remote_watch_helpers import DiskTarget
 
 
-class FakeClockLoop(asyncio.SelectorEventLoop):
-    """The timers fire in proper turn,
-    no real seconds pass or burn."""
+class FakeClockSelector(selectors.DefaultSelector):
+    """CLAUDE SAYS: A selector that never blocks and holds the fake clock.
+    When no callback is ready, it first wakes the idle waiters; if there are
+    none, it moves the clock forward to the loop's next timer."""
+
+    # pylint: disable=too-many-ancestors
 
     TIME_LIMIT = 600.0
     """CLAUDE SAYS: Fake seconds a scenario may run before it counts as hung.
     Only a timer that keeps rescheduling itself can run the clock this far."""
 
     def __init__(self):
+        super().__init__()
         self.now = 0.0
         self.idle_waiters: list[asyncio.Future[None]] = []
-        selector = selectors.DefaultSelector()
-        real_select = selector.select
 
-        def select(timeout=None):
-            """It never blocks to wait in vain,
-            it moves the clock and goes again."""
-            # CLAUDE SAYS: A nonzero timeout means no callback is ready to run.
-            if timeout != 0 and not self.wake_idle():
+    def select(self, timeout=None):
+        # CLAUDE SAYS: A nonzero timeout means no callback is ready to run.
+        if timeout != 0:
+            waiters, self.idle_waiters = self.idle_waiters, []
+            for waiter in waiters:
+                if not waiter.done():
+                    waiter.set_result(None)
+            if not waiters:
                 if timeout is None:
                     raise RuntimeError("Scenario is waiting with nothing scheduled")
                 self.now += timeout
@@ -60,32 +65,28 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
                     raise RuntimeError(
                         "Scenario did not finish within the fake time limit"
                     )
-            return real_select(0)
+        return super().select(0)
 
-        selector.select = select
-        super().__init__(selector)
 
-    def wake_idle(self) -> bool:
-        """CLAUDE SAYS: Called when no callback is ready, before the clock moves.
-        Returns True if it made a callback ready."""
-        waiters, self.idle_waiters = self.idle_waiters, []
-        for waiter in waiters:
-            if not waiter.done():
-                waiter.set_result(None)
-        return bool(waiters)
+class FakeClockLoop(asyncio.SelectorEventLoop):
+    """The timers fire in proper turn,
+    no real seconds pass or burn."""
+
+    def __init__(self):
+        self.clock = FakeClockSelector()
+        super().__init__(self.clock)
 
     async def idle(self):
         """CLAUDE SAYS: Returns once no callback is ready."""
         waiter = self.create_future()
-        self.idle_waiters.append(waiter)
+        self.clock.idle_waiters.append(waiter)
         await waiter
 
     def time(self) -> float:
-        return self.now
+        return self.clock.now
 
-    def run_in_executor(self, _, func, *args):
-        """No thread will run the call;
-        the clock would leap ahead of all."""
+    def run_in_executor(self, _, func, *args):  # type: ignore[override]
+        """Allow a real thread to run on our fake clock."""
         future = self.create_future()
         try:
             future.set_result(func(*args))
@@ -194,7 +195,7 @@ class Events:
     """The watcher always has a request for its next event in flight,
     so the scenario's file changes land while the watches are running."""
 
-    def __init__(self, stream: AsyncIterator[WatchEvent]):
+    def __init__(self, stream: AsyncGenerator[WatchEvent, None]):
         self.stream = stream
         self.pending = asyncio.create_task(anext(stream))
 
@@ -241,7 +242,7 @@ class Events:
 Scenario = Callable[[Events], Awaitable[None]]
 
 
-def run_scenario(source: AsyncIterator[WatchEvent], scenario: Scenario):
+def run_scenario(source: AsyncGenerator[WatchEvent, None], scenario: Scenario):
     """Runs the scenario against the given event stream on the fake clock."""
 
     async def run():

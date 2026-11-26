@@ -51,7 +51,7 @@ import contextlib
 import enum
 import logging
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from reccmp.project.detect import RecCmpProject, RecCmpTarget
 from reccmp.remote.fswatch import (
@@ -149,7 +149,7 @@ class WatchSession:
         except Exception as ex:  # pylint: disable=broad-exception-caught
             self.emit(ex)
 
-    async def run(self) -> AsyncIterator[WatchEvent]:
+    async def run(self) -> AsyncGenerator[WatchEvent, None]:
         """It names each path the streams report,
         and ends when config's changed its sort."""
         listed = watch_listed(self.files)
@@ -221,7 +221,7 @@ class TargetWatcher:
         self.error = traceback.format_exc()
         return WatchEvent.CONFIG_FAILED
 
-    async def events(self) -> AsyncIterator[WatchEvent]:
+    async def events(self) -> AsyncGenerator[WatchEvent, None]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
             session = WatchSession(files, self.reload)

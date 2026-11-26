@@ -1,7 +1,8 @@
 import asyncio
 import contextlib
 import os
-from collections.abc import AsyncIterator, Callable
+from typing import Any
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from reccmp.remote.fswatch import TargetFiles
 
@@ -29,7 +30,7 @@ class DiskTarget:
         os.utime(path, (seconds, seconds))
 
 
-def first_after(events: AsyncIterator, action: Callable[[], None]):
+def first_after(events: AsyncGenerator[Any, None], action: Callable[[], object]):
     """The first item from a real watch, once the action has run."""
 
     async def run():

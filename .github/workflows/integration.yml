@@ -129,6 +129,7 @@ jobs:
         reccmp-reccmp --target ${{ matrix.target }} --verbose $FUNC_ADDR
 
     - name: Run reccmp-daemon
+      timeout-minutes: 1
       shell: bash
       working-directory: ./isle
       run: |

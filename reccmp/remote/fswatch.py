@@ -5,7 +5,7 @@ import os
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from watchfiles import awatch
+from watchfiles import Change, awatch
 from reccmp.dir import is_file_c_like, source_code_search
 from reccmp.project.common import RECCMP_USER_CONFIG
 from reccmp.project.detect import RecCmpProject, RecCmpTarget
@@ -78,17 +78,31 @@ async def watch_changes(
     if not ids:
         return
 
+    def is_root_deleted(change: Change, path: Path) -> bool:
+        return change == Change.deleted and path in ids
+
+    # CLAUDE SAYS: Linux filesystems can hand a recreated directory the same
+    # inode, so verify_inodes() alone misses it. inotify does report the
+    # deletion of a watched root, so let that event through the filter.
+    def keep(change: Change, raw: str) -> bool:
+        path = Path(raw).resolve()
+        return is_root_deleted(change, path) or path_filter(path)
+
     # The timeout's yield, though nothing's new,
     # lets us check the roots are true.
     async for changes in awatch(
         *ids,
-        watch_filter=lambda _, path: path_filter(Path(path).resolve()),
+        watch_filter=keep,
         recursive=recursive,
         yield_on_timeout=True,
     ):
         verify_inodes(ids)
-        if changes:
-            yield {Path(path).resolve() for _, path in changes}
+        resolved = {(change, Path(path).resolve()) for change, path in changes}
+        for change, path in resolved:
+            if is_root_deleted(change, path):
+                raise FileNotFoundError(f"Watched path was removed: {path}")
+        if resolved:
+            yield {path for _, path in resolved}
 
 
 async def watch_files(paths: set[Path]) -> AsyncIterator[set[Path]]:

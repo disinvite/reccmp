@@ -12,7 +12,7 @@ inputs:
     each input below guards its own watched roots by inode.
     a root that is missing or replaced raises FileNotFoundError:
         emit CONFIG_FAILED
-        retry every RETRY_SECONDS until the roots exist or a yml changes, then reload as in 1
+        retry every CONFIG_RETRY_S until the roots exist or a yml changes, then reload as in 1
 
     1. watching yml config files
         on change, reload the project:
@@ -28,12 +28,12 @@ inputs:
         on write of exe or pdb:
             add it to the written set
             emit ARTIFACT_CHANGED
-            if both are in the written set, start (or restart) the SETTLE_SECONDS cooldown
+            if both are in the written set, start (or restart) the ARTIFACT_DELAY_S cooldown
         on delete of exe or pdb:
             remove it from the written set
             abort the cooldown
             emit ARTIFACT_DELETED
-        cooldown finishes (exe and pdb both written, then quiet for SETTLE_SECONDS):
+        cooldown finishes (exe and pdb both written, then quiet for ARTIFACT_DELAY_S):
             emit RECOMPILED
             clear the written set
 
@@ -65,6 +65,16 @@ from reccmp.remote.fswatch import (
 
 logger = logging.getLogger(__name__)
 
+ARTIFACT_DELAY_S = 1.0
+"""Time delay until we report that a recompile has occurred. The compiler/linker
+may write to the PDB incrementally. We don't want to report until this is
+finished and the file is stable."""
+
+CONFIG_RETRY_S = 1.0
+"""Time delay between attempts to retry loading a reccmp target.
+We will enter the retry loop if a watched directory is deleted or if we
+cannot load the selected target from altered YML config files."""
+
 
 class WatchEvent(enum.Enum):
     CODE_CHANGED = enum.auto()
@@ -81,11 +91,9 @@ class WatchSession:
         self,
         files: TargetFiles,
         reload: Callable[[], WatchEvent | None],
-        settle_seconds: float,
     ):
         self.files = files
         self.reload = reload
-        self.settle_seconds = settle_seconds
         self.queue: asyncio.Queue[WatchEvent | Exception] = asyncio.Queue()
         self.ended = False
 
@@ -112,7 +120,7 @@ class WatchSession:
                     written.add(path)
                     self.emit(WatchEvent.ARTIFACT_CHANGED)
                     if written >= binaries:
-                        cooldown = loop.call_later(self.settle_seconds, on_cooldown)
+                        cooldown = loop.call_later(ARTIFACT_DELAY_S, on_cooldown)
                 else:
                     written.discard(path)
                     self.emit(WatchEvent.ARTIFACT_DELETED)
@@ -184,14 +192,6 @@ class TargetWatcher:
     error: str | None
     """Traceback from the last failed config reload."""
 
-    SETTLE_SECONDS = 1.0
-    """The build is done when exe and pdb
-    stay quiet for this long, you see."""
-
-    RETRY_SECONDS = 1.0
-    """A path is gone, so check this often
-    to see if it's come back again."""
-
     def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.project = project
         self.target = target
@@ -224,14 +224,14 @@ class TargetWatcher:
     async def events(self) -> AsyncIterator[WatchEvent]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
-            session = WatchSession(files, self.reload, self.SETTLE_SECONDS)
+            session = WatchSession(files, self.reload)
             try:
                 async with contextlib.aclosing(session.run()) as raws:
                     async for raw in raws:
                         yield raw
             except FileNotFoundError:
                 yield self._fail("A watched path is missing")
-                await wait_for_files(files, self.RETRY_SECONDS)
+                await wait_for_files(files, CONFIG_RETRY_S)
                 event = self.reload()
                 if event is not None:
                     yield event

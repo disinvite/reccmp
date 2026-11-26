@@ -25,6 +25,8 @@ from reccmp.project.config import (
 )
 from reccmp.project.detect import RecCmpProject
 from reccmp.remote.watch import (
+    ARTIFACT_DELAY_S,
+    CONFIG_RETRY_S,
     TargetWatcher,
     WatchEvent,
 )
@@ -90,13 +92,6 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         except Exception as e:  # pylint: disable=broad-exception-caught
             future.set_exception(e)
         return future
-
-
-SETTLED = 4 * TargetWatcher.SETTLE_SECONDS
-"""Long enough for a cooldown to finish."""
-
-UNSETTLED = 0.6 * TargetWatcher.SETTLE_SECONDS
-"""Too short for a cooldown to finish, but two in a row are not."""
 
 
 def snapshot(
@@ -274,7 +269,7 @@ def test_artifacts_settle_to_recompile(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -285,7 +280,7 @@ def test_exe_only_is_not_a_recompile(disk: DiskTarget):
     async def scenario(events: Events):
         disk.exe.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is None
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -296,10 +291,10 @@ def test_recompile_split_across_timeouts(disk: DiskTarget):
     async def scenario(events: Events):
         disk.exe.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is None
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
         disk.pdb.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -311,10 +306,10 @@ def test_write_restarts_cooldown(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(UNSETTLED) is None
+        assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
         disk.exe.write_text("changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(UNSETTLED) is None
+        assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -326,10 +321,10 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(UNSETTLED) is None
+        assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
         disk.exe.unlink()
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
-        assert await events.after(SETTLED) is None
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -345,7 +340,7 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
         disk.exe.write_text("changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -359,7 +354,7 @@ def test_relink_in_one_batch_is_a_recompile(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -385,7 +380,7 @@ def test_code_change_then_rebuild(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -463,9 +458,7 @@ def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
         shutil.rmtree(src)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         src.mkdir()
-        assert (
-            await events.after(TargetWatcher.RETRY_SECONDS) is WatchEvent.CONFIG_CHANGED
-        )
+        assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -478,9 +471,7 @@ def test_yml_change_ends_wait_for_missing_path(disk: DiskTarget):
         shutil.rmtree(disk.code.parent)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         write_build_yml(disk, "ISLE2.EXE")
-        assert (
-            await events.after(TargetWatcher.RETRY_SECONDS) is WatchEvent.CONFIG_CHANGED
-        )
+        assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
         # CLAUDE SAYS: The path is still missing, so the new session fails too.
         assert await events.next() is WatchEvent.CONFIG_FAILED
 
@@ -500,7 +491,7 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         disk.pdb.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -517,7 +508,7 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         disk.pdb.write_text("rebuilt")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 

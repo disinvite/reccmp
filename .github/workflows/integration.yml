@@ -87,6 +87,14 @@ jobs:
         name: isle
         path: isle
 
+    - name: Touch recompiled binaries
+      shell: bash
+      working-directory: ./isle
+      run: |
+        # Bump the modified time of the artifact files. reccmp-daemon checks against the mtimes
+        # of each source code file to check whether the project is stale (needs a recompile).
+        find build -type f -exec touch {} +
+
     - name: Detect binaries
       shell: bash
       working-directory: ./isle

@@ -31,32 +31,52 @@ from reccmp.remote.watch import (
 from .constants import LEGO1_SHA256
 from .remote_watch_helpers import DiskTarget
 
-FAKE_TIME_LIMIT = 600.0
-"""CLAUDE SAYS: Fake seconds a scenario may run before it counts as hung."""
-
 
 class FakeClockLoop(asyncio.SelectorEventLoop):
     """The timers fire in proper turn,
     no real seconds pass or burn."""
 
+    TIME_LIMIT = 600.0
+    """CLAUDE SAYS: Fake seconds a scenario may run before it counts as hung.
+    Only a timer that keeps rescheduling itself can run the clock this far."""
+
     def __init__(self):
         self.now = 0.0
+        self.idle_waiters: list[asyncio.Future[None]] = []
         selector = selectors.DefaultSelector()
         real_select = selector.select
 
         def select(timeout=None):
             """It never blocks to wait in vain,
             it moves the clock and goes again."""
-            if timeout is not None:
+            # CLAUDE SAYS: A nonzero timeout means no callback is ready to run.
+            if timeout != 0 and not self.wake_idle():
+                if timeout is None:
+                    raise RuntimeError("Scenario is waiting with nothing scheduled")
                 self.now += timeout
-            # CLAUDE SAYS: The polling watches always have a timer pending,
-            # so a scenario that hangs shows up as fake time running on.
-            if self.now > FAKE_TIME_LIMIT:
-                raise RuntimeError("Scenario did not finish within the fake time limit")
+                if self.now > self.TIME_LIMIT:
+                    raise RuntimeError(
+                        "Scenario did not finish within the fake time limit"
+                    )
             return real_select(0)
 
         selector.select = select
         super().__init__(selector)
+
+    def wake_idle(self) -> bool:
+        """CLAUDE SAYS: Called when no callback is ready, before the clock moves.
+        Returns True if it made a callback ready."""
+        waiters, self.idle_waiters = self.idle_waiters, []
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        return bool(waiters)
+
+    async def idle(self):
+        """CLAUDE SAYS: Returns once no callback is ready."""
+        waiter = self.create_future()
+        self.idle_waiters.append(waiter)
+        await waiter
 
     def time(self) -> float:
         return self.now
@@ -72,15 +92,11 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         return future
 
 
-SETTLED = 4 * TargetWatcher.SETTLE_MS / 1000
+SETTLED = 4 * TargetWatcher.SETTLE_SECONDS
 """Long enough for a cooldown to finish."""
 
-UNSETTLED = 0.6 * TargetWatcher.SETTLE_MS / 1000
+UNSETTLED = 0.6 * TargetWatcher.SETTLE_SECONDS
 """Too short for a cooldown to finish, but two in a row are not."""
-
-
-POLL_SECONDS = 0.05
-"""CLAUDE SAYS: Fake seconds between scans of the watched directories."""
 
 
 def snapshot(
@@ -91,33 +107,52 @@ def snapshot(
         if not root.exists():
             # CLAUDE SAYS: fswatch's inode check reports the missing root.
             continue
-        for path in root.rglob("*") if recursive else root.iterdir():
+        # CLAUDE SAYS: The roots are in the snapshot so that replacing one
+        # wakes the watch, as the real awatch's timeout yield would.
+        for path in (root, *(root.rglob("*") if recursive else root.iterdir())):
             st = path.stat()
             found[path] = (st.st_ino, st.st_size, st.st_mtime_ns)
     return found
 
 
-async def polling_awatch(
+WATCHES: list[Callable[[], None]] = []
+"""CLAUDE SAYS: The scan of each running fake awatch."""
+
+
+async def scan_awatch(
     *roots: Path, watch_filter, recursive: bool, yield_on_timeout: bool
 ):
-    """CLAUDE SAYS: Stands in for watchfiles.awatch. It scans on the fake clock,
-    so the watch is in place as soon as the generator starts."""
+    """CLAUDE SAYS: Stands in for watchfiles.awatch. It reports a change only
+    when the scenario scans, so each batch is everything changed since the last scan."""
     assert yield_on_timeout
+    changes: asyncio.Queue[set[tuple[Change, str]]] = asyncio.Queue()
     before = snapshot(roots, recursive)
-    while True:
-        await asyncio.sleep(POLL_SECONDS)
+
+    def scan():
+        nonlocal before
         after = snapshot(roots, recursive)
-        yield {
-            (Change.modified, str(path))
-            for path in before.keys() | after.keys()
-            if before.get(path) != after.get(path) and watch_filter(None, str(path))
-        }
-        before = after
+        if after != before:
+            changes.put_nowait(
+                {
+                    (Change.modified, str(path))
+                    for path in before.keys() | after.keys()
+                    if before.get(path) != after.get(path)
+                    and watch_filter(None, str(path))
+                }
+            )
+            before = after
+
+    WATCHES.append(scan)
+    try:
+        while True:
+            yield await changes.get()
+    finally:
+        WATCHES.remove(scan)
 
 
 @pytest.fixture(autouse=True)
-def fixture_polling_awatch(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("reccmp.remote.fswatch.awatch", polling_awatch)
+def fixture_scan_awatch(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("reccmp.remote.fswatch.awatch", scan_awatch)
 
 
 @pytest.fixture(name="disk")
@@ -171,17 +206,36 @@ class Events:
     async def ready(self):
         # The fake clock moves on only once the loop is idle,
         # so the watches are in place before the scenario goes on.
-        await asyncio.sleep(0.1)
+        loop = asyncio.get_running_loop()
+        assert isinstance(loop, FakeClockLoop)
+        await loop.idle()
+
+    def scan(self):
+        """CLAUDE SAYS: Hands the scenario's file changes to the fake watches."""
+        for scan in WATCHES:
+            scan()
 
     async def next(self) -> WatchEvent:
+        self.scan()
         event = await self.pending
         self.pending = asyncio.ensure_future(anext(self.stream))
         await self.ready()
         return event
 
-    def quiet(self) -> bool:
+    async def quiet(self) -> bool:
         """True if no event has arrived since the last next()."""
+        self.scan()
+        await self.ready()
         return not self.pending.done()
+
+    async def after(self, seconds: float) -> WatchEvent | None:
+        """CLAUDE SAYS: Waits the given fake seconds, then returns the first event
+        that arrived in that time, or None."""
+        self.scan()
+        await asyncio.sleep(seconds)
+        if await self.quiet():
+            return None
+        return await self.next()
 
     async def close(self):
         self.pending.cancel()
@@ -220,8 +274,7 @@ def test_artifacts_settle_to_recompile(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -232,8 +285,7 @@ def test_exe_only_is_not_a_recompile(disk: DiskTarget):
     async def scenario(events: Events):
         disk.exe.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert events.quiet()
+        assert await events.after(SETTLED) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -244,11 +296,10 @@ def test_recompile_split_across_timeouts(disk: DiskTarget):
     async def scenario(events: Events):
         disk.exe.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
+        assert await events.after(SETTLED) is None
         disk.pdb.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -260,11 +311,10 @@ def test_write_restarts_cooldown(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(UNSETTLED)
+        assert await events.after(UNSETTLED) is None
         disk.exe.write_text("changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(UNSETTLED)
-        assert events.quiet()
+        assert await events.after(UNSETTLED) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -276,11 +326,10 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(UNSETTLED)
+        assert await events.after(UNSETTLED) is None
         disk.exe.unlink()
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
-        await asyncio.sleep(SETTLED)
-        assert events.quiet()
+        assert await events.after(SETTLED) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -296,8 +345,7 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
         disk.exe.write_text("changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -311,8 +359,7 @@ def test_relink_in_one_batch_is_a_recompile(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -338,8 +385,7 @@ def test_code_change_then_rebuild(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -417,8 +463,9 @@ def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
         shutil.rmtree(src)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         src.mkdir()
-        await asyncio.sleep(TargetWatcher.RETRY_MS / 1000)
-        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        assert (
+            await events.after(TargetWatcher.RETRY_SECONDS) is WatchEvent.CONFIG_CHANGED
+        )
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -431,8 +478,9 @@ def test_yml_change_ends_wait_for_missing_path(disk: DiskTarget):
         shutil.rmtree(disk.code.parent)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         write_build_yml(disk, "ISLE2.EXE")
-        await asyncio.sleep(TargetWatcher.RETRY_MS / 1000)
-        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        assert (
+            await events.after(TargetWatcher.RETRY_SECONDS) is WatchEvent.CONFIG_CHANGED
+        )
         # CLAUDE SAYS: The path is still missing, so the new session fails too.
         assert await events.next() is WatchEvent.CONFIG_FAILED
 
@@ -452,8 +500,7 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         disk.pdb.write_text("built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -470,8 +517,7 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         disk.pdb.write_text("rebuilt")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        await asyncio.sleep(SETTLED)
-        assert await events.next() is WatchEvent.RECOMPILED
+        assert await events.after(SETTLED) is WatchEvent.RECOMPILED
 
     run_scenario(make_watcher(disk).events(), scenario)
 

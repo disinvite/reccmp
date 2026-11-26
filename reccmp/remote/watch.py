@@ -12,7 +12,7 @@ inputs:
     each input below guards its own watched roots by inode.
     a root that is missing or replaced raises FileNotFoundError:
         emit CONFIG_FAILED
-        retry every RETRY_MS until the roots exist or a yml changes, then reload as in 1
+        retry every RETRY_SECONDS until the roots exist or a yml changes, then reload as in 1
 
     1. watching yml config files
         on change, reload the project:
@@ -28,12 +28,12 @@ inputs:
         on write of exe or pdb:
             add it to the written set
             emit ARTIFACT_CHANGED
-            if both are in the written set, start (or restart) the SETTLE_MS cooldown
+            if both are in the written set, start (or restart) the SETTLE_SECONDS cooldown
         on delete of exe or pdb:
             remove it from the written set
             abort the cooldown
             emit ARTIFACT_DELETED
-        cooldown finishes (exe and pdb both written, then quiet for SETTLE_MS):
+        cooldown finishes (exe and pdb both written, then quiet for SETTLE_SECONDS):
             emit RECOMPILED
             clear the written set
 
@@ -184,11 +184,11 @@ class TargetWatcher:
     error: str | None
     """Traceback from the last failed config reload."""
 
-    SETTLE_MS = 1000
+    SETTLE_SECONDS = 1.0
     """The build is done when exe and pdb
     stay quiet for this long, you see."""
 
-    RETRY_MS = 1000
+    RETRY_SECONDS = 1.0
     """A path is gone, so check this often
     to see if it's come back again."""
 
@@ -224,14 +224,14 @@ class TargetWatcher:
     async def events(self) -> AsyncIterator[WatchEvent]:
         while True:
             files = TargetFiles.from_target(self.project, self.target)
-            session = WatchSession(files, self.reload, self.SETTLE_MS / 1000)
+            session = WatchSession(files, self.reload, self.SETTLE_SECONDS)
             try:
                 async with contextlib.aclosing(session.run()) as raws:
                     async for raw in raws:
                         yield raw
             except FileNotFoundError:
                 yield self._fail("A watched path is missing")
-                await wait_for_files(files, self.RETRY_MS / 1000)
+                await wait_for_files(files, self.RETRY_SECONDS)
                 event = self.reload()
                 if event is not None:
                     yield event

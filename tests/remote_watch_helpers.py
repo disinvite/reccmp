@@ -34,7 +34,7 @@ def first_after(events: AsyncIterator, action: Callable[[], None]):
 
     async def run():
         async with contextlib.aclosing(events) as stream:
-            pending = asyncio.ensure_future(anext(stream))
+            pending = asyncio.create_task(anext(stream))
             await asyncio.sleep(0.1)
             action()
             return await pending

@@ -196,7 +196,7 @@ class Events:
 
     def __init__(self, stream: AsyncIterator[WatchEvent]):
         self.stream = stream
-        self.pending = asyncio.ensure_future(anext(stream))
+        self.pending = asyncio.create_task(anext(stream))
 
     async def ready(self):
         # The fake clock moves on only once the loop is idle,
@@ -213,7 +213,7 @@ class Events:
     async def next(self) -> WatchEvent:
         self.scan()
         event = await self.pending
-        self.pending = asyncio.ensure_future(anext(self.stream))
+        self.pending = asyncio.create_task(anext(self.stream))
         await self.ready()
         return event
 

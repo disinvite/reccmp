@@ -63,8 +63,9 @@ def test_missing_source_file_raises(disk: DiskTarget):
 
 
 def test_deleted_build_directory_reports_binaries(disk: DiskTarget):
-    def recreate():
-        shutil.rmtree(disk.exe.parent)
-        disk.exe.parent.mkdir()
-
-    assert first_after(poll(disk), recreate) == {disk.exe, disk.pdb}
+    # CLAUDE SAYS: The directory is replaced between scans. A scan running
+    # during rmtree could see the exe gone and the pdb not yet.
+    changes = poll(disk)
+    shutil.rmtree(disk.exe.parent)
+    disk.exe.parent.mkdir()
+    assert asyncio.run(anext(changes)) == {disk.exe, disk.pdb}

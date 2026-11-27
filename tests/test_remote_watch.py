@@ -2,13 +2,10 @@
 
 import asyncio
 import contextlib
-import os
 import selectors
-import shutil
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 import pytest
-from watchfiles import Change
 from reccmp.project.common import (
     RECCMP_BUILD_CONFIG,
     RECCMP_PROJECT_CONFIG,
@@ -95,65 +92,14 @@ class FakeClockLoop(asyncio.SelectorEventLoop):
         return future
 
 
-def snapshot(
-    roots: tuple[Path, ...], recursive: bool
-) -> dict[Path, tuple[int, int, int]]:
-    found = {}
-    for root in roots:
-        if not root.exists():
-            # CLAUDE SAYS: fswatch's inode check reports the missing root.
-            continue
-        # CLAUDE SAYS: The roots are in the snapshot so that replacing one
-        # wakes the watch, as the real awatch's timeout yield would.
-        for path in (root, *(root.rglob("*") if recursive else root.iterdir())):
-            st = path.stat()
-            found[path] = (st.st_ino, st.st_size, st.st_mtime_ns)
-    return found
-
-
-WATCHES: list[Callable[[], None]] = []
-"""CLAUDE SAYS: The scan of each running fake awatch."""
-
-
-async def scan_awatch(
-    *roots: Path, watch_filter, recursive: bool, yield_on_timeout: bool
-):
-    """CLAUDE SAYS: Stands in for watchfiles.awatch. It reports a change only
-    when the scenario scans, so each batch is everything changed since the last scan."""
-    assert yield_on_timeout
-    changes: asyncio.Queue[set[tuple[Change, str]]] = asyncio.Queue()
-    before = snapshot(roots, recursive)
-
-    def scan():
-        nonlocal before
-        after = snapshot(roots, recursive)
-        if after != before:
-            changes.put_nowait(
-                {
-                    (Change.modified, str(path))
-                    for path in before.keys() | after.keys()
-                    if before.get(path) != after.get(path)
-                    and watch_filter(None, str(path))
-                }
-            )
-            before = after
-
-    WATCHES.append(scan)
-    try:
-        while True:
-            yield await changes.get()
-    finally:
-        WATCHES.remove(scan)
-
-
-@pytest.fixture(autouse=True)
-def fixture_scan_awatch(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("reccmp.remote.fswatch.awatch", scan_awatch)
-
-
 @pytest.fixture(name="disk")
 def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
+
+
+@pytest.fixture(autouse=True)
+def fixture_fake_awatch(monkeypatch: pytest.MonkeyPatch, disk: DiskTarget):
+    monkeypatch.setattr("reccmp.remote.fswatch.awatch", disk.awatch)
 
 
 INVALID_YML = "targets: ["
@@ -164,10 +110,11 @@ def build_yml_path(disk: DiskTarget) -> Path:
 
 
 def write_build_yml(disk: DiskTarget, exe: str = "ISLE.EXE"):
-    BuildFile(
+    build = BuildFile(
         project=disk.csv.parent,
         targets={"ISLE": BuildFileTarget(path=Path(exe), pdb=Path("ISLE.PDB"))},
-    ).write_file(build_yml_path(disk))
+    )
+    disk.write(build_yml_path(disk), build.to_str())
 
 
 def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
@@ -206,13 +153,7 @@ class Events:
         assert isinstance(loop, FakeClockLoop)
         await loop.idle()
 
-    def scan(self):
-        """CLAUDE SAYS: Hands the scenario's file changes to the fake watches."""
-        for scan in WATCHES:
-            scan()
-
     async def next(self) -> WatchEvent:
-        self.scan()
         event = await self.pending
         self.pending = asyncio.create_task(anext(self.stream))
         await self.ready()
@@ -220,14 +161,12 @@ class Events:
 
     async def quiet(self) -> bool:
         """True if no event has arrived since the last next()."""
-        self.scan()
         await self.ready()
         return not self.pending.done()
 
     async def after(self, seconds: float) -> WatchEvent | None:
         """CLAUDE SAYS: Waits the given fake seconds, then returns the first event
         that arrived in that time, or None."""
-        self.scan()
         await asyncio.sleep(seconds)
         if await self.quiet():
             return None
@@ -259,8 +198,8 @@ def run_scenario(source: AsyncGenerator[WatchEvent, None], scenario: Scenario):
 
 
 def rebuild(disk: DiskTarget):
-    disk.exe.write_text("built")
-    disk.pdb.write_text("built")
+    disk.write(disk.exe, "built")
+    disk.write(disk.pdb, "built")
 
 
 def test_artifacts_settle_to_recompile(disk: DiskTarget):
@@ -279,7 +218,7 @@ def test_exe_only_is_not_a_recompile(disk: DiskTarget):
     """Writing the exe without the pdb is not a recompile."""
 
     async def scenario(events: Events):
-        disk.exe.write_text("built")
+        disk.write(disk.exe, "built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
@@ -290,10 +229,10 @@ def test_recompile_split_across_timeouts(disk: DiskTarget):
     """The exe and pdb count as a recompile even when written a cooldown apart."""
 
     async def scenario(events: Events):
-        disk.exe.write_text("built")
+        disk.write(disk.exe, "built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is None
-        disk.pdb.write_text("built")
+        disk.write(disk.pdb, "built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
@@ -308,7 +247,7 @@ def test_write_restarts_cooldown(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
-        disk.exe.write_text("changed")
+        disk.write(disk.exe, "changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
 
@@ -323,7 +262,7 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
-        disk.exe.unlink()
+        disk.unlink(disk.exe)
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
         assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
@@ -337,9 +276,9 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        disk.exe.unlink()
+        disk.unlink(disk.exe)
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
-        disk.exe.write_text("changed")
+        disk.write(disk.exe, "changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
 
@@ -351,7 +290,7 @@ def test_relink_in_one_batch_is_a_recompile(disk: DiskTarget):
     is a recompile with no artifact delete."""
 
     async def scenario(events: Events):
-        disk.exe.unlink()
+        disk.unlink(disk.exe)
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
@@ -376,7 +315,7 @@ def test_code_change_then_rebuild(disk: DiskTarget):
     """A code edit followed by a rebuild is a code change and then a recompile."""
 
     async def scenario(events: Events):
-        disk.code.write_text("changed")
+        disk.write(disk.code, "changed")
         assert await events.next() is WatchEvent.CODE_CHANGED
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
@@ -390,7 +329,7 @@ def test_data_change(disk: DiskTarget):
     """Writing the csv of an up-to-date build is a data change."""
 
     async def scenario(events: Events):
-        disk.csv.write_text("changed")
+        disk.write(disk.csv, "changed")
         assert await events.next() is WatchEvent.DATA_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -401,8 +340,8 @@ def test_replaced_source_file_is_a_code_change(disk: DiskTarget):
     saved = disk.code.with_suffix(".tmp")
 
     async def scenario(events: Events):
-        saved.write_text("changed")
-        os.replace(saved, disk.code)
+        disk.write(saved, "changed")
+        disk.replace(saved, disk.code)
         assert await events.next() is WatchEvent.CODE_CHANGED
 
     run_scenario(make_watcher(disk, "src/isle.cpp").events(), scenario)
@@ -413,7 +352,7 @@ def test_yml_rewrite_with_same_config(disk: DiskTarget):
 
     async def scenario(events: Events):
         write_build_yml(disk)
-        disk.csv.write_text("changed")
+        disk.write(disk.csv, "changed")
         assert await events.next() is WatchEvent.DATA_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -433,7 +372,7 @@ def test_invalid_config_is_a_failure(disk: DiskTarget):
     """A build yml that does not parse is a config failure."""
 
     async def scenario(events: Events):
-        build_yml_path(disk).write_text(INVALID_YML)
+        disk.write(build_yml_path(disk), INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -443,7 +382,7 @@ def test_fixed_config_is_a_config_change(disk: DiskTarget):
     """Restoring a broken build yml to the same target is a config change."""
 
     async def scenario(events: Events):
-        build_yml_path(disk).write_text(INVALID_YML)
+        disk.write(build_yml_path(disk), INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         write_build_yml(disk)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
@@ -456,9 +395,9 @@ def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
     src = disk.code.parent
 
     async def scenario(events: Events):
-        shutil.rmtree(src)
+        disk.rmtree(src)
         assert await events.next() is WatchEvent.CONFIG_FAILED
-        src.mkdir()
+        disk.mkdir(src)
         assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -469,7 +408,7 @@ def test_yml_change_ends_wait_for_missing_path(disk: DiskTarget):
     without waiting for the path to return."""
 
     async def scenario(events: Events):
-        shutil.rmtree(disk.code.parent)
+        disk.rmtree(disk.code.parent)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         write_build_yml(disk, "ISLE2.EXE")
         assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
@@ -488,8 +427,8 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         assert await events.next() is WatchEvent.CONFIG_CHANGED
         # The new exe is not built yet, so the restart finds the build stale.
         assert await events.next() is WatchEvent.CODE_CHANGED
-        new_exe.write_text("built")
-        disk.pdb.write_text("built")
+        disk.write(new_exe, "built")
+        disk.write(disk.pdb, "built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
@@ -505,8 +444,8 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
     async def scenario(events: Events):
         write_build_yml(disk, new_exe.name)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
-        new_exe.write_text("rebuilt")
-        disk.pdb.write_text("rebuilt")
+        disk.write(new_exe, "rebuilt")
+        disk.write(disk.pdb, "rebuilt")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
@@ -518,7 +457,7 @@ def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
     """Deleting the exe is an artifact delete."""
 
     async def scenario(events: Events):
-        disk.exe.unlink()
+        disk.unlink(disk.exe)
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -529,10 +468,10 @@ def test_other_build_files_are_not_reported(disk: DiskTarget):
     ilk = disk.exe.with_suffix(".ILK")
 
     async def scenario(events: Events):
-        ilk.write_text("changed")
+        disk.write(ilk, "changed")
         # The pdb delete is reported after the .ILK would be: in a later batch,
         # or in the same batch, where ISLE.ILK sorts before ISLE.PDB.
-        disk.pdb.unlink()
+        disk.unlink(disk.pdb)
         assert await events.next() is WatchEvent.ARTIFACT_DELETED
 
     run_scenario(make_watcher(disk).events(), scenario)

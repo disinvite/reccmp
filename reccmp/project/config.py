@@ -1,5 +1,6 @@
 """Types for the configuration of a reccmp project"""
 
+import io
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -19,6 +20,11 @@ class YmlFileModel(BaseModel):
     @classmethod
     def from_str(cls, yaml: str):
         return cls.model_validate(_yaml.load(yaml))
+
+    def to_str(self) -> str:
+        stream = io.StringIO()
+        _yaml.dump(data=self.model_dump(mode="json"), stream=stream)
+        return stream.getvalue()
 
     def write_file(self, filename: Path):
         with filename.open("w") as f:

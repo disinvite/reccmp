@@ -7,7 +7,6 @@ build state machine (DaemonApp.handle_watch_event; no timing; events in):
 
     CODE_CHANGED       -> STALE
     ARTIFACT_CHANGED   -> PENDING
-    ARTIFACT_DELETED   -> PENDING
     RECOMPILED         PENDING: -> READY; reset
                        STALE: no change
     DATA_CHANGED       READY: reset
@@ -230,7 +229,7 @@ class DaemonApp:
         elif event is WatchEvent.CODE_CHANGED:
             self.build = BuildState.STALE
 
-        elif event in (WatchEvent.ARTIFACT_CHANGED, WatchEvent.ARTIFACT_DELETED):
+        elif event is WatchEvent.ARTIFACT_CHANGED:
             self.build = BuildState.PENDING
 
         elif event is WatchEvent.RECOMPILED:

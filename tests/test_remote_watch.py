@@ -257,7 +257,7 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
         disk.unlink(disk.exe)
-        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -271,7 +271,7 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         disk.unlink(disk.exe)
-        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         disk.write(disk.exe, "changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
@@ -450,12 +450,12 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
     run_scenario(make_watcher(disk).events(), scenario)
 
 
-def test_deleted_exe_is_an_artifact_delete(disk: DiskTarget):
-    """Deleting the exe is an artifact delete."""
+def test_deleted_exe_is_an_artifact_change(disk: DiskTarget):
+    """CLAUDE SAYS: Deleting the exe is an artifact change."""
 
     async def scenario(events: Events):
         disk.unlink(disk.exe)
-        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -469,6 +469,6 @@ def test_other_build_files_are_not_reported(disk: DiskTarget):
         # The pdb delete is reported after the .ILK would be: in a later batch,
         # or in the same batch, where ISLE.ILK sorts before ISLE.PDB.
         disk.unlink(disk.pdb)
-        assert await events.next() is WatchEvent.ARTIFACT_DELETED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)

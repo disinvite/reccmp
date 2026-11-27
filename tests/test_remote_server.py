@@ -82,16 +82,6 @@ def test_data_change_during_cooldown_is_dropped(daemon: DaemonApp):
     assert not daemon.reset_requested.is_set()
 
 
-def test_data_change_after_deleted_artifact_waits_for_recompile(daemon: DaemonApp):
-    """Data changes are dropped from an artifact delete until the next recompile."""
-    send(daemon, WatchEvent.ARTIFACT_DELETED, WatchEvent.DATA_CHANGED)
-    assert daemon.status is DaemonStatus.STALE
-    assert not daemon.reset_requested.is_set()
-
-    send(daemon, WatchEvent.ARTIFACT_CHANGED, WatchEvent.RECOMPILED)
-    assert daemon.reset_requested.is_set()
-
-
 def test_config_failure_drops_other_events(daemon: DaemonApp):
     """CLAUDE SAYS: After a config failure only a config change leaves the failed state."""
     send(

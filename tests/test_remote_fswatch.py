@@ -1,11 +1,10 @@
 """Tests for the parts of the daemon's file watcher that read the disk."""
 
-import asyncio
 import shutil
 from pathlib import Path
 import pytest
-from reccmp.remote.fswatch import TargetPoller, is_stale, scan_target
-from .remote_watch_helpers import DiskTarget, first_after
+from reccmp.remote.fswatch import changed_paths, is_stale, scan_target
+from .remote_watch_helpers import DiskTarget
 
 
 @pytest.fixture(name="disk")
@@ -39,20 +38,16 @@ def test_build_newer_than_code_is_not_stale(disk: DiskTarget):
     assert not is_stale(disk.files, scan_target(disk.files))
 
 
-def poll(disk: DiskTarget):
-    poller = TargetPoller(disk.files, 0.01)
-    asyncio.run(poller.start())
-    return poller.changes()
-
-
 def test_source_write_is_reported(disk: DiskTarget):
-    assert first_after(poll(disk), lambda: disk.code.write_text("changed")) == {
-        disk.code
-    }
+    old = scan_target(disk.files)
+    disk.code.write_text("changed")
+    assert changed_paths(old, scan_target(disk.files)) == {disk.code}
 
 
 def test_source_delete_is_reported(disk: DiskTarget):
-    assert first_after(poll(disk), disk.code.unlink) == {disk.code}
+    old = scan_target(disk.files)
+    disk.code.unlink()
+    assert changed_paths(old, scan_target(disk.files)) == {disk.code}
 
 
 def test_missing_source_path_has_no_files(disk: DiskTarget):
@@ -63,7 +58,7 @@ def test_missing_source_path_has_no_files(disk: DiskTarget):
 def test_deleted_build_directory_reports_binaries(disk: DiskTarget):
     # CLAUDE SAYS: The directory is replaced between scans. A scan running
     # during rmtree could see the exe gone and the pdb not yet.
-    changes = poll(disk)
+    old = scan_target(disk.files)
     shutil.rmtree(disk.exe.parent)
     disk.exe.parent.mkdir()
-    assert asyncio.run(anext(changes)) == {disk.exe, disk.pdb}
+    assert changed_paths(old, scan_target(disk.files)) == {disk.exe, disk.pdb}

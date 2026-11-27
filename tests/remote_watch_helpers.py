@@ -1,9 +1,5 @@
-import asyncio
-import contextlib
 import os
 import shutil
-from typing import Any
-from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from reccmp.remote.fswatch import TargetFiles
 
@@ -44,16 +40,3 @@ class DiskTarget:
 
     def rmtree(self, path: Path):
         shutil.rmtree(path)
-
-
-def first_after(events: AsyncGenerator[Any, None], action: Callable[[], object]):
-    """The first item from a real watch, once the action has run."""
-
-    async def run():
-        async with contextlib.aclosing(events) as stream:
-            pending = asyncio.create_task(anext(stream))
-            await asyncio.sleep(0.1)
-            action()
-            return await pending
-
-    return asyncio.run(asyncio.wait_for(run(), timeout=30))

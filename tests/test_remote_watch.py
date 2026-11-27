@@ -97,11 +97,6 @@ def fixture_disk(tmp_path: Path) -> DiskTarget:
     return DiskTarget(tmp_path.resolve())
 
 
-@pytest.fixture(autouse=True)
-def fixture_fake_awatch(monkeypatch: pytest.MonkeyPatch, disk: DiskTarget):
-    monkeypatch.setattr("reccmp.remote.fswatch.awatch", disk.awatch)
-
-
 INVALID_YML = "targets: ["
 
 

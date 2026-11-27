@@ -63,10 +63,7 @@ def stat_paths(paths: Iterable[Path]) -> Stats:
 
 def scan_target(files: TargetFiles) -> Stats:
     """CLAUDE SAYS: Stats for the binaries, csvs, ymls, and every code file under
-    the sources. Raises FileNotFoundError if a source path is missing."""
-    for path in files.sources:
-        if not path.exists():
-            raise FileNotFoundError(f"Source path does not exist: {path}")
+    the sources. A missing source path contributes no files."""
     return stat_paths(
         [
             *files.binaries,
@@ -109,15 +106,6 @@ class TargetPoller:
                 yield changed
 
 
-def mtime(path: Path) -> int:
-    """A file that's gone, we say instead,
-    is older than the rest by a thread."""
-    try:
-        return path.stat().st_mtime_ns
-    except FileNotFoundError:
-        return -1
-
-
 def is_stale(files: TargetFiles, stats: Stats) -> bool:
     """Whether the code changed while nothing was watching, judged by mtime."""
     # A missing exe or pdb is older than every source file.
@@ -126,13 +114,3 @@ def is_stale(files: TargetFiles, stats: Stats) -> bool:
     return any(
         st_mtime > oldest for path, (st_mtime, _) in stats.items() if path not in listed
     )
-
-
-async def wait_for_files(files: TargetFiles, retry_seconds: float):
-    """It waits until the roots are there,
-    or till a yml's changed somewhere."""
-    ymls = [mtime(path) for path in files.ymls]
-    while not all(root.exists() for root in files.sources):
-        await asyncio.sleep(retry_seconds)
-        if [mtime(path) for path in files.ymls] != ymls:
-            return

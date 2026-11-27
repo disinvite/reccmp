@@ -10,7 +10,6 @@ from reccmp.remote.fswatch import (
     TargetFiles,
     TargetPoller,
     is_stale,
-    wait_for_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,11 +18,6 @@ ARTIFACT_DELAY_S = 1.0
 """Time delay until we report that a recompile has occurred. The compiler/linker
 may write to the PDB incrementally. We don't want to report until this is
 finished and the file is stable."""
-
-CONFIG_RETRY_S = 1.0
-"""Time delay between attempts to retry loading a reccmp target.
-We will enter the retry loop if a source path is missing or if we
-cannot load the selected target from altered YML config files."""
 
 POLL_S = 0.25
 """Time delay between scans of the target's files."""
@@ -49,7 +43,6 @@ class WatchSession:
         self.reload = reload
         self.poller = TargetPoller(files, POLL_S)
         self.queue: asyncio.Queue[WatchEvent | Exception] = asyncio.Queue()
-        self.ended = False
         # The exe and pdb written since the last recompile.
         self.written: set[Path] = set()
         self.cooldown: asyncio.TimerHandle | None = None
@@ -85,20 +78,26 @@ class WatchSession:
             self.written.discard(path)
             self.emit(WatchEvent.ARTIFACT_DELETED)
 
+    def on_config(self):
+        event = self.reload()
+        if event is not None:
+            self.emit(event)
+        # CLAUDE SAYS: The client starts over from a config change, so it hears
+        # again about code that is newer than the build.
+        if event is WatchEvent.CONFIG_CHANGED and is_stale(
+            self.files, self.poller.stats
+        ):
+            self.emit(WatchEvent.CODE_CHANGED)
+
     async def forward(self, stream: AsyncIterator[set[Path]]):
         async for changed in stream:
             for path in sorted(changed):
-                if self.ended:
-                    break
                 if path in self.files.binaries:
                     self.on_artifact(path)
                 elif path in self.files.csvs:
                     self.emit(WatchEvent.DATA_CHANGED)
                 elif path in self.files.ymls:
-                    event = self.reload()
-                    if event is not None:
-                        self.emit(event)
-                    self.ended = event is WatchEvent.CONFIG_CHANGED
+                    self.on_config()
                 else:
                     self.emit(WatchEvent.CODE_CHANGED)
 
@@ -109,8 +108,6 @@ class WatchSession:
             self.emit(ex)
 
     async def run(self) -> AsyncGenerator[WatchEvent, None]:
-        """It names each path the streams report,
-        and ends when config's changed its sort."""
         # CLAUDE SAYS: The first scan comes before the staleness check. An edit
         # made before the scan is newer than the build, and one made after it
         # differs from the scan.
@@ -127,8 +124,6 @@ class WatchSession:
                 if isinstance(item, Exception):
                     raise item
                 yield item
-                if item is WatchEvent.CONFIG_CHANGED:
-                    return
         finally:
             self.cancel_cooldown()
             task.cancel()
@@ -149,6 +144,9 @@ class TargetWatcher:
         self.project = project
         self.target = target
         self.error = None
+
+    def files(self) -> TargetFiles:
+        return TargetFiles.from_target(self.project, self.target)
 
     def reload(self) -> WatchEvent | None:
         """Returns None if the target is the same and the last load did not fail."""
@@ -176,15 +174,12 @@ class TargetWatcher:
 
     async def events(self) -> AsyncGenerator[WatchEvent, None]:
         while True:
-            files = TargetFiles.from_target(self.project, self.target)
+            files = self.files()
             session = WatchSession(files, self.reload)
-            try:
-                async with contextlib.aclosing(session.run()) as raws:
-                    async for raw in raws:
-                        yield raw
-            except FileNotFoundError:
-                yield self._fail("A watched path is missing")
-                await wait_for_files(files, CONFIG_RETRY_S)
-                event = self.reload()
-                if event is not None:
-                    yield event
+            async with contextlib.aclosing(session.run()) as raws:
+                async for raw in raws:
+                    yield raw
+                    # CLAUDE SAYS: Start a new session only if the config
+                    # change moved the files we watch.
+                    if raw is WatchEvent.CONFIG_CHANGED and self.files() != files:
+                        break

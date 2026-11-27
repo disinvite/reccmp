@@ -1,7 +1,6 @@
 """Tests for the parts of the daemon's file watcher that read the disk."""
 
 import asyncio
-import dataclasses
 import shutil
 from pathlib import Path
 import pytest
@@ -56,10 +55,9 @@ def test_source_delete_is_reported(disk: DiskTarget):
     assert first_after(poll(disk), disk.code.unlink) == {disk.code}
 
 
-def test_missing_source_file_raises(disk: DiskTarget):
-    disk.code.unlink()
-    with pytest.raises(FileNotFoundError):
-        scan_target(dataclasses.replace(disk.files, sources=(disk.code,)))
+def test_missing_source_path_has_no_files(disk: DiskTarget):
+    shutil.rmtree(disk.code.parent)
+    assert scan_target(disk.files).keys() == {disk.exe, disk.pdb, disk.csv}
 
 
 def test_deleted_build_directory_reports_binaries(disk: DiskTarget):

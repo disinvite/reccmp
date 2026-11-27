@@ -23,7 +23,6 @@ from reccmp.project.config import (
 from reccmp.project.detect import RecCmpProject
 from reccmp.remote.watch import (
     ARTIFACT_DELAY_S,
-    CONFIG_RETRY_S,
     TargetWatcher,
     WatchEvent,
 )
@@ -385,30 +384,33 @@ def test_fixed_config_is_a_config_change(disk: DiskTarget):
     run_scenario(make_watcher(disk).events(), scenario)
 
 
-def test_missing_path_is_a_failure_until_reload(disk: DiskTarget):
-    """A deleted source directory is a config failure until it is created again."""
-    src = disk.code.parent
+def test_code_change_during_config_failure_is_reported_after_fix(disk: DiskTarget):
+    """CLAUDE SAYS: Code edited while the config is broken is still a code change
+    once the config is fixed."""
 
     async def scenario(events: Events):
-        disk.rmtree(src)
+        disk.write(build_yml_path(disk), INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
-        disk.mkdir(src)
-        assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
+        disk.write(disk.code, "changed")
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        write_build_yml(disk)
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        assert await events.next() is WatchEvent.CODE_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
 
 
-def test_yml_change_ends_wait_for_missing_path(disk: DiskTarget):
-    """CLAUDE SAYS: A yml change while a watched path is missing reloads the config
-    without waiting for the path to return."""
+def test_restored_source_directory_is_a_code_change(disk: DiskTarget):
+    """CLAUDE SAYS: The code files of a deleted source directory are reported again
+    when it is restored."""
+    src = disk.code.parent
 
     async def scenario(events: Events):
-        disk.rmtree(disk.code.parent)
-        assert await events.next() is WatchEvent.CONFIG_FAILED
-        write_build_yml(disk, "ISLE2.EXE")
-        assert await events.after(CONFIG_RETRY_S) is WatchEvent.CONFIG_CHANGED
-        # CLAUDE SAYS: The path is still missing, so the new session fails too.
-        assert await events.next() is WatchEvent.CONFIG_FAILED
+        disk.rmtree(src)
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        disk.mkdir(src)
+        disk.write(disk.code, "restored")
+        assert await events.next() is WatchEvent.CODE_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
 

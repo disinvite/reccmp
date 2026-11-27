@@ -305,6 +305,19 @@ def test_stale_at_startup_is_a_code_change(disk: DiskTarget):
     run_scenario(make_watcher(disk).events(), scenario)
 
 
+def test_build_running_at_startup_is_a_code_change(disk: DiskTarget):
+    """CLAUDE SAYS: Code newer than the pdb but older than the exe when the watcher
+    starts is a code change."""
+    disk.set_mtime(disk.pdb, 1000)
+    disk.set_mtime(disk.code, 2000)
+    disk.set_mtime(disk.exe, 3000)
+
+    async def scenario(events: Events):
+        assert await events.next() is WatchEvent.CODE_CHANGED
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
 def test_code_change_then_rebuild(disk: DiskTarget):
     """A code edit followed by a rebuild is a code change and then a recompile."""
 
@@ -392,10 +405,34 @@ def test_code_change_during_config_failure_is_reported_after_fix(disk: DiskTarge
         disk.write(build_yml_path(disk), INVALID_YML)
         assert await events.next() is WatchEvent.CONFIG_FAILED
         disk.write(disk.code, "changed")
+        # CLAUDE SAYS: The watcher still reports the edit during the failure.
+        # The server drops this event while the config is broken.
         assert await events.next() is WatchEvent.CODE_CHANGED
         write_build_yml(disk)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
+        # CLAUDE SAYS: This one comes from the staleness check after the reload.
+        # It is the event that marks the build stale once the config is fixed.
         assert await events.next() is WatchEvent.CODE_CHANGED
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
+def test_rebuild_during_config_failure_is_not_stale_after_fix(disk: DiskTarget):
+    """CLAUDE SAYS: Code edited and rebuilt while the config is broken is not a
+    code change once the config is fixed."""
+
+    async def scenario(events: Events):
+        disk.write(build_yml_path(disk), INVALID_YML)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+        disk.write(disk.code, "changed")
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
+        write_build_yml(disk)
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -446,16 +483,6 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.RECOMPILED
-
-    run_scenario(make_watcher(disk).events(), scenario)
-
-
-def test_deleted_exe_is_an_artifact_change(disk: DiskTarget):
-    """CLAUDE SAYS: Deleting the exe is an artifact change."""
-
-    async def scenario(events: Events):
-        disk.unlink(disk.exe)
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)
 

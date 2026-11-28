@@ -46,9 +46,11 @@ def write_build_yml(disk: DiskTarget, exe: str = "ISLE.EXE"):
     build.write_file(build_yml_path(disk))
 
 
-def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
-    """The ymls are written to disk first,
-    then loaded as the daemon would at start."""
+def write_project_yml(
+    disk: DiskTarget, source_root: str = "src", encoding: str | None = None
+):
+    """`encoding` is here as an example of a parameter that modifies the target
+    but without changing any of its dependent paths."""
     ProjectFile(
         targets={
             "ISLE": ProjectFileTarget(
@@ -56,9 +58,16 @@ def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
                 source_root=(Path(source_root),),
                 data_sources=[Path("isle.csv")],
                 hash=Hash(sha256=LEGO1_SHA256),
+                encoding=encoding,
             )
         }
     ).write_file(disk.csv.parent / RECCMP_PROJECT_CONFIG)
+
+
+def make_watcher(disk: DiskTarget, source_root: str = "src") -> TargetWatcher:
+    """The ymls are written to disk first,
+    then loaded as the daemon would at start."""
+    write_project_yml(disk, source_root)
     UserFile(targets={"ISLE": UserFileTarget(path=Path("../ISLE.EXE"))}).write_file(
         disk.csv.parent / RECCMP_USER_CONFIG
     )
@@ -261,6 +270,19 @@ def test_invalid_config_is_a_failure(disk: DiskTarget):
     run_scenario(make_watcher(disk).events(), scenario)
 
 
+def test_ymls_broken_together_are_one_failure(disk: DiskTarget):
+    """CLAUDE SAYS: Breaking the build yml and the user yml in the same batch is
+    one config failure."""
+
+    async def scenario(events: Events):
+        disk.write(build_yml_path(disk), INVALID_YML)
+        disk.write(disk.csv.parent / RECCMP_USER_CONFIG, INVALID_YML)
+        assert await events.next() is WatchEvent.CONFIG_FAILED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
 def test_fixed_config_is_a_config_change(disk: DiskTarget):
     """Restoring a broken build yml to the same target is a config change."""
 
@@ -288,6 +310,20 @@ def test_code_change_during_config_failure_is_reported_after_fix(disk: DiskTarge
         assert await events.next() is WatchEvent.CONFIG_CHANGED
         # CLAUDE SAYS: This one comes from the staleness check after the reload.
         # It is the event that marks the build stale once the config is fixed.
+        assert await events.next() is WatchEvent.CODE_CHANGED
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
+def test_code_change_is_reported_again_after_config_only_change(disk: DiskTarget):
+    """CLAUDE SAYS: Code edited but not rebuilt is a code change again after a
+    config change that watches the same files."""
+
+    async def scenario(events: Events):
+        disk.write(disk.code, "changed")
+        assert await events.next() is WatchEvent.CODE_CHANGED
+        write_project_yml(disk, encoding="cp1252")
+        assert await events.next() is WatchEvent.CONFIG_CHANGED
         assert await events.next() is WatchEvent.CODE_CHANGED
 
     run_scenario(make_watcher(disk).events(), scenario)

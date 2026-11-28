@@ -35,7 +35,7 @@ class WatchEvent(enum.Enum):
 class TargetFiles:
     """Collect resolved paths of related files for a reccmp target."""
 
-    binaries: set[Path]
+    artifacts: set[Path]
     ymls: set[Path]
     csvs: set[Path]
     sources: tuple[Path, ...]
@@ -49,7 +49,7 @@ class TargetFiles:
             ymls += [config, config.parent / RECCMP_USER_CONFIG]
 
         return cls(
-            binaries={
+            artifacts={
                 target.recompiled_path.resolve(),
                 target.recompiled_pdb.resolve(),
             },
@@ -63,11 +63,11 @@ FileSnapshot = dict[Path, tuple[int, int]]
 
 
 def scan_target(files: TargetFiles) -> FileSnapshot:
-    """CLAUDE SAYS: The mtime and size of each binary, csv, yml, and code file
+    """CLAUDE SAYS: The mtime and size of each artifact, csv, yml, and code file
     under the sources that exists. A missing source path contributes no files."""
     snapshot: FileSnapshot = {}
     for path in (
-        *files.binaries,
+        *files.artifacts,
         *files.csvs,
         *files.ymls,
         *source_code_search(files.sources),
@@ -85,26 +85,24 @@ def changed_paths(old: FileSnapshot, new: FileSnapshot) -> set[Path]:
     return {path for path in old.keys() | new.keys() if old.get(path) != new.get(path)}
 
 
-def binaries_of(files: TargetFiles, snapshot: FileSnapshot) -> FileSnapshot:
-    """CLAUDE SAYS: The exe and pdb entries of the snapshot."""
-    return {path: snapshot[path] for path in files.binaries if path in snapshot}
-
-
-def is_rebuilt(
+def all_artifacts_updated(
     files: TargetFiles, last_build: FileSnapshot, snapshot: FileSnapshot
 ) -> bool:
     """CLAUDE SAYS: Whether the exe and pdb have both been written since last_build."""
     return all(
         path in snapshot and snapshot[path] != last_build.get(path)
-        for path in files.binaries
+        for path in files.artifacts
     )
 
 
-def is_stale(files: TargetFiles, snapshot: FileSnapshot) -> bool:
+def rebuild_required(files: TargetFiles, snapshot: FileSnapshot) -> bool:
     """Whether the code changed while nothing was watching, judged by mtime."""
     # A missing exe or pdb is older than every source file.
-    oldest = min(snapshot.get(path, (-1, 0))[0] for path in files.binaries)
-    listed = files.binaries | files.csvs | files.ymls
+    if not files.artifacts <= snapshot.keys():
+        return True
+
+    oldest = min(snapshot[path][0] for path in files.artifacts)
+    listed = files.artifacts | files.csvs | files.ymls
     return any(
         st_mtime > oldest
         for path, (st_mtime, _) in snapshot.items()
@@ -127,7 +125,7 @@ class TargetWatcher:
         self.target = target
         self.error = None
 
-    def files(self) -> TargetFiles:
+    def target_watchlist(self) -> TargetFiles:
         return TargetFiles.from_target(self.project, self.target)
 
     def reload(self) -> WatchEvent | None:
@@ -154,62 +152,71 @@ class TargetWatcher:
     async def events(self) -> AsyncGenerator[WatchEvent, None]:
         # pylint: disable=too-many-branches
         loop = asyncio.get_running_loop()
-        files: TargetFiles | None = None
+        watchlist: TargetFiles | None = None
         snapshot: FileSnapshot = {}
-        # CLAUDE SAYS: The exe and pdb as of the last recompile.
         last_build: FileSnapshot = {}
-        # CLAUDE SAYS: Loop time at which the exe and pdb count as a recompile,
-        # if no artifact changes before then.
-        deadline: float | None = None
+        recompile_timeout: float | None = None
 
         while True:
-            if files is None:
-                # CLAUDE SAYS: The first scan comes before the staleness check. An
-                # edit made before the scan is newer than the build, and one made
-                # after it differs from the scan.
-                files = self.files()
-                snapshot = await asyncio.to_thread(scan_target, files)
-                last_build = binaries_of(files, snapshot)
-                deadline = None
-                if is_stale(files, snapshot):
+            if watchlist is None:
+                # Startup or reset: decide which files we need to watch.
+                watchlist = self.target_watchlist()
+                snapshot = await asyncio.to_thread(scan_target, watchlist)
+                last_build = snapshot
+                recompile_timeout = None
+
+                # Decide whether we need to rebuild based on the
+                # last modified date of each watched file.
+                if rebuild_required(watchlist, snapshot):
                     yield WatchEvent.CODE_CHANGED
 
             await asyncio.sleep(POLL_S)
-            old = snapshot
-            snapshot = await asyncio.to_thread(scan_target, files)
-            for path in sorted(changed_paths(old, snapshot)):
+
+            last_snapshot = snapshot
+            snapshot = await asyncio.to_thread(scan_target, watchlist)
+
+            changed = changed_paths(last_snapshot, snapshot)
+            for path in sorted(changed):
                 logger.info("Change detected: %s", path)
-                if path in files.binaries:
-                    deadline = None
-                    if is_rebuilt(files, last_build, snapshot):
-                        deadline = loop.time() + ARTIFACT_DELAY_S
-                    yield WatchEvent.ARTIFACT_CHANGED
 
-                elif path in files.csvs:
-                    yield WatchEvent.DATA_CHANGED
+            # Batch all yml changes together.
+            if changed & watchlist.ymls:
+                event = self.reload()
+                # If None: no real change to the target.
+                if event is not None:
+                    yield event
 
-                elif path in files.ymls:
-                    event = self.reload()
-                    if event is not None:
-                        yield event
-                    if event is not WatchEvent.CONFIG_CHANGED:
+                if event is WatchEvent.CONFIG_CHANGED:
+                    # Check whether the new target has changed the set of files we need to watch.
+                    # If so, ignore any changes in the current set because they might be irrelevant.
+                    if self.target_watchlist() != watchlist:
+                        watchlist = None
                         continue
-                    # CLAUDE SAYS: Start over only if the config change moved the
-                    # files we watch. The rest of this scan is for the old files.
-                    if self.files() != files:
-                        files = None
-                        break
+
                     # CLAUDE SAYS: The client starts over from a config change, so
                     # it hears again about code that is newer than the build.
-                    if is_stale(files, snapshot):
+                    if rebuild_required(watchlist, snapshot):
                         yield WatchEvent.CODE_CHANGED
+
+            for path in sorted(changed - watchlist.ymls):
+                if path in watchlist.artifacts:
+                    # Cancel pending recompile timer.
+                    recompile_timeout = None
+
+                    if all_artifacts_updated(watchlist, last_build, snapshot):
+                        # Start (or restart) the countdown.
+                        recompile_timeout = loop.time() + ARTIFACT_DELAY_S
+
+                    yield WatchEvent.ARTIFACT_CHANGED
+
+                elif path in watchlist.csvs:
+                    yield WatchEvent.DATA_CHANGED
 
                 else:
                     yield WatchEvent.CODE_CHANGED
 
-            # CLAUDE SAYS: The deadline is checked after the scan, so an
-            # artifact written since the last scan restarts it first.
-            if files is not None and deadline is not None and loop.time() >= deadline:
-                deadline = None
-                last_build = binaries_of(files, snapshot)
+            # Artifact files are stable. Report a recompile.
+            if recompile_timeout is not None and loop.time() >= recompile_timeout:
+                recompile_timeout = None
+                last_build = snapshot
                 yield WatchEvent.RECOMPILED

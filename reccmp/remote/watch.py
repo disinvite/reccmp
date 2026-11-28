@@ -150,7 +150,6 @@ class TargetWatcher:
         return WatchEvent.CONFIG_CHANGED
 
     async def events(self) -> AsyncGenerator[WatchEvent, None]:
-        # pylint: disable=too-many-branches
         loop = asyncio.get_running_loop()
         watchlist: TargetFiles | None = None
         snapshot: FileSnapshot = {}
@@ -192,24 +191,28 @@ class TargetWatcher:
                     watchlist = None
                     continue
 
-            for path in sorted(changed - watchlist.ymls):
-                if path in watchlist.artifacts:
-                    # Cancel pending recompile timer.
-                    recompile_timeout = None
+            if changed & watchlist.artifacts:
+                # Cancel pending recompile timer.
+                recompile_timeout = None
 
-                    if all_artifacts_updated(watchlist, last_build, snapshot):
-                        # Start (or restart) the countdown.
-                        recompile_timeout = loop.time() + ARTIFACT_DELAY_S
+                if all_artifacts_updated(watchlist, last_build, snapshot):
+                    # Start (or restart) the countdown.
+                    recompile_timeout = loop.time() + ARTIFACT_DELAY_S
 
-                    yield WatchEvent.ARTIFACT_CHANGED
+                yield WatchEvent.ARTIFACT_CHANGED
 
-                elif path in watchlist.csvs:
-                    yield WatchEvent.DATA_CHANGED
+            if changed & watchlist.csvs:
+                yield WatchEvent.DATA_CHANGED
 
-                else:
-                    yield WatchEvent.BUILD_STALE
+            # By exclusion, because the code files are found by walking
+            # the directories (if any) in watchlist.sources at each poll.
+            if changed - watchlist.ymls - watchlist.artifacts - watchlist.csvs:
+                # Code changes are checked last so they cancel a pending recompile.
+                last_build = snapshot
+                recompile_timeout = None
+                yield WatchEvent.BUILD_STALE
 
-            # Artifact files are stable. Report a recompile.
+            # Artifact files are stable with no code changes in the interim. Report a recompile.
             if recompile_timeout is not None and loop.time() >= recompile_timeout:
                 recompile_timeout = None
                 last_build = snapshot

@@ -70,10 +70,11 @@ class DaemonApp:
     reccmp: Compare
     report: ReccmpStatusReport | None
     reset_error: str | None
+    watch_error: str | None
     last_update: float
     stop: asyncio.Event
     reset_requested: asyncio.Event
-    _executor: ThreadPoolExecutor
+    executor: ThreadPoolExecutor
 
     def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.target = target
@@ -82,6 +83,7 @@ class DaemonApp:
         self.resetting = False
         self.report = None
         self.reset_error = None
+        self.watch_error = None
         self.last_update = time.monotonic()
         self.stop = asyncio.Event()
         self.reset_requested = asyncio.Event()
@@ -92,6 +94,8 @@ class DaemonApp:
 
     @property
     def status(self) -> DaemonStatus:
+        if self.watch_error is not None:
+            return DaemonStatus.FAILED
         if self.build is BuildState.FAILED:
             return DaemonStatus.FAILED
         if self.resetting or self.reset_requested.is_set():
@@ -104,6 +108,8 @@ class DaemonApp:
 
     @property
     def error(self) -> str | None:
+        if self.watch_error is not None:
+            return self.watch_error
         if self.build is BuildState.FAILED:
             return self.watcher.error
         return self.reset_error
@@ -115,6 +121,13 @@ class DaemonApp:
         """Rebuild the reccmp core when the reset worker is free.
         If we are already rebuilding, combine any rebuild requests into one."""
         self.reset_requested.set()
+
+    def rerun(self):
+        # Manual override for a code change that never produced a recompile.
+        # CLAUDE SAYS: Also for an exe and pdb write that never settled into one.
+        if self.build in (BuildState.STALE, BuildState.PENDING):
+            self.build = BuildState.READY
+        self.request_reset()
 
     def bump(self):
         """Keep this session active if a file just changed or the user requested some data."""
@@ -255,6 +268,11 @@ class DaemonApp:
                 self.bump()
         except asyncio.CancelledError:
             pass
+        except Exception:  # pylint: disable=broad-exception-caught
+            # CLAUDE SAYS: No more file changes will be seen, so the results
+            # can't be trusted from here on.
+            logger.exception("The file watcher stopped")
+            self.watch_error = traceback.format_exc()
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
@@ -300,11 +318,7 @@ async def handle_report(request):
 
 
 async def handle_rerun(request):
-    state: DaemonApp = request.app[STATE_KEY]
-    # Manual override for a code change that never produced a recompile.
-    if state.build is BuildState.STALE:
-        state.build = BuildState.READY
-    state.request_reset()
+    request.app[STATE_KEY].rerun()
     return web.HTTPNoContent()
 
 

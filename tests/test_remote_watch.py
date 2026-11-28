@@ -88,7 +88,6 @@ def test_artifacts_settle_to_recompile(disk: DiskTarget):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -128,7 +127,6 @@ def test_write_restarts_cooldown(disk: DiskTarget):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
         disk.write(disk.exe, "changed")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
@@ -144,7 +142,6 @@ def test_delete_aborts_cooldown(disk: DiskTarget):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(0.6 * ARTIFACT_DELAY_S) is None
         disk.unlink(disk.exe)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
@@ -159,7 +156,6 @@ def test_rewrite_after_delete_is_a_recompile(disk: DiskTarget):
     async def scenario(events: Events):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         rebuild(disk)
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         disk.unlink(disk.exe)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
@@ -179,8 +175,39 @@ def test_relink_in_one_batch_is_a_recompile(disk: DiskTarget):
         disk.unlink(disk.exe)
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
+def test_artifact_written_before_code_change_is_not_a_recompile(disk: DiskTarget):
+    """CLAUDE SAYS: An exe written before a code change does not count toward
+    a recompile finished by a later pdb write."""
+
+    async def scenario(events: Events):
+        assert await events.next() is WatchEvent.BUILD_CURRENT
+        disk.write(disk.exe, "built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        disk.write(disk.code, "changed")
+        assert await events.next() is WatchEvent.BUILD_STALE
+        disk.write(disk.pdb, "built")
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
+
+    run_scenario(make_watcher(disk).events(), scenario)
+
+
+def test_rebuild_in_code_change_batch_is_not_a_recompile(disk: DiskTarget):
+    """CLAUDE SAYS: A rebuild seen in the same batch as a code change is not
+    a recompile."""
+
+    async def scenario(events: Events):
+        assert await events.next() is WatchEvent.BUILD_CURRENT
+        disk.write(disk.code, "changed")
+        rebuild(disk)
+        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
+        assert await events.next() is WatchEvent.BUILD_STALE
+        assert await events.after(4 * ARTIFACT_DELAY_S) is None
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -218,7 +245,6 @@ def test_code_change_then_rebuild(disk: DiskTarget):
         disk.write(disk.code, "changed")
         assert await events.next() is WatchEvent.BUILD_STALE
         rebuild(disk)
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
 
@@ -268,6 +294,7 @@ def test_changed_target_is_a_config_change(disk: DiskTarget):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         write_build_yml(disk, "ISLE2.EXE")
         assert await events.next() is WatchEvent.CONFIG_CHANGED
+        assert await events.next() is WatchEvent.BUILD_STALE
 
     run_scenario(make_watcher(disk).events(), scenario)
 
@@ -358,7 +385,6 @@ def test_rebuild_during_config_failure_is_not_stale_after_fix(disk: DiskTarget):
         assert await events.next() is WatchEvent.BUILD_STALE
         rebuild(disk)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
         write_build_yml(disk)
         assert await events.next() is WatchEvent.CONFIG_CHANGED
@@ -396,7 +422,6 @@ def test_config_change_watches_new_binaries(disk: DiskTarget):
         disk.write(new_exe, "built")
         disk.write(disk.pdb, "built")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -415,7 +440,6 @@ def test_rebuild_right_after_config_change_is_a_recompile(disk: DiskTarget):
         disk.write(new_exe, "rebuilt")
         disk.write(disk.pdb, "rebuilt")
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
-        assert await events.next() is WatchEvent.ARTIFACT_CHANGED
         assert await events.after(4 * ARTIFACT_DELAY_S) is WatchEvent.BUILD_CURRENT
 
     run_scenario(make_watcher(disk).events(), scenario)
@@ -428,8 +452,6 @@ def test_other_build_files_are_not_reported(disk: DiskTarget):
     async def scenario(events: Events):
         assert await events.next() is WatchEvent.BUILD_CURRENT
         disk.write(ilk, "changed")
-        # The pdb delete is reported after the .ILK would be: in a later batch,
-        # or in the same batch, where ISLE.ILK sorts before ISLE.PDB.
         disk.unlink(disk.pdb)
         assert await events.next() is WatchEvent.ARTIFACT_CHANGED
 

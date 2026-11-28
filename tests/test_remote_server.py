@@ -161,6 +161,68 @@ def test_config_failure(daemon: DaemonApp):
     assert daemon.error == "Traceback"
 
 
+async def run_reset(daemon: DaemonApp):
+    """CLAUDE SAYS: Runs the reset worker until one requested reset finishes."""
+    loop = asyncio.get_running_loop()
+    daemon.request_reset()
+    worker = asyncio.create_task(daemon.reset_worker())
+    await asyncio.sleep(0)
+    await loop.run_in_executor(daemon.executor, lambda: None)
+    await asyncio.sleep(0)
+    worker.cancel()
+    await worker
+
+
+def test_reset_failure_until_next_reset(daemon: DaemonApp):
+    """CLAUDE SAYS: A failed reset is a failure until a reset succeeds."""
+
+    def fail():
+        raise RuntimeError("reset failed")
+
+    async def scenario():
+        daemon.reset = fail  # type: ignore[method-assign]
+        await run_reset(daemon)
+        assert daemon.status is DaemonStatus.FAILED
+        assert daemon.error is not None and "reset failed" in daemon.error
+
+        daemon.reset = lambda: None  # type: ignore[method-assign]
+        await run_reset(daemon)
+        assert daemon.error is None
+
+    asyncio.run(scenario())
+
+
+def test_rerun_after_code_change_is_ready(daemon: DaemonApp):
+    send(daemon, WatchEvent.BUILD_CURRENT, WatchEvent.BUILD_STALE)
+    daemon.rerun()
+    assert daemon.reset_requested.is_set()
+    daemon.reset_requested.clear()
+    assert daemon.status is DaemonStatus.READY
+
+
+def test_rerun_after_partial_write_is_ready(daemon: DaemonApp):
+    """CLAUDE SAYS: A rerun gives results for an exe and pdb that never
+    settled into a recompile."""
+    send(daemon, WatchEvent.BUILD_CURRENT, WatchEvent.ARTIFACT_CHANGED)
+    daemon.rerun()
+    assert daemon.reset_requested.is_set()
+    daemon.reset_requested.clear()
+    assert daemon.status is DaemonStatus.READY
+
+
+def test_watcher_crash_is_a_failure(daemon: DaemonApp):
+    """CLAUDE SAYS: An error that stops the file watcher is a failure."""
+
+    async def crash():
+        yield WatchEvent.BUILD_CURRENT
+        raise RuntimeError("watcher crashed")
+
+    daemon.watcher.events = crash  # type: ignore[method-assign]
+    asyncio.run(daemon.watch_worker())
+    assert daemon.status is DaemonStatus.FAILED
+    assert daemon.error is not None and "watcher crashed" in daemon.error
+
+
 def test_config_failure_during_reset(daemon: DaemonApp):
     """A config failure during a reset is still a failure after the reset finishes."""
     daemon.watcher.error = "Traceback"

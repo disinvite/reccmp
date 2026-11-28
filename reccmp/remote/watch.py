@@ -23,8 +23,8 @@ POLL_S = 0.25
 
 
 class WatchEvent(enum.Enum):
-    CODE_CHANGED = enum.auto()
-    RECOMPILED = enum.auto()
+    BUILD_STALE = enum.auto()
+    BUILD_CURRENT = enum.auto()
     DATA_CHANGED = enum.auto()
     CONFIG_CHANGED = enum.auto()
     CONFIG_FAILED = enum.auto()
@@ -168,7 +168,9 @@ class TargetWatcher:
                 # Decide whether we need to rebuild based on the
                 # last modified date of each watched file.
                 if rebuild_required(watchlist, snapshot):
-                    yield WatchEvent.CODE_CHANGED
+                    yield WatchEvent.BUILD_STALE
+                else:
+                    yield WatchEvent.BUILD_CURRENT
 
             await asyncio.sleep(POLL_S)
 
@@ -187,16 +189,8 @@ class TargetWatcher:
                     yield event
 
                 if event is WatchEvent.CONFIG_CHANGED:
-                    # Check whether the new target has changed the set of files we need to watch.
-                    # If so, ignore any changes in the current set because they might be irrelevant.
-                    if self.target_watchlist() != watchlist:
-                        watchlist = None
-                        continue
-
-                    # CLAUDE SAYS: The client starts over from a config change, so
-                    # it hears again about code that is newer than the build.
-                    if rebuild_required(watchlist, snapshot):
-                        yield WatchEvent.CODE_CHANGED
+                    watchlist = None
+                    continue
 
             for path in sorted(changed - watchlist.ymls):
                 if path in watchlist.artifacts:
@@ -213,10 +207,10 @@ class TargetWatcher:
                     yield WatchEvent.DATA_CHANGED
 
                 else:
-                    yield WatchEvent.CODE_CHANGED
+                    yield WatchEvent.BUILD_STALE
 
             # Artifact files are stable. Report a recompile.
             if recompile_timeout is not None and loop.time() >= recompile_timeout:
                 recompile_timeout = None
                 last_build = snapshot
-                yield WatchEvent.RECOMPILED
+                yield WatchEvent.BUILD_CURRENT

@@ -2,16 +2,17 @@
 
 build state machine (DaemonApp.handle_watch_event; no timing; events in):
     build state: READY | STALE | PENDING | FAILED
+    initial state: PENDING
 
     FAILED: ignore everything except CONFIG_CHANGED and CONFIG_FAILED
 
-    CODE_CHANGED       -> STALE
+    BUILD_STALE        -> STALE
     ARTIFACT_CHANGED   -> PENDING
-    RECOMPILED         PENDING: -> READY; reset
+    BUILD_CURRENT      PENDING: -> READY; reset
                        STALE: no change
     DATA_CHANGED       READY: reset
                        otherwise: no change
-    CONFIG_CHANGED     -> READY or STALE from 0; reset
+    CONFIG_CHANGED     -> PENDING; the watcher follows with BUILD_STALE or BUILD_CURRENT
     CONFIG_FAILED      -> FAILED; error stays on watcher.error
 """
 
@@ -77,7 +78,7 @@ class DaemonApp:
     def __init__(self, project: RecCmpProject, target: RecCmpTarget):
         self.target = target
         self.watcher = TargetWatcher(project, target)
-        self.build = BuildState.READY
+        self.build = BuildState.PENDING
         self.resetting = False
         self.report = None
         self.reset_error = None
@@ -218,21 +219,20 @@ class DaemonApp:
             self.build = BuildState.FAILED
 
         elif event is WatchEvent.CONFIG_CHANGED:
-            self.build = BuildState.READY
+            self.build = BuildState.PENDING
             self.target = self.watcher.target
-            logger.info("Config changed. Rebuilding...")
-            self.request_reset()
+            logger.info("Config changed.")
 
         elif self.build is BuildState.FAILED:
             return
 
-        elif event is WatchEvent.CODE_CHANGED:
+        elif event is WatchEvent.BUILD_STALE:
             self.build = BuildState.STALE
 
         elif event is WatchEvent.ARTIFACT_CHANGED:
             self.build = BuildState.PENDING
 
-        elif event is WatchEvent.RECOMPILED:
+        elif event is WatchEvent.BUILD_CURRENT:
             # The exe and pdb only count as a recompile if written after the code change.
             if self.build is not BuildState.PENDING:
                 return
@@ -367,7 +367,6 @@ async def traceback_on_error(request, handler):
 
 async def server_main(project: RecCmpProject, target: RecCmpTarget, port: int):
     state = DaemonApp(project, target)
-    state.request_reset()
 
     app = web.Application(middlewares=[bump_timeout, traceback_on_error])
     app[STATE_KEY] = state

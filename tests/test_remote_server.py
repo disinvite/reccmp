@@ -61,8 +61,8 @@ def test_code_change_during_cooldown_drops_recompile(daemon: DaemonApp):
     send(
         daemon,
         WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.CODE_CHANGED,
-        WatchEvent.RECOMPILED,
+        WatchEvent.BUILD_STALE,
+        WatchEvent.BUILD_CURRENT,
     )
     assert daemon.status is DaemonStatus.STALE
     assert not daemon.reset_requested.is_set()
@@ -70,7 +70,7 @@ def test_code_change_during_cooldown_drops_recompile(daemon: DaemonApp):
 
 def test_data_change_while_stale_is_dropped(daemon: DaemonApp):
     """A data change is dropped while the build is stale."""
-    send(daemon, WatchEvent.CODE_CHANGED, WatchEvent.DATA_CHANGED)
+    send(daemon, WatchEvent.BUILD_STALE, WatchEvent.DATA_CHANGED)
     assert daemon.status is DaemonStatus.STALE
     assert not daemon.reset_requested.is_set()
 
@@ -87,21 +87,26 @@ def test_config_failure_drops_other_events(daemon: DaemonApp):
     send(
         daemon,
         WatchEvent.CONFIG_FAILED,
-        WatchEvent.CODE_CHANGED,
+        WatchEvent.BUILD_STALE,
         WatchEvent.ARTIFACT_CHANGED,
-        WatchEvent.RECOMPILED,
+        WatchEvent.BUILD_CURRENT,
         WatchEvent.DATA_CHANGED,
     )
     assert daemon.status is DaemonStatus.FAILED
     assert not daemon.reset_requested.is_set()
 
-    send(daemon, WatchEvent.CONFIG_CHANGED)
+    send(daemon, WatchEvent.CONFIG_CHANGED, WatchEvent.BUILD_CURRENT)
     assert daemon.status is DaemonStatus.BUILDING
 
 
 def test_config_change_takes_staleness_from_restart(daemon: DaemonApp):
     """A config change clears the stale state left by an earlier code change."""
-    send(daemon, WatchEvent.CODE_CHANGED, WatchEvent.CONFIG_CHANGED)
+    send(
+        daemon,
+        WatchEvent.BUILD_STALE,
+        WatchEvent.CONFIG_CHANGED,
+        WatchEvent.BUILD_CURRENT,
+    )
     # CLAUDE SAYS: Stand in for the reset worker finishing.
     daemon.reset_requested.clear()
     assert daemon.status is DaemonStatus.READY
@@ -114,26 +119,38 @@ def test_artifact_write_makes_results_stale(daemon: DaemonApp):
 
 
 def test_code_change_makes_results_stale(daemon: DaemonApp):
-    daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
+    daemon.handle_watch_event(WatchEvent.BUILD_STALE)
     assert daemon.status is DaemonStatus.STALE
     assert not daemon.reset_requested.is_set()
 
 
 def test_recompile_after_code_change_resets(daemon: DaemonApp):
-    daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
+    daemon.handle_watch_event(WatchEvent.BUILD_STALE)
     daemon.handle_watch_event(WatchEvent.ARTIFACT_CHANGED)
-    daemon.handle_watch_event(WatchEvent.RECOMPILED)
+    daemon.handle_watch_event(WatchEvent.BUILD_CURRENT)
     assert daemon.reset_requested.is_set()
 
 
 def test_data_change_resets(daemon: DaemonApp):
+    daemon.handle_watch_event(WatchEvent.BUILD_CURRENT)
+    daemon.reset_requested.clear()
     daemon.handle_watch_event(WatchEvent.DATA_CHANGED)
     assert daemon.reset_requested.is_set()
 
 
-def test_config_change_resets(daemon: DaemonApp):
-    daemon.handle_watch_event(WatchEvent.CODE_CHANGED)
+def test_config_change_waits_for_the_build_state(daemon: DaemonApp):
+    """CLAUDE SAYS: A config change does not reset until the watcher reports
+    the build as current."""
     daemon.handle_watch_event(WatchEvent.CONFIG_CHANGED)
+    assert daemon.status is DaemonStatus.STALE
+    assert not daemon.reset_requested.is_set()
+
+
+def test_startup_resets_on_current_build(daemon: DaemonApp):
+    """CLAUDE SAYS: The first reset waits for the watcher to report the build
+    as current."""
+    assert not daemon.reset_requested.is_set()
+    daemon.handle_watch_event(WatchEvent.BUILD_CURRENT)
     assert daemon.reset_requested.is_set()
 
 
